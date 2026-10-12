@@ -1,0 +1,18 @@
+{
+  "name": "youth-cup",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-01",
+  // 画面のファイルを文字列として Worker に同梱する
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html", "**/*.css", "**/*.webmanifest", "**/web-*.js"], "fallthrough": false }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "youth-cup-db",
+      // Cloudflare の D1 で作成したデータベースの ID に置き換えてください
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ],
+  "observability": { "enabled": true }
+}

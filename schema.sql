@@ -1,0 +1,96 @@
+-- 大会
+CREATE TABLE tournaments (
+  id TEXT PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE,          -- 閲覧・関係者URLに使う推測されにくいID
+  name TEXT NOT NULL,
+  date TEXT,                          -- YYYY-MM-DD
+  venue TEXT,
+  logo TEXT,                          -- data URL（小さな画像のみ）
+  show_logo INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'draft', -- draft | published | live | finished
+  pin TEXT NOT NULL,                  -- 関係者用の大会共通PIN
+  pin_version INTEGER NOT NULL DEFAULT 1,
+  rev INTEGER NOT NULL DEFAULT 1,     -- 変更のたびに増える（閲覧画面の更新検知用）
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- カテゴリ（U7〜U12）。コートはカテゴリごとに独立
+CREATE TABLE categories (
+  id TEXT PRIMARY KEY,
+  tournament_id TEXT NOT NULL REFERENCES tournaments(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  config TEXT NOT NULL,               -- 試合時間・形式・判定順などのJSON
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_categories_tournament ON categories(tournament_id);
+
+CREATE TABLE teams (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  short_name TEXT,
+  club TEXT,                          -- 同じクラブは別の組に分ける
+  logo TEXT,
+  group_label TEXT,
+  sort INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_teams_category ON teams(category_id);
+
+CREATE TABLE matches (
+  id TEXT PRIMARY KEY,
+  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  stage TEXT NOT NULL,                -- league | knockout
+  group_label TEXT,
+  round INTEGER,
+  code TEXT,                          -- トーナメントの参照用（K1, K2...）
+  label TEXT,
+  slot INTEGER NOT NULL,
+  court INTEGER NOT NULL,
+  start_min INTEGER NOT NULL,
+  session TEXT NOT NULL DEFAULT 'am', -- am | pm（昼休憩の前後）
+  home_team_id TEXT,
+  away_team_id TEXT,
+  home_ref TEXT,                      -- 「A組1位」などの参照JSON
+  away_ref TEXT,
+  place_w INTEGER,                    -- この試合の勝者が得る最終順位
+  place_l INTEGER,
+  home_score INTEGER,
+  away_score INTEGER,
+  home_pk INTEGER,
+  away_pk INTEGER,
+  forfeit TEXT,                       -- 不戦勝の勝者 home | away
+  status TEXT NOT NULL DEFAULT 'none', -- none | provisional | confirmed
+  updated_by TEXT,
+  updated_at TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  time_changed INTEGER NOT NULL DEFAULT 0,
+  corrected INTEGER NOT NULL DEFAULT 0,
+  ref_conflict INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_matches_category ON matches(category_id);
+
+-- 審判（次フェーズで使用。今は定義のみ）
+CREATE TABLE match_officials (
+  id TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,                 -- referee | assistant1 | assistant2 | fourth
+  team_id TEXT,
+  name TEXT
+);
+
+-- 形式テンプレート
+CREATE TABLE templates (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  config TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- PIN・パスワードの試行回数制限
+CREATE TABLE rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  reset_at INTEGER NOT NULL
+);

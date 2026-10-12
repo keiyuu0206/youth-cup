@@ -1,0 +1,3 @@
+# ローカル開発用。.dev.vars にコピーして値を変更してください（.dev.vars は Git に含めません）
+ADMIN_PASSWORD=change-me
+SESSION_SECRET=replace-with-a-long-random-string

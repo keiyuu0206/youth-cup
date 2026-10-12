@@ -1,0 +1,9 @@
+{
+  "name": "少年サッカー 大会運営",
+  "short_name": "大会運営",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f5f0",
+  "theme_color": "#1e6b3a",
+  "lang": "ja"
+}
