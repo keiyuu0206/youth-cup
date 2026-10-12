@@ -11,7 +11,7 @@
       "binding": "DB",
       "database_name": "youth-cup-db",
       // Cloudflare の D1 で作成したデータベースの ID に置き換えてください
-      "database_id": "0addbc7a-3e31-4187-8d98-5e750780661eD"
+      "database_id": "0addbc7a-3e31-4187-8d98-5e750780661e"
     }
   ],
   "observability": { "enabled": true }
