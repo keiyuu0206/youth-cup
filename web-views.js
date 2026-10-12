@@ -1,10 +1,12 @@
-import { h, toHHMM, todayStr, nowMin } from './web-ui.js';
+import { h, toHHMM, todayStr, nowMin, icon } from './web-ui.js';
 
 export const matchLength = (cfg) => cfg.halfMinutes * 2 + cfg.halftimeMinutes;
 export const courtName = (cfg, i) => (cfg.courtNames && cfg.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;
 
 export const teamMap = (cat) => Object.fromEntries(cat.teams.map((t) => [t.id, t]));
 export const codeMap = (cat) => Object.fromEntries(cat.matches.filter((m) => m.code).map((m) => [m.code, m]));
+
+export const TIEBREAK_LABEL = { points: '勝点', gd: '得失点差', gf: '総得点', h2h: '当該チーム間の対戦成績', lottery: '抽選' };
 
 export function refText(ref, byCode) {
   if (!ref) return '未定';
@@ -32,71 +34,97 @@ export function winnerSide(m) {
   return null;
 }
 
-// 試合の状態（表示用）
 export function statusOf(m, cat, tournament) {
-  if (m.status === 'confirmed') return { key: 'confirmed', label: '確定', cls: 'done' };
-  if (m.status === 'provisional') return { key: 'provisional', label: '結果確認中', cls: 'wait' };
+  if (m.status === 'confirmed') return { key: 'confirmed', label: '終了', cls: 'done' };
+  if (m.status === 'provisional') return { key: 'provisional', label: '結果待ち', cls: 'wait' };
   const today = todayStr();
   const end = m.start_min + matchLength(cat.config);
-  if (tournament.date && tournament.date < today) return { key: 'waiting', label: '結果確認中', cls: 'wait' };
+  if (tournament.date && tournament.date < today) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
   if (tournament.date === today && tournament.status === 'live') {
     const n = nowMin();
     if (n >= m.start_min && n < end) return { key: 'playing', label: '試合中', cls: 'live' };
-    if (n >= end) return { key: 'waiting', label: '結果確認中', cls: 'wait' };
+    if (n >= end) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
   }
-  return { key: 'upcoming', label: '試合前', cls: '' };
+  return { key: 'upcoming', label: toHHMM(m.start_min), cls: '' };
 }
 
-function teamEl(info, side, win, cat) {
-  const logo = info.team && info.team.logo ? h('img', { src: info.team.logo, alt: '' }) : null;
-  return h('div', { class: `team ${side}${info.placeholder ? ' placeholder' : ''}${win ? ' win' : ''}` },
-    side === 'away' ? logo : null, h('span', null, info.text), side === 'home' ? logo : null);
+// エンブレム。ロゴが無ければチーム名の頭文字と、名前から決まる色で丸いマークを作る
+function hue(s) {
+  let x = 0;
+  for (const ch of s) x = (x * 31 + ch.codePointAt(0)) % 3600;
+  return x % 360;
+}
+export function crest(team, size = 28) {
+  const box = `width:${size}px;height:${size}px;`;
+  if (team && team.logo) return h('img', { class: 'crest', src: team.logo, alt: '', width: size, height: size, style: box });
+  if (!team) return h('span', { class: 'crest crest-ph', 'aria-hidden': 'true', style: `${box}font-size:${Math.round(size * 0.4)}px` }, '?');
+  const ch = [...team.name.replace(/^(FC|SC|JFC|SSS|SSC)\s*/i, '').trim()][0] || [...team.name][0];
+  return h('span', { class: 'crest', 'aria-hidden': 'true', style: `${box}font-size:${Math.round(size * 0.42)}px;--h:${hue(team.name)}` }, ch);
 }
 
+// 旧呼び出し互換（管理画面などで使う場合のため）
 export function scoreEl(m, { showProvisional = false } = {}) {
   const visible = m.status === 'confirmed' || (showProvisional && m.status === 'provisional');
-  if (!visible || m.home_score == null) return h('div', { class: 'score pending' }, 'vs');
-  const pk = m.home_pk != null && m.away_pk != null ? h('span', { class: 'pk' }, `PK ${m.home_pk}-${m.away_pk}`) : null;
-  const ff = m.forfeit ? h('span', { class: 'pk' }, '不戦勝') : null;
-  return h('div', { class: 'score', 'aria-label': `${m.home_score}対${m.away_score}` }, `${m.home_score} - ${m.away_score}`, pk, ff);
+  if (!visible || m.home_score == null) return h('span', { class: 'mc-score' }, '-');
+  return h('span', { class: 'mc-score' }, `${m.home_score} - ${m.away_score}`);
 }
 
 export function matchCard(m, cat, ctx) {
   const cache = ctx.cache || {};
-  const home = sideInfo(m, 'home', cat, cache);
-  const away = sideInfo(m, 'away', cat, cache);
   const st = statusOf(m, cat, ctx.tournament);
-  const mine = ctx.myTeam && (m.home_team_id === ctx.myTeam || m.away_team_id === ctx.myTeam);
+  const mineMatch = ctx.myTeam && (m.home_team_id === ctx.myTeam || m.away_team_id === ctx.myTeam);
   const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
   const w = showScore ? winnerSide(m) : null;
-  return h('article', { class: `match${mine ? ' mine' : ''}${m.status === 'confirmed' ? ' confirmed' : ''}` },
-    h('div', { class: 'meta' },
-      h('span', { class: 'tag' }, courtName(cat.config, m.court)),
+
+  const row = (side) => {
+    const info = sideInfo(m, side, cat, cache);
+    const id = side === 'home' ? m.home_team_id : m.away_team_id;
+    const score = showScore ? (side === 'home' ? m.home_score : m.away_score) : null;
+    const pk = showScore && m.home_pk != null ? (side === 'home' ? m.home_pk : m.away_pk) : null;
+    const cls = w ? (w === side ? 'win' : 'lose') : '';
+    return h('div', { class: `mc-row ${cls}` },
+      crest(info.team, 28),
+      h('span', { class: `mc-name${info.placeholder ? ' ph' : ''}` }, info.text, id && id === ctx.myTeam ? icon('star') : null),
+      h('span', { class: 'mc-score' }, score ?? '', pk != null ? h('small', null, `PK${pk}`) : null));
+  };
+
+  const status = st.key === 'playing'
+    ? h('span', { class: 'mc-st live' }, h('i', { class: 'dot pulse' }), '試合中')
+    : h('span', { class: `mc-st ${st.cls}` }, st.label);
+
+  return h('article', { class: `mc${mineMatch ? ' is-mine' : ''}`, 'aria-label': `${m.label} ${sideInfo(m, 'home', cat, cache).text} 対 ${sideInfo(m, 'away', cat, cache).text}` },
+    h('div', { class: 'mc-meta' },
+      h('span', { class: 'mc-court' }, courtName(cat.config, m.court)),
       h('span', null, m.label),
-      st.key !== 'confirmed' ? h('span', { class: `tag ${st.cls}` }, st.label) : null,
-      m.time_changed ? h('span', { class: 'tag changed' }, '時間変更') : null,
-      m.corrected && m.status === 'confirmed' ? h('span', { class: 'tag' }, '修正済み') : null),
-    teamEl(home, 'home', w === 'home', cat),
-    scoreEl(m, { showProvisional: ctx.showProvisional }),
-    teamEl(away, 'away', w === 'away', cat));
+      m.forfeit && showScore ? h('span', { class: 'flag' }, '不戦勝') : null,
+      m.time_changed ? h('span', { class: 'flag changed' }, '時間変更') : null,
+      m.corrected && m.status === 'confirmed' ? h('span', { class: 'flag' }, '修正あり') : null,
+      status),
+    row('home'), row('away'));
 }
 
 export function scheduleView(cat, ctx, filter = () => true) {
   const list = cat.matches.filter(filter).sort((a, b) => a.start_min - b.start_min || a.court - b.court);
   if (!list.length) return h('p', { class: 'empty' }, ctx.emptyText || '表示できる試合がありません');
-  const blocks = [];
+  const out = [];
   let cur = null;
   let prevSession = null;
   for (const m of list) {
-    if (prevSession === 'am' && m.session === 'pm') blocks.push(h('p', { class: 'muted small', style: { textAlign: 'center', margin: '16px 0 0' } }, '昼休憩'));
+    if (prevSession === 'am' && m.session === 'pm') out.push(h('div', { class: 'break' }, '昼休憩'));
     prevSession = m.session;
     if (!cur || cur.t !== m.start_min) {
-      cur = { t: m.start_min, el: h('section', { class: 'time-block' }, h('div', { class: 'time-label' }, toHHMM(m.start_min))) };
-      blocks.push(cur.el);
+      const listEl = h('div', { class: 'slot-list' });
+      const head = h('div', { class: 'slot-head' }, h('span', { class: 't' }, toHHMM(m.start_min)));
+      cur = { t: m.start_min, list: listEl, head, live: false };
+      out.push(h('section', { class: 'slot', 'data-t': m.start_min }, head, listEl));
     }
-    cur.el.append(matchCard(m, cat, ctx));
+    if (!cur.live && statusOf(m, cat, ctx.tournament).key === 'playing') {
+      cur.live = true;
+      cur.head.append(h('span', { class: 'live-label' }, h('i', { class: 'dot pulse' }), '試合中'));
+    }
+    cur.list.append(matchCard(m, cat, ctx));
   }
-  return h('div', null, blocks);
+  return h('div', null, out);
 }
 
 export function standingsView(cat, ctx) {
@@ -106,23 +134,36 @@ export function standingsView(cat, ctx) {
   const advance = cat.config.format === 'league_knockout' ? cat.config.advance : 0;
   return h('div', null, groups.map((g) => {
     const st = cat.standings[g];
-    return h('section', { class: 'panel', style: { padding: '12px 0 4px', marginTop: '12px' } },
-      h('div', { class: 'panel-head', style: { padding: '0 12px', marginBottom: '6px' } },
-        h('h2', null, `${g}組`),
-        h('span', { class: 'spacer' }),
-        st.complete ? (st.needsLottery ? h('span', { class: 'tag alert' }, '抽選待ち') : h('span', { class: 'tag done' }, '確定')) : h('span', { class: 'tag' }, '暫定順位')),
+    const badge = st.complete
+      ? (st.needsLottery ? h('span', { class: 'st-badge alert' }, '抽選待ち') : h('span', { class: 'st-badge ok' }, '確定'))
+      : h('span', { class: 'st-badge' }, '途中経過');
+    return h('section', { class: 'st-card' },
+      h('div', { class: 'st-head' }, h('h2', null, `${g}組`), badge),
       h('div', { class: 'table-wrap' }, h('table', { class: 'standings' },
-        h('thead', null, h('tr', null, ['順位', 'チーム', '試', '勝', '分', '敗', '得', '失', '差', '点'].map((x) => h('th', { scope: 'col' }, x)))),
-        h('tbody', null, st.rows.map((r) => h('tr', { class: `${r.teamId === ctx.myTeam ? 'mine' : ''} ${st.complete && r.rank <= advance ? 'advance' : ''}` },
-          h('td', { class: 'rank' }, r.tied ? `${r.rank}=` : r.rank),
-          h('td', { class: 'team' }, tm[r.teamId] ? tm[r.teamId].name : '-', r.lottery ? h('span', { class: 'tag', style: { marginLeft: '6px' } }, '抽選') : null),
+        h('thead', null, h('tr', null,
+          h('th', { scope: 'col' }, h('span', { class: 'sr-only' }, '順位')),
+          h('th', { scope: 'col', style: { textAlign: 'left' } }, 'チーム'),
+          ['試', '勝', '分', '敗', '得', '失', '差', '点'].map((x) => h('th', { scope: 'col' }, x)))),
+        h('tbody', null, st.rows.map((r) => h('tr', { class: `${r.teamId === ctx.myTeam ? 'mine' : ''} ${r.rank <= advance ? 'advance' : ''}` },
+          h('td', { class: 'rank' }, h('span', { class: 'rank-no' }, r.rank)),
+          h('td', { class: 'team' }, h('div', { class: 'st-team' }, crest(tm[r.teamId], 22), h('span', null, tm[r.teamId] ? (tm[r.teamId].short_name || tm[r.teamId].name) : '-'),
+            r.tied && st.complete ? h('span', { class: 'tie-mark' }, '抽選待ち') : null,
+            r.lottery ? h('span', { class: 'tie-mark' }, '抽選') : null)),
           h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
           h('td', null, r.gf), h('td', null, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
-          h('td', { class: 'pts' }, r.pts)))))));
-  }), h('p', { class: 'muted small', style: { marginTop: '10px' } }, `順位の決め方: ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join(' → ')}`));
+          h('td', { class: 'pts' }, r.pts)))))),
+      advance ? h('div', { class: 'st-note' }, h('span', null, h('i'), `上位${advance}チームが決勝トーナメントへ`)) : null);
+  }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, `勝点が並んだときは ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`));
 }
 
-export const TIEBREAK_LABEL = { points: '勝点', gd: '得失点差', gf: '総得点', h2h: '当該チーム間の対戦成績', lottery: '抽選' };
+export function finalRankingView(cat, ctx) {
+  if (!cat.finalRanking || !cat.finalRanking.length) return null;
+  const tm = teamMap(cat);
+  return h('section', null,
+    h('div', { class: 'section-title' }, icon('trophy'), h('h2', null, '最終順位')),
+    h('div', { class: 'podium' }, cat.finalRanking.map((r) => h('div', { class: `p r${r.rank}${r.teamId === ctx.myTeam ? ' mine' : ''}` },
+      h('span', { class: 'r' }, `${r.rank}位`), crest(tm[r.teamId], 32), h('strong', null, tm[r.teamId] ? tm[r.teamId].name : '-')))));
+}
 
 export function bracketView(cat, ctx) {
   const ko = cat.matches.filter((m) => m.stage === 'knockout');
@@ -130,32 +171,31 @@ export function bracketView(cat, ctx) {
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
   const rounds = {};
   for (const m of ko) (rounds[m.round] ||= []).push(m);
-  const cols = Object.keys(rounds).map(Number).sort((a, b) => a - b).map((r) =>
-    h('div', { class: 'round' }, rounds[r].sort((a, b) => a.start_min - b.start_min || a.court - b.court).map((m) => {
+  const roundTitle = (list, r) => {
+    const bases = [...new Set(list.map((m) => m.label.replace(/\s\d+$/, '')))];
+    return bases.length === 1 ? bases[0] : bases.join('・');
+  };
+  const cols = Object.keys(rounds).map(Number).sort((a, b) => a - b).map((r) => {
+    const list = rounds[r].sort((a, b) => a.start_min - b.start_min || a.court - b.court);
+    return h('div', { class: 'round' }, h('h3', null, roundTitle(list, r)), h('div', { class: 'col' }, list.map((m) => {
       const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
       const w = showScore ? winnerSide(m) : null;
       const line = (side) => {
         const info = sideInfo(m, side, cat, cache);
         const s = showScore ? (side === 'home' ? m.home_score : m.away_score) : '';
-        const pk = showScore && m.home_pk != null ? `(${side === 'home' ? m.home_pk : m.away_pk})` : '';
+        const pk = showScore && m.home_pk != null ? ` (${side === 'home' ? m.home_pk : m.away_pk})` : '';
         const id = side === 'home' ? m.home_team_id : m.away_team_id;
-        return h('div', { class: `bt${w === side ? ' win' : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
-          h('span', null, info.text), h('span', { class: 's' }, `${s ?? ''}${pk}`));
+        return h('div', { class: `bt${w ? (w === side ? ' win' : ' lose') : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
+          crest(info.team, 22), h('span', { class: 'nm' }, info.text), h('span', { class: 's' }, `${s ?? ''}${pk}`));
       };
       return h('div', { class: 'bm' }, line('home'), line('away'),
-        h('div', { class: 'bl' }, `${m.label}　${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}`));
+        h('div', { class: 'bl' }, `${toHHMM(m.start_min)}  ${courtName(cat.config, m.court)}  ${m.label}`));
     })));
+  });
   return h('div', null,
     finalRankingView(cat, ctx),
-    h('div', { class: 'bracket', style: { marginTop: '12px' } }, cols));
-}
-
-export function finalRankingView(cat, ctx) {
-  if (!cat.finalRanking || !cat.finalRanking.length) return null;
-  const tm = teamMap(cat);
-  return h('section', null, h('h2', { style: { margin: '12px 0 8px' } }, '最終順位'),
-    h('div', { class: 'podium' }, cat.finalRanking.map((r) => h('div', { class: `p${r.teamId === ctx.myTeam ? ' mine' : ''}` },
-      h('span', { class: 'r' }, `${r.rank}位`), h('strong', null, tm[r.teamId] ? tm[r.teamId].name : '-')))));
+    h('div', { class: 'section-title' }, icon('list'), h('h2', null, 'トーナメント表')),
+    h('div', { class: 'bracket' }, cols));
 }
 
 export function teamsView(cat, ctx, query = '') {
@@ -164,12 +204,10 @@ export function teamsView(cat, ctx, query = '') {
   if (!list.length) return h('p', { class: 'empty' }, q ? `「${q}」に一致するチームはありません` : 'チームはまだ登録されていません');
   const groups = {};
   for (const t of list) (groups[t.group_label || ''] ||= []).push(t);
-  return h('div', null, Object.keys(groups).sort().map((g) => h('section', { class: 'panel', style: { marginTop: '12px' } },
-    g ? h('h2', { style: { marginBottom: '8px' } }, `${g}組`) : null,
-    groups[g].map((t) => h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--line)' } },
-      t.logo ? h('img', { src: t.logo, alt: '', width: 28, height: 28, style: { borderRadius: '50%', objectFit: 'contain' } }) : null,
-      h('strong', null, t.name),
-      t.id === ctx.myTeam ? h('span', { class: 'tag changed' }, '自チーム') : null,
-      h('span', { class: 'spacer' }),
-      ctx.onPickTeam ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => ctx.onPickTeam(t.id) }, '試合を見る') : null)))));
+  return h('div', null, Object.keys(groups).sort().map((g) => h('section', null,
+    g ? h('h2', { class: 'group-title' }, `${g}組`) : null,
+    h('div', { class: 'team-grid' }, groups[g].map((t) => h('button', { class: `tm${t.id === ctx.myTeam ? ' mine' : ''}`, type: 'button',
+      onclick: () => ctx.onPickTeam && ctx.onPickTeam(t.id), 'aria-label': `${t.name}の試合を見る` },
+      crest(t, 40), h('strong', null, t.name), t.group_label ? h('span', { class: 'tm-g' }, `${t.group_label}組`) : null,
+      t.id === ctx.myTeam ? h('span', { class: 'star' }, icon('star')) : null))))));
 }

@@ -163,3 +163,48 @@ export async function run(fn, okMsg) {
     return undefined;
   }
 }
+
+// ---------- アイコン（線画・currentColor） ----------
+const ICONS = {
+  calendar: '<rect x="3" y="4.5" width="18" height="16.5" rx="3"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/>',
+  pin: '<path d="M12 21s-7-6.2-7-11.2A7 7 0 0 1 19 9.8C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.8" r="2.6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/>',
+  list: '<rect x="3.5" y="4" width="17" height="16" rx="3"/><path d="M3.5 9.5h17M3.5 14.5h17M9 9.5v10.5"/>',
+  trophy: '<path d="M8 3.5h8v5.5a4 4 0 0 1-8 0V3.5z"/><path d="M16 5h3.5v1.5A3.5 3.5 0 0 1 16 10M8 5H4.5v1.5A3.5 3.5 0 0 0 8 10M12 13v4M8.5 20.5h7M10 17h4"/>',
+  shield: '<path d="M12 3l7.5 3v5.4c0 4.4-3.1 8-7.5 9.6-4.4-1.6-7.5-5.2-7.5-9.6V6L12 3z"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
+  star: '<path d="M12 3.2l2.6 5.5 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.5l6-.8z" fill="currentColor"/>',
+  share: '<path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5v6a2.5 2.5 0 0 0 2.5 2.5h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  chevron: '<path d="M9.5 6l6 6-6 6"/>',
+  ball: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5l3.8 2.8-1.5 4.4H9.7l-1.5-4.4z"/><path d="M12 3v4.5M20.6 9.6l-4.8.7M17.3 19.4l-3-4.7M6.7 19.4l3-4.7M3.4 9.6l4.8.7"/>',
+};
+
+export function icon(name, cls = '') {
+  const span = document.createElement('span');
+  span.className = `ico ${cls}`.trim();
+  span.setAttribute('aria-hidden', 'true');
+  span.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
+  return span;
+}
+
+// ---------- 下からせり上がるシート ----------
+export function sheet({ title, content }) {
+  const prev = document.activeElement;
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); document.body.style.overflow = ''; prev && prev.focus && prev.focus(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const body = h('div', { class: 'sheet-body' });
+  const box = h('div', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    h('div', { class: 'sheet-grip', 'aria-hidden': 'true' }),
+    h('div', { class: 'sheet-head' }, h('h2', null, title), h('span', { class: 'spacer' }),
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': '閉じる', onclick: () => close() }, icon('close'))),
+    body);
+  const back = h('div', { class: 'sheet-back', onclick: (e) => { if (e.target === back) close(); } }, box);
+  mount(body, typeof content === 'function' ? content(close) : content);
+  document.body.append(back);
+  document.body.style.overflow = 'hidden';
+  document.addEventListener('keydown', onKey);
+  const first = box.querySelector('input, button.pick');
+  first && first.focus();
+  return { close, body };
+}

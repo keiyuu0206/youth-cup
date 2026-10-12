@@ -1,6 +1,6 @@
 import { api, ApiError } from './web-api.js';
 import { h, mount, store, poller, toast, toHHMM, formatUpdated, formatDate } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, statusOf } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, statusOf, crest } from './web-views.js';
 
 export async function relative(root, slug) {
   let data = null;
@@ -115,20 +115,20 @@ export async function relative(root, slug) {
         h('output', null, d[side]),
         h('button', { class: 'plus', type: 'button', 'aria-label': '1点増やす', disabled: locked || !ready, onclick: () => change(side, 1) }, '＋'));
       const statusLine = h('div', { class: 'status-line' },
-        h('span', { class: `tag ${locked ? 'done' : m.status === 'provisional' ? 'wait' : st.cls}` }, locked ? '確定' : m.status === 'provisional' ? '仮登録' : st.label),
+        h('span', { class: `tag ${locked ? 'done' : m.status === 'provisional' ? 'wait' : st.cls}` }, locked ? '確定' : m.status === 'provisional' ? '仮登録' : st.key === 'upcoming' ? '未登録' : st.label),
         m.status === 'provisional' && m.updated_by ? h('span', { class: 'muted' }, `最終更新：${m.updated_by} ${formatUpdated(m.updated_at)}`) : null,
         m.time_changed ? h('span', { class: 'tag changed' }, '時間変更') : null);
 
       mount(card,
         h('div', { class: 'row' },
-          h('span', { class: 'num', style: { fontSize: '1.5rem', fontWeight: 700 } }, toHHMM(m.start_min)),
+          h('span', { class: 'num', style: { fontSize: '1.4rem' } }, toHHMM(m.start_min)),
           h('span', { class: 'tag' }, courtName(cat.config, m.court)),
           h('span', { class: 'muted small' }, m.label),
           isNext && !locked ? h('span', { class: 'tag live' }, '次の試合') : null),
         statusLine,
         h('div', { class: 'sc-teams' },
-          h('div', { class: 'side' }, h('div', { class: 'nm' }, home.text), step('home')),
-          h('div', { class: 'side' }, h('div', { class: 'nm' }, away.text), step('away'))),
+          h('div', { class: 'side' }, h('div', { class: 'nm' }, crest(home.team, 36), home.text), step('home')),
+          h('div', { class: 'side' }, h('div', { class: 'nm' }, crest(away.team, 36), away.text), step('away'))),
         isKo && tie && ready && !locked ? h('div', null,
           h('p', { class: 'small muted', style: { textAlign: 'center', margin: '12px 0 0' } }, '同点のときはPK戦の結果'),
           h('div', { class: 'sc-teams' }, h('div', { class: 'side' }, step('hpk', true)), h('div', { class: 'side' }, step('apk', true)))) : null,

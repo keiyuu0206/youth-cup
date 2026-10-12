@@ -3,7 +3,7 @@
   "short_name": "大会運営",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3f5f0",
-  "theme_color": "#1e6b3a",
+  "background_color": "#f2f4f1",
+  "theme_color": "#0f7b4a",
   "lang": "ja"
 }
