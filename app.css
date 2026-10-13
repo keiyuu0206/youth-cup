@@ -71,7 +71,10 @@ a { color: var(--turf); }
 .site-head .logo { width: 40px; height: 40px; border-radius: 12px; background: #fff; object-fit: contain; flex: none; }
 .site-head h1 { font-size: 1.05rem; font-weight: 800; }
 .site-head .meta { font-size: 0.8rem; opacity: 0.85; }
-.site-head a { color: #fff; text-decoration: none; font-weight: 700; }
+.site-head a { color: #fff; text-decoration: none; font-weight: 700; white-space: nowrap; }
+.site-head h1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-head .btn { white-space: nowrap; flex: none; }
+.site-head .spacer { display: none; }
 
 /* ===== 公開画面: ヒーロー（ピッチのライン） ===== */
 .hero {
@@ -208,19 +211,48 @@ table.standings tr.mine td { background: var(--bib-soft); }
 .podium .p.mine { box-shadow: inset 4px 0 0 var(--bib), var(--shadow); }
 .section-title { display: flex; align-items: center; gap: 8px; margin: 22px 4px 10px; }
 .section-title .ico { color: var(--turf); }
-.bracket { display: flex; gap: 14px; overflow-x: auto; padding: 4px 2px 12px; scroll-snap-type: x proximity; }
-.bracket .round { flex: none; width: 232px; display: flex; flex-direction: column; gap: 10px; scroll-snap-align: start; }
-.bracket .round h3 { font-size: 0.8rem; color: var(--ink-2); padding: 0 4px; }
-.bracket .round .col { display: flex; flex-direction: column; justify-content: space-around; gap: 12px; flex: 1; }
+
+/* トーナメント図：左から右へ勝ち上がる。線は各試合の疑似要素で描く */
+.tree-scroll { overflow-x: auto; margin: 0 -16px; padding: 6px 16px 14px; scrollbar-width: thin; }
+.tree-root { display: inline-flex; align-items: center; min-width: min-content; }
+.tree { --conn: #c8d2cb; display: flex; align-items: center; }
+.tree-kids { display: flex; flex-direction: column; margin-right: 28px; }
+.tree-kids > .tree { position: relative; padding: 5px 0; }
+.tree-kids > .tree::after { content: ""; position: absolute; right: -14px; top: 50%; width: 14px; border-top: 2px solid var(--conn); }
+.tree-kids > .tree::before { content: ""; position: absolute; right: -14px; border-right: 2px solid var(--conn); }
+.tree-kids > .tree:first-child::before { top: 50%; bottom: 0; }
+.tree-kids > .tree:last-child::before { top: 0; bottom: 50%; }
+.tree-kids > .tree:only-child::before { display: none; }
+.tree-kids > .tree.done { --conn: var(--turf); }
+.tree-kids + .node { position: relative; }
+.tree-kids + .node::before { content: ""; position: absolute; left: -16px; top: 50%; width: 14px; border-top: 2px solid #c8d2cb; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tree { --conn: #33443a; } :root:not([data-theme="light"]) .tree-kids + .node::before { border-color: #33443a; } }
+
 .bm { background: var(--surface); border-radius: var(--r-md); box-shadow: var(--shadow); overflow: hidden; }
-.bm .bt { display: flex; align-items: center; gap: 8px; padding: 8px 12px; min-height: 40px; font-size: 0.88rem; font-weight: 700; }
+.node { width: 178px; flex: none; }
+.node.final { box-shadow: inset 0 0 0 2px var(--turf), var(--shadow); }
+.bm .bl { display: flex; justify-content: space-between; gap: 6px; font-size: 0.68rem; color: var(--ink-2); padding: 5px 10px; background: var(--surface-2); white-space: nowrap; }
+.bm .bl span:first-child { font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.node.final .bl { background: var(--turf); }
+.node.final .bl span { color: #fff !important; }
+.bm .bt { display: flex; align-items: center; gap: 7px; padding: 6px 10px; min-height: 36px; font-size: 0.84rem; font-weight: 700; }
 .bm .bt + .bt { border-top: 1px solid var(--line); }
 .bm .bt .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bm .bt .s { font-variant-numeric: tabular-nums; font-weight: 800; }
+.bm .bt .s small { font-size: 0.7rem; color: var(--ink-2); margin-left: 2px; }
 .bm .bt.lose { color: var(--ink-3); }
-.bm .bt.ph .nm { color: var(--ink-2); font-weight: 500; font-size: 0.82rem; }
+.bm .bt.ph .nm { color: var(--ink-2); font-weight: 500; font-size: 0.78rem; }
 .bm .bt.mine { background: var(--bib-soft); }
-.bm .bl { font-size: 0.7rem; color: var(--ink-2); padding: 6px 12px; background: var(--surface-2); }
+.champ { position: relative; margin-left: 28px; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--r-md); background: #f5c518; color: #3b2f00; font-weight: 800; white-space: nowrap; }
+.champ::before { content: ""; position: absolute; left: -28px; top: 50%; width: 28px; border-top: 2px solid var(--turf); }
+.champ small { display: block; font-size: 0.68rem; font-weight: 700; opacity: 0.8; }
+.champ .ico { width: 22px; height: 22px; }
+.tree-others { display: grid; gap: 6px; margin-top: 4px; }
+.tree-others h3 { font-size: 0.8rem; color: var(--ink-2); margin: 6px 4px 0; }
+.scroll-hint { margin: 0 4px 4px; }
+.wrap.wrap-bracket { max-width: 1180px; }
+.wrap-bracket .seg, .wrap-bracket .podium, .wrap-bracket .share-row { max-width: 608px; margin-left: auto; margin-right: auto; }
+@media (min-width: 900px) { .scroll-hint { display: none; } }
 
 /* ===== チーム一覧 ===== */
 .team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 10px; }
@@ -348,6 +380,31 @@ label.field > span { line-height: 1.35; }
 }
 .admin-layout { display: grid; gap: 16px; }
 @media (min-width: 960px) { .admin-layout.split { grid-template-columns: 300px 1fr; align-items: start; } }
+
+/* ===== 管理: 大会一覧 ===== */
+.t-grid { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); align-items: start; }
+.t-card { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 16px; }
+.t-head { display: flex; gap: 12px; align-items: center; text-decoration: none; color: inherit; }
+.t-logo { width: 52px; height: 52px; border-radius: 14px; object-fit: contain; background: var(--surface); box-shadow: 0 0 0 1px var(--line); flex: none; }
+.t-logo.ph { display: grid; place-items: center; background: var(--turf-soft); color: var(--turf); box-shadow: none; }
+.t-logo.ph .ico { width: 28px; height: 28px; }
+.t-title { flex: 1; min-width: 0; }
+.t-title h2 { font-size: 1.1rem; margin-top: 4px; }
+.t-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.8rem; color: var(--ink-2); margin-top: 2px; }
+.t-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.t-meta .ico { width: 14px; height: 14px; }
+.t-go { color: var(--ink-3); }
+.cat-grid { display: grid; gap: 10px; margin-top: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.cat-card { text-align: left; border: 0; border-radius: var(--r-md); background: var(--surface-2); padding: 12px; cursor: pointer; color: var(--ink); display: grid; gap: 6px; align-content: start; }
+.cat-card:hover { box-shadow: inset 0 0 0 1.5px var(--turf); }
+.cat-top { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.cat-top strong { font-size: 1.25rem; font-weight: 800; }
+.cat-meta { font-size: 0.78rem; color: var(--ink-2); display: flex; flex-wrap: wrap; gap: 2px 8px; }
+.cat-step { font-size: 0.75rem; font-weight: 700; color: var(--ink-2); }
+.cat-step.todo { color: var(--turf); }
+.progress { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--turf); border-radius: 3px; }
+.cat-add { place-content: center; text-align: center; min-height: 92px; background: transparent; border: 1.5px dashed var(--line); color: var(--turf); font-weight: 700; }
 
 /* ===== モーダル・トースト ===== */
 .modal-back { position: fixed; inset: 0; background: rgba(10, 20, 15, 0.45); z-index: 50; display: flex; align-items: flex-end; justify-content: center; }

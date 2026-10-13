@@ -206,3 +206,10 @@ test('設定の移行: 旧形式（各組から2チーム）は「上位チー�
   const c = normalizeConfig({ format: 'league_knockout', advance: 1, rankMode: 'top3_shared' });
   assert.deepEqual([c.knockoutPlan.type, c.knockoutPlan.k, c.knockoutPlan.mode], ['top', 1, 'top3_shared']);
 });
+
+test('試合の形: ハーフなし・3ピリオドで試合の長さが変わる', () => {
+  const one = normalizeConfig({ periods: 1, halfMinutes: 20, halftimeMinutes: 5, intervalMinutes: 5, startTime: 540, lunchEnabled: false });
+  const three = normalizeConfig({ periods: 3, halfMinutes: 10, halftimeMinutes: 3, intervalMinutes: 5, startTime: 540, lunchEnabled: false });
+  assert.deepEqual(slotTimes(one, 2).map((x) => toHHMM(x.start)), ['09:00', '09:25']);   // 20分＋間隔5分
+  assert.deepEqual(slotTimes(three, 2).map((x) => toHHMM(x.start)), ['09:00', '09:41']); // 10×3＋3×2＋間隔5分
+});

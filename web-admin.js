@@ -1,5 +1,5 @@
 import { api, ApiError } from './web-api.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, standingsView, bracketView, TIEBREAK_LABEL } from './web-views.js';
 
 const STATUS = {
@@ -123,29 +123,70 @@ function loginView(root, onDone) {
 
 async function listView(root, navigate) {
   const { tournaments } = await api('GET', '/api/admin/tournaments');
-  const name = h('input', { type: 'text', placeholder: '例: 第5回 さくらカップ' });
-  const date = h('input', { type: 'date', value: todayStr() });
-  const venue = h('input', { type: 'text', placeholder: '例: 市民グラウンド' });
+
+  const createDialog = () => {
+    const name = h('input', { type: 'text', placeholder: '例: 第5回 さくらカップ' });
+    const date = h('input', { type: 'date', value: todayStr() });
+    const venue = h('input', { type: 'text', placeholder: '例: 市民グラウンド' });
+    modal({
+      title: '大会を作成',
+      content: h('div', { class: 'stack' },
+        h('label', { class: 'field' }, h('span', null, '大会名'), name),
+        h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, '開催日'), date),
+          h('label', { class: 'field' }, h('span', null, '会場'), venue))),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '作成してカテゴリを追加', kind: 'btn-primary', onClick: async () => {
+        const r = await run(() => api('POST', '/api/admin/tournaments', { name: name.value, date: date.value, venue: venue.value }));
+        if (!r) return true;
+        navigate(`/admin/t/${r.id}?add=1`);
+      } }],
+    });
+  };
+
+  // カテゴリを開いたとき、いま必要な作業のタブを選んでおく
+  const openCategory = (t, c) => {
+    store.set(`a:${t.id}:cat`, c.id);
+    store.set(`a:${t.id}:sub`, !c.team_count ? 'teams' : !c.match_count ? 'schedule' : 'results');
+    navigate(`/admin/t/${t.id}`);
+  };
+
+  const catCard = (t, c) => {
+    const pct = c.match_count ? Math.round((c.done_count / c.match_count) * 100) : 0;
+    const step = !c.team_count ? 'チームを登録しましょう' : !c.match_count ? '組み分けと日程を作りましょう' : c.done_count === c.match_count ? 'すべての試合が確定' : `確定 ${c.done_count} / ${c.match_count} 試合`;
+    return h('button', { class: 'cat-card', type: 'button', onclick: () => openCategory(t, c) },
+      h('div', { class: 'cat-top' }, h('strong', null, c.name),
+        c.pending_count ? h('span', { class: 'tag alert' }, `仮登録 ${c.pending_count}`) : null),
+      h('div', { class: 'cat-meta' }, `${c.team_count}チーム`, h('span', null, FORMAT_LABEL[c.format] || '')),
+      c.match_count ? h('div', { class: 'progress', role: 'progressbar', 'aria-valuenow': pct, 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: { width: `${pct}%` } })) : null,
+      h('div', { class: `cat-step${!c.team_count || !c.match_count ? ' todo' : ''}` }, step));
+  };
+
+  const tCard = (t) => h('article', { class: 't-card' },
+    h('a', { class: 't-head', href: `/admin/t/${t.id}`, onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
+      t.logo ? h('img', { class: 't-logo', src: t.logo, alt: '' }) : h('span', { class: 't-logo ph' }, icon('ball')),
+      h('div', { class: 't-title' },
+        h('div', { class: 'row', style: { gap: '6px' } }, h('span', { class: `tag ${t.status === 'live' ? 'live' : t.status === 'published' ? 'done' : ''}` }, STATUS[t.status].label)),
+        h('h2', null, t.name),
+        h('div', { class: 't-meta' },
+          t.date ? h('span', null, icon('calendar'), formatDate(t.date)) : null,
+          t.venue ? h('span', null, icon('pin'), t.venue) : null)),
+      icon('chevron', 't-go')),
+    h('div', { class: 'cat-grid' },
+      t.categories.map((c) => catCard(t, c)),
+      h('button', { class: 'cat-card cat-add', type: 'button', onclick: () => navigate(`/admin/t/${t.id}?add=1`) }, '＋ カテゴリを追加')));
+
+  const live = tournaments.filter((t) => t.status !== 'finished');
+  const done = tournaments.filter((t) => t.status === 'finished');
   mount(root,
     adminHeader('大会運営', navigate, false),
-    h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
-      h('section', { class: 'panel' },
-        h('h2', { style: { marginBottom: '12px' } }, '大会を作成'),
-        h('div', { class: 'grid-form' },
-          h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '大会名'), name),
-          h('label', { class: 'field' }, h('span', null, '開催日'), date),
-          h('label', { class: 'field' }, h('span', null, '会場'), venue)),
-        h('button', { class: 'btn btn-primary', type: 'button', style: { marginTop: '12px' }, onclick: async () => {
-          const r = await run(() => api('POST', '/api/admin/tournaments', { name: name.value, date: date.value, venue: venue.value }));
-          if (r) navigate(`/admin/t/${r.id}`);
-        } }, '大会を作成')),
-      h('section', { class: 'panel' },
-        h('h2', { style: { marginBottom: '8px' } }, '大会一覧'),
-        tournaments.length ? tournaments.map((t) => h('a', { href: `/admin/t/${t.id}`, class: 'row', style: { padding: '10px 0', borderBottom: '1px solid var(--line)', textDecoration: 'none', color: 'inherit' },
-          onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
-          h('span', { class: `tag ${t.status === 'live' ? 'live' : ''}` }, STATUS[t.status].label),
-          h('strong', null, t.name), h('span', { class: 'spacer' }), h('span', { class: 'muted small' }, formatDate(t.date))))
-          : h('p', { class: 'empty' }, '大会はまだありません。上のフォームから作成してください。'))));
+    h('main', { class: 'wrap wide', style: { marginTop: '20px' } },
+      h('div', { class: 'row' }, h('h2', { style: { fontSize: '1.3rem' } }, '大会一覧'), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: createDialog }, '＋ 大会を作成')),
+      tournaments.length ? null : h('div', { class: 'panel empty', style: { marginTop: '16px' } },
+        h('p', { style: { marginTop: 0 } }, '大会はまだありません。'),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: createDialog }, '最初の大会を作成')),
+      live.length ? h('div', { class: 't-grid' }, live.map(tCard)) : null,
+      done.length ? h('section', null, h('h3', { class: 'group-title' }, '終了した大会'), h('div', { class: 't-grid' }, done.map(tCard))) : null));
 }
 
 // ---------- 大会画面 ----------
@@ -176,6 +217,10 @@ async function tournamentView(root, id, navigate) {
     return mount(root, adminHeader('大会運営', navigate, true), h('p', { class: 'empty' }, e.message));
   }
   render();
+  if (new URLSearchParams(location.search).get('add')) {
+    history.replaceState(null, '', location.pathname);
+    addCategory();
+  }
 
   // 関係者の仮登録を拾うため、入力中でなければ定期的に更新する
   const stopPoll = poller(async () => {
@@ -326,8 +371,12 @@ async function tournamentView(root, id, navigate) {
       h('input', { type: 'time', value: toHHMM(f[key]), oninput: (e) => { if (e.target.value) { f[key] = fromHHMM(e.target.value); drawSummary(); } } }));
     const summary = h('p', { class: 'notice' });
     const drawSummary = () => {
-      const len = f.halfMinutes * 2 + f.halftimeMinutes;
-      summary.textContent = `1試合の枠：前半${f.halfMinutes}分＋ハーフタイム${f.halftimeMinutes}分＋後半${f.halfMinutes}分＋試合間隔${f.intervalMinutes}分＝${len + f.intervalMinutes}分`;
+      const n = f.periods || 2;
+      const len = f.halfMinutes * n + (n > 1 ? f.halftimeMinutes * (n - 1) : 0);
+      const body = n === 1 ? `試合${f.halfMinutes}分`
+        : n === 2 ? `前半${f.halfMinutes}分＋ハーフタイム${f.halftimeMinutes}分＋後半${f.halfMinutes}分`
+          : `${f.halfMinutes}分×${n}ピリオド＋休憩${f.halftimeMinutes}分×${n - 1}`;
+      summary.textContent = `1試合の枠：${body}＋試合間隔${f.intervalMinutes}分＝${len + f.intervalMinutes}分`;
     };
     drawSummary();
 
@@ -338,8 +387,10 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, 'カテゴリ'), h('select', { onchange: (e) => { name = e.target.value; } },
             CATEGORY_NAMES.map((n) => h('option', { value: n, selected: n === name }, n)))),
           time('startTime', '第1試合の開始'),
-          num('halfMinutes', '前後半（各・分）', { min: 1, max: 60 }),
-          num('halftimeMinutes', 'ハーフタイム（分）', { max: 30 }),
+          h('label', { class: 'field' }, h('span', null, '試合の形'), h('select', { onchange: (e) => { f.periods = Number(e.target.value); draw(); } },
+            [[2, '前後半'], [1, 'ハーフなし'], [3, '3ピリオド']].map(([v, l]) => h('option', { value: v, selected: (f.periods || 2) === v }, l)))),
+          num('halfMinutes', (f.periods || 2) === 1 ? '試合時間（分）' : (f.periods || 2) === 2 ? '前後半（各・分）' : '1ピリオド（分）', { min: 1, max: 90 }),
+          (f.periods || 2) > 1 ? num('halftimeMinutes', (f.periods || 2) === 2 ? 'ハーフタイム（分）' : 'ピリオド間の休憩（分）', { max: 30 }) : null,
           num('intervalMinutes', '試合間隔（分）', { max: 60 }),
           num('courts', 'コート数', { min: 1, max: 12 }),
           h('label', { class: 'field' }, h('span', null, '連戦を避ける'), h('select', { onchange: (e) => { f.minRestSlots = Number(e.target.value); } },
@@ -411,7 +462,7 @@ async function tournamentView(root, id, navigate) {
     if (!tpls) return;
     if (!tpls.length) return toast('保存されたテンプレートはありません', true);
     const list = h('div', null, tpls.map((x) => h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--line)' } },
-      h('div', null, h('strong', null, x.name), h('div', { class: 'muted small' }, `${FORMAT_LABEL[x.config.format] || ''}　前後半${x.config.halfMinutes}分`)),
+      h('div', null, h('strong', null, x.name), h('div', { class: 'muted small' }, `${FORMAT_LABEL[x.config.format] || ''}　${(x.config.periods || 2) === 1 ? `1本${x.config.halfMinutes}分` : (x.config.periods || 2) === 2 ? `前後半${x.config.halfMinutes}分` : `${x.config.halfMinutes}分×3ピリオド`}`)),
       h('span', { class: 'spacer' }),
       h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => { Object.assign(f, JSON.parse(JSON.stringify(x.config))); dlg.close(); redraw(); toast('読み込みました。「設定を保存」で反映されます'); } }, '読み込む'),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {

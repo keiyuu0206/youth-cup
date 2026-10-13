@@ -232,8 +232,22 @@ route('GET', '/api/admin/me', async ({ req, env }) => json({ admin: await isAdmi
 // ---------- 管理者: 大会 ----------
 
 route('GET', '/api/admin/tournaments', async ({ db }) => {
-  const r = await db.prepare('SELECT id, slug, name, date, venue, status FROM tournaments ORDER BY date DESC, created_at DESC').all();
-  return json({ tournaments: r.results });
+  const [r, c] = await Promise.all([
+    db.prepare('SELECT id, slug, name, date, venue, status, logo, show_logo FROM tournaments ORDER BY date DESC, created_at DESC').all(),
+    db.prepare(`SELECT c.id, c.tournament_id, c.name, c.config,
+        (SELECT COUNT(*) FROM teams t WHERE t.category_id = c.id) AS team_count,
+        (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id) AS match_count,
+        (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id AND m.status = 'confirmed') AS done_count,
+        (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id AND m.status = 'provisional') AS pending_count
+      FROM categories c ORDER BY c.sort, c.created_at`).all(),
+  ]);
+  const cats = {};
+  for (const x of c.results) {
+    const cfg = normalizeConfig(JSON.parse(x.config));
+    (cats[x.tournament_id] ||= []).push({ id: x.id, name: x.name, format: cfg.format, groups: cfg.groups, courts: cfg.courts,
+      team_count: x.team_count, match_count: x.match_count, done_count: x.done_count, pending_count: x.pending_count });
+  }
+  return json({ tournaments: r.results.map((t) => ({ ...t, logo: t.show_logo ? t.logo : null, categories: cats[t.id] || [] })) });
 }, 'admin');
 
 route('POST', '/api/admin/tournaments', async ({ req, db }) => {
@@ -316,7 +330,7 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params 
   return json({ id });
 }, 'admin');
 
-const TIMING_KEYS = ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes'];
+const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes'];
 
 route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   const c = await getCategory(db, params.cid);
@@ -576,7 +590,7 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 
 // ---------- 管理者: テンプレート ----------
 
-const TEMPLATE_KEYS = ['halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
+const TEMPLATE_KEYS = ['periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
   'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'knockoutPlan', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
 
 route('GET', '/api/admin/templates', async ({ db }) => {

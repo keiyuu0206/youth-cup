@@ -76,7 +76,7 @@ export async function viewer(root, slug) {
         onclick: () => { st.catId = c.id; store.set(`v:${slug}:cat`, c.id); scrolledOnce = false; render(); } }, c.name))) : null;
 
     const body = h('main');
-    const content = h('div', { class: 'wrap' }, seg, body,
+    const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, body,
       h('div', { class: 'share-row' }, h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像')),
       h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })));
 

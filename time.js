@@ -28,6 +28,7 @@ export const DEFAULT_TIEBREAK = ['points', 'gd', 'gf', 'h2h', 'lottery'];
 export function defaultConfig() {
   return {
     startTime: 540, // 9:00
+    periods: 2, // 2: 前後半、1: ハーフなし、3: 3ピリオド
     halfMinutes: 15,
     halftimeMinutes: 5,
     intervalMinutes: 5,
@@ -61,6 +62,7 @@ export function normalizeConfig(c) {
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }
+  out.periods = [1, 2, 3].includes(Number(out.periods)) ? Number(out.periods) : 2;
   if (!out.knockoutPlan || typeof out.knockoutPlan !== 'object') {
     // 旧設定（advance / rankMode）から移行
     out.knockoutPlan = { type: 'top', k: out.advance, mode: out.rankMode === 'all' ? 'all' : out.rankMode };
@@ -72,7 +74,11 @@ export function normalizeConfig(c) {
   return out;
 }
 
-export const matchLength = (c) => c.halfMinutes * 2 + c.halftimeMinutes;
+// 試合の長さ。periods=2 は前後半、1 はハーフなしの1本、3 は3ピリオド
+export const matchLength = (c) => {
+  const n = c.periods || 2;
+  return c.halfMinutes * n + (n > 1 ? c.halftimeMinutes * (n - 1) : 0);
+};
 
 export function courtName(c, i) {
   return (c.courtNames && c.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;

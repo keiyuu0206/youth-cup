@@ -1,6 +1,9 @@
 import { h, toHHMM, todayStr, nowMin, icon } from './web-ui.js';
 
-export const matchLength = (cfg) => cfg.halfMinutes * 2 + cfg.halftimeMinutes;
+export const matchLength = (cfg) => {
+  const n = cfg.periods || 2;
+  return cfg.halfMinutes * n + (n > 1 ? cfg.halftimeMinutes * (n - 1) : 0);
+};
 export const courtName = (cfg, i) => (cfg.courtNames && cfg.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;
 
 export const teamMap = (cat) => Object.fromEntries(cat.teams.map((t) => [t.id, t]));
@@ -188,29 +191,53 @@ export function bracketView(cat, ctx) {
   const topRank = (sec) => Math.min(...sec.list.map((m) => m.place_w ?? m.place_l ?? Infinity));
   sections.sort((a, b) => topRank(a) - topRank(b));
   const strip = (label, name) => (name ? label.split(`${name} `).join('') : label);
-  const bracketOf = (sec) => {
-    const rounds = {};
-    for (const m of sec.list) (rounds[m.round] ||= []).push(m);
-    const cols = Object.keys(rounds).map(Number).sort((a, b) => a - b).map((r) => {
-      const list = rounds[r].sort((a, b) => a.start_min - b.start_min || a.court - b.court);
-      const title = [...new Set(list.map((m) => strip(m.label, sec.name).replace(/\s\d+$/, '')))].join('・');
-      return h('div', { class: 'round' }, h('h3', null, title), h('div', { class: 'col' }, list.map((m) => {
-        const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
-        const w = showScore ? winnerSide(m) : null;
-        const line = (side) => {
-          const info = sideInfo(m, side, cat, cache);
-          const sc = showScore ? (side === 'home' ? m.home_score : m.away_score) : '';
-          const pk = showScore && m.home_pk != null ? ` (${side === 'home' ? m.home_pk : m.away_pk})` : '';
-          const id = side === 'home' ? m.home_team_id : m.away_team_id;
-          return h('div', { class: `bt${w ? (w === side ? ' win' : ' lose') : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
-            crest(info.team, 22), h('span', { class: 'nm' }, info.placeholder ? strip(info.text, sec.name) : info.text), h('span', { class: 's' }, `${sc ?? ''}${pk}`));
-        };
-        return h('div', { class: 'bm' }, line('home'), line('away'),
-          h('div', { class: 'bl' }, `${toHHMM(m.start_min)}  ${courtName(cat.config, m.court)}  ${strip(m.label, sec.name)}`));
-      })));
-    });
-    return h('div', { class: 'bracket' }, cols);
+  // 1試合分のカード
+  const card = (m, sec, isFinal) => {
+    const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
+    const w = showScore ? winnerSide(m) : null;
+    const line = (side) => {
+      const info = sideInfo(m, side, cat, cache);
+      const sc = showScore ? (side === 'home' ? m.home_score : m.away_score) : '';
+      const pk = showScore && m.home_pk != null ? h('small', null, `(${side === 'home' ? m.home_pk : m.away_pk})`) : null;
+      const id = side === 'home' ? m.home_team_id : m.away_team_id;
+      return h('div', { class: `bt${w ? (w === side ? ' win' : ' lose') : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
+        crest(info.team, 20), h('span', { class: 'nm' }, info.placeholder ? strip(info.text, sec.name) : info.text), h('span', { class: 's' }, sc ?? '', pk));
+    };
+    return h('div', { class: `node bm${isFinal ? ' final' : ''}` },
+      h('div', { class: 'bl' }, h('span', null, strip(m.label, sec.name)), h('span', null, `${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}`)),
+      line('home'), line('away'));
   };
+
+  // 「どの試合の勝者か」をたどって木を作り、線でつないで描く
+  const bracketOf = (sec) => {
+    const byCode = Object.fromEntries(sec.list.map((m) => [m.code, m]));
+    const fed = new Set();
+    for (const m of sec.list) for (const r of [m.home_ref, m.away_ref]) if (r && r.t === 'win' && byCode[r.m]) fed.add(r.m);
+    const roots = sec.list.filter((m) => !fed.has(m.code))
+      .sort((a, b) => (a.place_w ?? a.place_l ?? 999) - (b.place_w ?? b.place_l ?? 999));
+    const depth = (m) => 1 + Math.max(0, ...[m.home_ref, m.away_ref].filter((r) => r && r.t === 'win' && byCode[r.m]).map((r) => depth(byCode[r.m])));
+    const node = (m, isFinal = false) => {
+      const kids = [m.home_ref, m.away_ref].filter((r) => r && r.t === 'win' && byCode[r.m]).map((r) => byCode[r.m]);
+      return h('div', { class: `tree${m.status === 'confirmed' ? ' done' : ''}` },
+        kids.length ? h('div', { class: 'tree-kids' }, kids.map((k) => node(k))) : null,
+        card(m, sec, isFinal));
+    };
+    const [main, ...others] = roots;
+    const champ = () => {
+      if (!main || main.status !== 'confirmed' || !main.place_w) return null;
+      const w = winnerSide(main);
+      if (!w) return null;
+      const info = sideInfo(main, w, cat, cache);
+      return h('div', { class: `champ${info.team && info.team.id === ctx.myTeam ? ' mine' : ''}` }, icon('trophy'), h('span', null, h('small', null, main.place_w === 1 ? '優勝' : `${main.place_w}位`), info.text));
+    };
+    return h('div', null,
+      depth(main) > 2 ? h('p', { class: 'muted small scroll-hint' }, '横にスクロールすると決勝まで見られます') : null,
+      h('div', { class: 'tree-scroll' }, h('div', { class: 'tree-root' }, node(main, true), champ())),
+      others.length ? h('div', { class: 'tree-others' }, others.map((r) => h('div', null,
+        h('h3', null, strip(r.label, sec.name).replace(/\s\d+$/, '')),
+        h('div', { class: 'tree-scroll' }, h('div', { class: 'tree-root' }, node(r)))))) : null);
+  };
+
   return h('div', null,
     finalRankingView(cat, ctx),
     sections.map((sec) => h('section', null,
