@@ -131,7 +131,14 @@ export function standingsView(cat, ctx) {
   const groups = Object.keys(cat.standings || {}).sort();
   if (!groups.length) return h('p', { class: 'empty' }, '順位表はまだありません');
   const tm = teamMap(cat);
-  const advance = cat.config.format === 'league_knockout' ? cat.config.advance : 0;
+  const plan = cat.config.knockoutPlan || { type: 'top', k: cat.config.advance };
+  const lk = cat.config.format === 'league_knockout';
+  const advance = lk && (plan.type === 'top' || plan.type === 'split') ? plan.k : 0;
+  const note = !lk ? null
+    : plan.type === 'top' ? `上位${plan.k}チームが決勝トーナメントへ`
+      : plan.type === 'split' ? `${plan.k}位までが上位トーナメント、それより下は下位トーナメントへ`
+        : plan.type === 'all' ? '全チームが決勝トーナメントへ'
+          : plan.type === 'byrank' ? '同じ順位のチームどうしでトーナメント' : null;
   return h('div', null, groups.map((g) => {
     const st = cat.standings[g];
     const badge = st.complete
@@ -152,7 +159,7 @@ export function standingsView(cat, ctx) {
           h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
           h('td', null, r.gf), h('td', null, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
           h('td', { class: 'pts' }, r.pts)))))),
-      advance ? h('div', { class: 'st-note' }, h('span', null, h('i'), `上位${advance}チームが決勝トーナメントへ`)) : null);
+      note ? h('div', { class: 'st-note' }, h('span', null, advance ? h('i') : null, note)) : null);
   }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, `勝点が並んだときは ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`));
 }
 
@@ -169,33 +176,46 @@ export function bracketView(cat, ctx) {
   const ko = cat.matches.filter((m) => m.stage === 'knockout');
   if (!ko.length) return h('p', { class: 'empty' }, 'トーナメントはありません');
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
-  const rounds = {};
-  for (const m of ko) (rounds[m.round] ||= []).push(m);
-  const roundTitle = (list, r) => {
-    const bases = [...new Set(list.map((m) => m.label.replace(/\s\d+$/, '')))];
-    return bases.length === 1 ? bases[0] : bases.join('・');
+  // 複数のトーナメント（上位・下位など）は分けて表示する
+  const sections = [];
+  for (const m of ko) {
+    const name = m.group_label || '';
+    let sec = sections.find((x) => x.name === name);
+    if (!sec) sections.push((sec = { name, list: [] }));
+    sec.list.push(m);
+  }
+  // 上位のトーナメントから順に表示する
+  const topRank = (sec) => Math.min(...sec.list.map((m) => m.place_w ?? m.place_l ?? Infinity));
+  sections.sort((a, b) => topRank(a) - topRank(b));
+  const strip = (label, name) => (name ? label.split(`${name} `).join('') : label);
+  const bracketOf = (sec) => {
+    const rounds = {};
+    for (const m of sec.list) (rounds[m.round] ||= []).push(m);
+    const cols = Object.keys(rounds).map(Number).sort((a, b) => a - b).map((r) => {
+      const list = rounds[r].sort((a, b) => a.start_min - b.start_min || a.court - b.court);
+      const title = [...new Set(list.map((m) => strip(m.label, sec.name).replace(/\s\d+$/, '')))].join('・');
+      return h('div', { class: 'round' }, h('h3', null, title), h('div', { class: 'col' }, list.map((m) => {
+        const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
+        const w = showScore ? winnerSide(m) : null;
+        const line = (side) => {
+          const info = sideInfo(m, side, cat, cache);
+          const sc = showScore ? (side === 'home' ? m.home_score : m.away_score) : '';
+          const pk = showScore && m.home_pk != null ? ` (${side === 'home' ? m.home_pk : m.away_pk})` : '';
+          const id = side === 'home' ? m.home_team_id : m.away_team_id;
+          return h('div', { class: `bt${w ? (w === side ? ' win' : ' lose') : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
+            crest(info.team, 22), h('span', { class: 'nm' }, info.placeholder ? strip(info.text, sec.name) : info.text), h('span', { class: 's' }, `${sc ?? ''}${pk}`));
+        };
+        return h('div', { class: 'bm' }, line('home'), line('away'),
+          h('div', { class: 'bl' }, `${toHHMM(m.start_min)}  ${courtName(cat.config, m.court)}  ${strip(m.label, sec.name)}`));
+      })));
+    });
+    return h('div', { class: 'bracket' }, cols);
   };
-  const cols = Object.keys(rounds).map(Number).sort((a, b) => a - b).map((r) => {
-    const list = rounds[r].sort((a, b) => a.start_min - b.start_min || a.court - b.court);
-    return h('div', { class: 'round' }, h('h3', null, roundTitle(list, r)), h('div', { class: 'col' }, list.map((m) => {
-      const showScore = m.status === 'confirmed' || (ctx.showProvisional && m.status === 'provisional');
-      const w = showScore ? winnerSide(m) : null;
-      const line = (side) => {
-        const info = sideInfo(m, side, cat, cache);
-        const s = showScore ? (side === 'home' ? m.home_score : m.away_score) : '';
-        const pk = showScore && m.home_pk != null ? ` (${side === 'home' ? m.home_pk : m.away_pk})` : '';
-        const id = side === 'home' ? m.home_team_id : m.away_team_id;
-        return h('div', { class: `bt${w ? (w === side ? ' win' : ' lose') : ''}${info.placeholder ? ' ph' : ''}${id && id === ctx.myTeam ? ' mine' : ''}` },
-          crest(info.team, 22), h('span', { class: 'nm' }, info.text), h('span', { class: 's' }, `${s ?? ''}${pk}`));
-      };
-      return h('div', { class: 'bm' }, line('home'), line('away'),
-        h('div', { class: 'bl' }, `${toHHMM(m.start_min)}  ${courtName(cat.config, m.court)}  ${m.label}`));
-    })));
-  });
   return h('div', null,
     finalRankingView(cat, ctx),
-    h('div', { class: 'section-title' }, icon('list'), h('h2', null, 'トーナメント表')),
-    h('div', { class: 'bracket' }, cols));
+    sections.map((sec) => h('section', null,
+      h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表')),
+      bracketOf(sec))));
 }
 
 export function teamsView(cat, ctx, query = '') {

@@ -40,7 +40,7 @@ export function generateCategory(cfg, teams, koOrder) {
     if (res.error) return { matches: [], error: res.error };
     ko = res.matches.map((m) => ({
       stage: 'knockout',
-      group_label: null,
+      group_label: m.bracket || null, // 複数トーナメントのときのトーナメント名
       round: m.level + 1,
       code: m.code,
       label: m.label,

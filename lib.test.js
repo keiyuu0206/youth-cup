@@ -137,3 +137,72 @@ test('日程: 昼休憩の前後に空き枠を残さない', () => {
   const firstPm = Math.min(...pm.map((m) => m.start_min));
   assert.equal(firstPm - lastAmEnd, 45);
 });
+
+// ---- 決勝トーナメントの形 ----
+const lkCfg = (plan, groups = 4) => normalizeConfig({ format: 'league_knockout', groups, courts: 2, knockoutPlan: plan });
+const lkTeams = (n, G) => teams(n).map((t, i) => ({ ...t, group_label: 'ABCDEFGH'[i % G] }));
+const firstRound = (ms) => ms.filter((m) => m.home_ref?.t === 'grp' && m.away_ref?.t === 'grp');
+const norm = (r) => ({ ...r, matches: (r.matches || []).map((m) => ({ ...m, home_ref: m.home, away_ref: m.away })) });
+
+test('決勝: 3組の上位2チーム（6チーム）は不戦ありで、1回戦に同じ組どうしが当たらない', () => {
+  const { matches, error } = generateCategory(lkCfg({ type: 'top', k: 2, mode: 'top3' }, 3), lkTeams(12, 3));
+  assert.equal(error, undefined);
+  const r1 = firstRound(matches.filter((m) => m.stage === 'knockout'));
+  assert.equal(r1.length, 2);
+  for (const m of r1) assert.notEqual(m.home_ref.g, m.away_ref.g);
+});
+
+test('決勝: 4組の上位3チーム（12チーム）が進出できる', () => {
+  const { matches, error } = generateCategory(lkCfg({ type: 'top', k: 3, mode: 'top3' }), lkTeams(16, 4));
+  assert.equal(error, undefined);
+  const ko = matches.filter((m) => m.stage === 'knockout');
+  assert.ok(ko.some((m) => m.label === '決勝') && ko.some((m) => m.label === '3位決定戦'));
+  for (const m of firstRound(ko)) assert.notEqual(m.home_ref.g, m.away_ref.g);
+});
+
+test('決勝: 全チーム（4組×4）は2回戦まで同じ組どうしが当たらない', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'all', mode: 'top3' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  assert.equal(r.error, undefined);
+  const r1 = firstRound(r.matches);
+  assert.equal(r1.length, 8);
+  for (const m of r1) assert.notEqual(m.home_ref.g, m.away_ref.g);
+  // 2回戦（ベスト8）: 1回戦の勝者どうし。元の組が重ならないこと
+  const byCode = Object.fromEntries(r.matches.map((m) => [m.code, m]));
+  const groupsOf = (ref) => { const m = byCode[ref.m]; return [m.home_ref.g, m.away_ref.g]; };
+  for (const m of r.matches.filter((x) => x.home_ref?.t === 'win' && byCode[x.home_ref.m].home_ref?.t === 'grp' && x.label.startsWith('準々決勝'))) {
+    const a = groupsOf(m.home_ref); const b = groupsOf(m.away_ref);
+    assert.equal(a.filter((g) => b.includes(g)).length, 0);
+  }
+});
+
+test('決勝: 上位・下位トーナメントは順位が続きになる（下位の優勝は9位）', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'split', k: 2, mode: 'top3' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  assert.equal(r.error, undefined);
+  const upperFinal = r.matches.find((m) => m.label === '上位トーナメント 決勝');
+  const lowerFinal = r.matches.find((m) => m.label === '下位トーナメント 決勝');
+  assert.equal(upperFinal.place_w, 1);
+  assert.equal(lowerFinal.place_w, 9);
+  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 3位決定戦').place_w, 11);
+  // 下位はクロス方式（A3 対 B4）
+  const low = firstRound(r.matches.filter((m) => m.bracket === '下位トーナメント'));
+  assert.ok(low.some((m) => m.home_ref.g === 'A' && m.home_ref.r === 3 && m.away_ref.g === 'B' && m.away_ref.r === 4));
+  // 全体の決勝が最後に行われる
+  assert.equal(r.matches[r.matches.length - 1].label, '上位トーナメント 決勝');
+});
+
+test('決勝: 同じ順位どうしのトーナメントが順位の数だけできる', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'byrank', mode: 'top3' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  const names = [...new Set(r.matches.map((m) => m.bracket))];
+  assert.deepEqual(names.sort(), ['1位トーナメント', '2位トーナメント', '3位トーナメント', '4位トーナメント']);
+  for (const m of r.matches.filter((x) => x.home_ref?.t === 'grp')) assert.equal(m.home_ref.r, m.away_ref.r);
+});
+
+test('決勝: 全順位決定は2のべき乗でないと分かりやすいエラーを返す', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'top', k: 3, mode: 'all' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  assert.match(r.error, /12チーム/);
+});
+
+test('設定の移行: 旧形式（各組から2チーム）は「上位チームだけ」に読み替える', () => {
+  const c = normalizeConfig({ format: 'league_knockout', advance: 1, rankMode: 'top3_shared' });
+  assert.deepEqual([c.knockoutPlan.type, c.knockoutPlan.k, c.knockoutPlan.mode], ['top', 1, 'top3_shared']);
+});

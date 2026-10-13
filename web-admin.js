@@ -12,6 +12,78 @@ const CATEGORY_NAMES = ['U7', 'U8', 'U9', 'U10', 'U11', 'U12'];
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
 const RANK_LABEL = { top3: '1〜3位を決める（3位決定戦あり）', top3_shared: '1〜3位を決める（3位は2チーム）', all: '全順位を決める（順位決定戦）' };
 
+const PLAN_LABEL = { top: '上位チームだけでトーナメント', all: '全チームで1つのトーナメント', split: '上位トーナメントと下位トーナメント', byrank: '同じ順位どうしでトーナメント', custom: '自由に設定する' };
+
+// 管理画面での見積もり（実際の組み分け前でも、チーム数と組数から人数を推定する）
+function estimateGroupSizes(f, cat) {
+  const labels = Array.from({ length: Math.max(1, f.groups) }, (_, i) => String.fromCharCode(65 + i));
+  const assigned = cat.teams.filter((t) => t.group_label);
+  if (assigned.length === cat.teams.length && assigned.length) {
+    const sizes = {};
+    for (const t of assigned) sizes[t.group_label] = (sizes[t.group_label] || 0) + 1;
+    if (Object.keys(sizes).length === labels.length) return sizes;
+  }
+  const n = Math.max(cat.teams.length, labels.length * 2);
+  return Object.fromEntries(labels.map((l, i) => [l, Math.floor(n / labels.length) + (i < n % labels.length ? 1 : 0)]));
+}
+
+function expandPlanPreview(plan, maxRank) {
+  const k = Math.max(1, Math.min(maxRank, Number(plan.k) || 2));
+  if (plan.type === 'all') return [{ name: '決勝トーナメント', from: 1, to: maxRank }];
+  if (plan.type === 'split') return [{ name: '上位トーナメント', from: 1, to: k }, { name: '下位トーナメント', from: k + 1, to: maxRank }].filter((b) => b.from <= b.to);
+  if (plan.type === 'byrank') return Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
+  if (plan.type === 'custom') return (plan.brackets || []).map((b) => ({ ...b, from: Number(b.from) || 1, to: Math.min(Number(b.to) || 1, maxRank) })).filter((b) => b.from <= b.to);
+  return [{ name: '決勝トーナメント', from: 1, to: k }];
+}
+
+function knockoutPlanPanel(f, cat, redraw) {
+  const plan = f.knockoutPlan || (f.knockoutPlan = { type: 'top', k: f.advance || 2, mode: f.rankMode || 'top3', brackets: [] });
+  const sizes = estimateGroupSizes(f, cat);
+  const maxRank = Math.max(...Object.values(sizes));
+  const preview = expandPlanPreview(plan, maxRank).map((b) => {
+    let n = 0;
+    for (let r = b.from; r <= b.to; r++) for (const v of Object.values(sizes)) if (v >= r) n++;
+    const range = b.from === b.to ? `各組${b.from}位` : `各組${b.from}〜${b.to}位`;
+    const pow2 = n >= 2 && (n & (n - 1)) === 0;
+    const mode = b.mode || plan.mode;
+    return { text: `${b.name}：${range}（${n}チーム）`, warn: n < 2 ? '2チーム未満のため作られません' : mode === 'all' && !pow2 ? '2・4・8・16チームでないため全順位決定にできません' : null };
+  });
+  const set = (patch) => { Object.assign(plan, patch); redraw(); };
+
+  const custom = plan.type === 'custom' ? h('div', { class: 'stack', style: { marginTop: '12px' } },
+    (plan.brackets || []).map((b, i) => h('div', { class: 'grid-form', style: { padding: '12px', background: 'var(--surface-2)', borderRadius: '14px' } },
+      h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '名前'), h('input', { type: 'text', value: b.name || '', oninput: (e) => { b.name = e.target.value; } })),
+      h('label', { class: 'field' }, h('span', null, '各組の何位から'), h('input', { type: 'number', min: 1, max: 16, value: b.from, oninput: (e) => { b.from = Number(e.target.value); }, onchange: redraw })),
+      h('label', { class: 'field' }, h('span', null, '何位まで'), h('input', { type: 'number', min: 1, max: 16, value: b.to, oninput: (e) => { b.to = Number(e.target.value); }, onchange: redraw })),
+      h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => { b.mode = e.target.value; redraw(); } },
+        Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: (b.mode || plan.mode) === v }, l)))),
+      h('div', { style: { gridColumn: '1 / -1' } }, h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { plan.brackets.splice(i, 1); redraw(); } }, 'このトーナメントを削除')))),
+    h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+      const last = (plan.brackets || []).at(-1);
+      const from = last ? Number(last.to) + 1 : 1;
+      plan.brackets = [...(plan.brackets || []), { name: `トーナメント${(plan.brackets || []).length + 1}`, from, to: from, mode: plan.mode }];
+      redraw();
+    } }, '＋ トーナメントを追加')) : null;
+
+  return h('div', { style: { marginTop: '16px' } },
+    h('h3', { style: { marginBottom: '8px' } }, '決勝トーナメント'),
+    h('div', { class: 'grid-form' },
+      h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '進み方'), h('select', { onchange: (e) => {
+        const type = e.target.value;
+        if (type === 'custom' && !(plan.brackets || []).length) plan.brackets = expandPlanPreview(plan, maxRank).map((b) => ({ ...b, mode: plan.mode }));
+        set({ type });
+      } }, Object.entries(PLAN_LABEL).map(([v, l]) => h('option', { value: v, selected: plan.type === v }, l)))),
+      plan.type === 'top' || plan.type === 'split' ? h('label', { class: 'field' }, h('span', null, plan.type === 'top' ? '各組から進む数' : '上位に進む数（各組）'),
+        h('input', { type: 'number', min: 1, max: 16, value: plan.k, inputmode: 'numeric', oninput: (e) => { plan.k = Number(e.target.value); }, onchange: redraw })) : null,
+      plan.type !== 'custom' ? h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => set({ mode: e.target.value }) },
+        Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: plan.mode === v }, l)))) : null),
+    custom,
+    h('div', { class: 'notice', style: { marginTop: '12px' } },
+      h('div', { style: { fontWeight: 700, marginBottom: '4px' } }, cat.teams.length ? `いまの${cat.teams.length}チーム・${f.groups}組の場合` : `${f.groups}組の場合（チーム登録後に人数が正確になります）`),
+      preview.map((p) => h('div', null, p.text, p.warn ? h('span', { style: { color: 'var(--live)', fontWeight: 700 } }, `　${p.warn}`) : null))),
+    h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。'));
+}
+
 export async function admin(root, path, navigate) {
   let me;
   try { me = await api('GET', '/api/admin/me'); } catch (e) { return mount(root, h('p', { class: 'empty' }, e.message)); }
@@ -279,20 +351,19 @@ async function tournamentView(root, id, navigate) {
         h('h2', { style: { marginBottom: '8px' } }, '昼休憩'),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.lunchEnabled, onchange: (e) => { f.lunchEnabled = e.target.checked; draw(); } }), '昼休憩をとる'),
         f.lunchEnabled ? h('div', { class: 'grid-form' },
-          time('lunchStart', 'この時刻をまたぐ試合は休憩後'),
+          time('lunchStart', '昼休憩の開始めやす'),
           num('lunchMinutes', '昼休憩（分）', { max: 180 }),
-          num('minLunchMinutes', '短縮しても残す時間（分）', { max: 180 })) : null),
+          num('minLunchMinutes', '短縮時の最低（分）', { max: 180 })) : null,
+        f.lunchEnabled ? h('p', { class: 'muted small', style: { marginBottom: 0 } }, '開始めやすの時刻をまたぐ試合は、昼休憩の後に回します。当日の遅れで昼休憩を短くするときも、最低の時間は残します。') : null),
       h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '12px' } }, '形式'),
         h('div', { class: 'grid-form' },
-          h('label', { class: 'field' }, h('span', null, '形式'), h('select', { onchange: (e) => { f.format = e.target.value; draw(); } },
+          h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '形式'), h('select', { onchange: (e) => { f.format = e.target.value; draw(); } },
             Object.entries(FORMAT_LABEL).map(([v, l]) => h('option', { value: v, selected: f.format === v }, l)))),
           f.format !== 'knockout' ? num('groups', '組の数', { min: 1, max: 16 }) : null,
-          f.format === 'league_knockout' ? h('label', { class: 'field' }, h('span', null, '各組から進出'), h('select', { onchange: (e) => { f.advance = Number(e.target.value); } },
-            [[1, '1位のみ'], [2, '上位2チーム']].map(([v, l]) => h('option', { value: v, selected: f.advance === v }, l)))) : null,
-          f.format !== 'league' ? h('label', { class: 'field', style: { gridColumn: 'span 2' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => { f.rankMode = e.target.value; } },
+          f.format === 'knockout' ? h('label', { class: 'field', style: { gridColumn: 'span 2' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => { f.rankMode = e.target.value; } },
             Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: f.rankMode === v }, l)))) : null),
-        f.format === 'league_knockout' ? h('p', { class: 'muted small' }, '決勝トーナメントはクロス方式（A組1位 対 B組2位 など）で自動的に組まれます。組の数は 2・4・8 に対応しています。') : null,
+        f.format === 'league_knockout' ? knockoutPlanPanel(f, cat, draw) : null,
         f.format !== 'knockout' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.showStandings, onchange: (e) => { f.showStandings = e.target.checked; } }), '閲覧ページに順位表を表示する') : null,
         h('p', { class: 'muted small' }, '形式・組の数・コート数を変えた場合は「組み分け・日程」で日程を作り直してください。')),
       f.format !== 'knockout' ? h('section', { class: 'panel' },

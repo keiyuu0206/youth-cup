@@ -577,7 +577,7 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 // ---------- 管理者: テンプレート ----------
 
 const TEMPLATE_KEYS = ['halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
-  'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
+  'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'knockoutPlan', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
 
 route('GET', '/api/admin/templates', async ({ db }) => {
   const r = await db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all();

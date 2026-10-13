@@ -61,6 +61,12 @@ export function normalizeConfig(c) {
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }
+  if (!out.knockoutPlan || typeof out.knockoutPlan !== 'object') {
+    // 旧設定（advance / rankMode）から移行
+    out.knockoutPlan = { type: 'top', k: out.advance, mode: out.rankMode === 'all' ? 'all' : out.rankMode };
+  }
+  out.knockoutPlan = { type: 'top', k: 2, mode: 'top3', brackets: [], ...out.knockoutPlan };
+  out.knockoutPlan.k = Math.max(1, Math.min(16, Number(out.knockoutPlan.k) || 2));
   if (!Array.isArray(out.tiebreak) || !out.tiebreak.length) out.tiebreak = [...DEFAULT_TIEBREAK];
   out.tiebreak = out.tiebreak.filter((k) => k in TIEBREAK_KEYS);
   return out;
