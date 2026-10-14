@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeConfig, slotTimes, toHHMM } from './time.js';
+import { normalizeConfig, slotTimes, toHHMM, matchLengthFor } from './time.js';
 import { assignGroups, roundRobin } from './grouping.js';
 import { buildKnockout, crossEntrants } from './bracket.js';
 import { generateCategory, planDelay, scheduleWarnings } from './schedule.js';
@@ -262,4 +262,34 @@ test('複数日: 遅延調整は同じ日の試合だけを動かす', () => {
   const changed = new Set(plan.changes.map((c) => c.id));
   assert.ok(ms.filter((m) => m.stage === 'knockout').every((m) => !changed.has(m.id)));
   assert.ok(plan.changes.length > 0);
+});
+
+// ---- 予選と決勝で試合時間が違う ----
+test('試合時間: 予選はハーフなし15分、決勝は前後半20分で時刻を計算する', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, startTime: 540, intervalMinutes: 5, lunchEnabled: false, minRestSlots: 0,
+    periods: 1, halfMinutes: 15, koTiming: { enabled: true, periods: 2, halfMinutes: 20, halftimeMinutes: 5 } });
+  assert.equal(matchLengthFor(cfg, { stage: 'league' }), 15);
+  assert.equal(matchLengthFor(cfg, { stage: 'knockout' }), 45);
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches } = generateCategory(cfg, ts);
+  const league = matches.filter((m) => m.stage === 'league').sort((a, b) => a.start_min - b.start_min);
+  const ko = matches.filter((m) => m.stage === 'knockout').sort((a, b) => a.start_min - b.start_min);
+  // 予選は20分間隔（15分＋間隔5分）
+  const ls = [...new Set(league.map((m) => m.start_min))];
+  assert.equal(ls[1] - ls[0], 20);
+  // 準決勝から決勝までは50分間隔（45分＋間隔5分）
+  const ks = [...new Set(ko.map((m) => m.start_min))];
+  assert.equal(ks[1] - ks[0], 50);
+  assert.equal(scheduleWarnings(cfg, matches.map((m, i) => ({ ...m, id: `m${i}` }))).filter((w) => w.level === 'error').length, 0);
+});
+
+test('複数日: 区切りを選んでいなくても、リーグ戦と決勝トーナメントの間で自動的に分ける', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, dayDates: ['2026-10-18', '2026-10-19'] });
+  assert.equal(cfg.dayCount, 2);
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches, dayBreakSlots, warnings } = generateCategory(cfg, ts);
+  assert.equal(warnings.length, 0);
+  const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
+  assert.ok(matches.filter((m) => m.stage === 'league').every((m) => day(m) === 0));
+  assert.ok(matches.filter((m) => m.stage === 'knockout').every((m) => day(m) === 1));
 });

@@ -58,6 +58,8 @@ export function defaultConfig() {
     forfeitScore: [3, 0],
     showStandings: true,
     minRestSlots: 1, // 同じチームの試合の間に空ける枠数
+    koTiming: { enabled: false, periods: 2, halfMinutes: 15, halftimeMinutes: 5 }, // 決勝トーナメントだけ別の試合時間
+    dayDates: [], // このカテゴリが試合をする日（大会の開催期間から選ぶ）
     dayCount: 1, // 開催日数（最大4日）
     extraDays: [], // 2日目以降 [{date, startTime}]
     dayBreaks: [], // 各日の区切り（'L2' = リーグ第2節まで、'K0' = トーナメント1段目まで）
@@ -79,6 +81,15 @@ export function normalizeConfig(c) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }
   out.periods = [1, 2, 3].includes(Number(out.periods)) ? Number(out.periods) : 2;
+  const kt = out.koTiming && typeof out.koTiming === 'object' ? out.koTiming : {};
+  out.koTiming = {
+    enabled: !!kt.enabled,
+    periods: [1, 2, 3].includes(Number(kt.periods)) ? Number(kt.periods) : 2,
+    halfMinutes: Math.max(1, Number(kt.halfMinutes) || 15),
+    halftimeMinutes: Math.max(0, Number(kt.halftimeMinutes ?? 5) || 0),
+  };
+  out.dayDates = [...new Set((Array.isArray(out.dayDates) ? out.dayDates : []).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)))].sort().slice(0, MAX_DAYS);
+  if (out.dayDates.length) out.dayCount = out.dayDates.length;
   out.dayCount = Math.max(1, Math.min(MAX_DAYS, Number(out.dayCount) || 1));
   const ed = Array.isArray(out.extraDays) ? out.extraDays : [];
   out.extraDays = Array.from({ length: out.dayCount - 1 }, (_, i) => ({
@@ -109,23 +120,31 @@ export function courtName(c, i) {
 }
 
 // 枠番号ごとの開始時刻。lunchStart をまたぐ試合は昼休憩の後に回す。
-export function slotTimes(c, n) {
-  const len = matchLength(c);
-  const step = len + c.intervalMinutes;
+// 枠ごとの開始時刻。lenOf(i) で枠ごとに試合の長さを変えられる（予選と決勝で時間が違う場合）
+export function slotTimes(c, n, lenOf = () => matchLength(c)) {
   const out = [];
   let t = c.startTime;
   let lunchDone = !c.lunchEnabled || c.lunchMinutes <= 0;
   let session = 'am';
   for (let i = 0; i < n; i++) {
+    const len = lenOf(i);
     if (!lunchDone && t + len > c.lunchStart) {
       lunchDone = true;
       if (i > 0) {
-        t = out[i - 1].start + len + c.lunchMinutes;
+        t = out[i - 1].start + lenOf(i - 1) + c.lunchMinutes;
         session = 'pm';
       }
     }
     out.push({ start: t, session });
-    t += step;
+    t += len + c.intervalMinutes;
   }
   return out;
+}
+
+// 試合ごとの長さ（決勝トーナメントだけ別の時間にしている場合に対応）
+export function matchLengthFor(c, m) {
+  if (m && m.stage === 'knockout' && c.koTiming && c.koTiming.enabled && c.format === 'league_knockout') {
+    return matchLength({ ...c, ...c.koTiming });
+  }
+  return matchLength(c);
 }

@@ -4,6 +4,10 @@ export const matchLength = (cfg) => {
   const n = cfg.periods || 2;
   return cfg.halfMinutes * n + (n > 1 ? cfg.halftimeMinutes * (n - 1) : 0);
 };
+export function matchLengthFor(cfg, m) {
+  if (m && m.stage === 'knockout' && cfg.koTiming && cfg.koTiming.enabled && cfg.format === 'league_knockout') return matchLength({ ...cfg, ...cfg.koTiming });
+  return matchLength(cfg);
+}
 export const courtName = (cfg, i) => (cfg.courtNames && cfg.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;
 
 // 複数日開催
@@ -11,6 +15,8 @@ export const dayOf = (cfg, slot) => (cfg.dayBreakSlots || []).filter((b) => slot
 export const dayTotal = (cfg) => (cfg.dayBreakSlots || []).length + 1;
 export const absMin = (cfg, m) => dayOf(cfg, m.slot) * 1440 + m.start_min;
 export function dayDate(cat, d, tournament) {
+  const picked = cat.config.dayDates || [];
+  if (picked[d]) return picked[d];
   if (!d) return tournament.date || null;
   const x = (cat.config.extraDays || [])[d - 1];
   return (x && x.date) || null;
@@ -64,7 +70,7 @@ export function statusOf(m, cat, tournament) {
   if (m.status === 'confirmed') return { key: 'confirmed', label: '終了', cls: 'done' };
   if (m.status === 'provisional') return { key: 'provisional', label: '結果待ち', cls: 'wait' };
   const today = todayStr();
-  const end = m.start_min + matchLength(cat.config);
+  const end = m.start_min + matchLengthFor(cat.config, m);
   const date = dayDate(cat, dayOf(cat.config, m.slot), tournament);
   if (date && date < today) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
   if (date === today && tournament.status === 'live') {
@@ -187,14 +193,14 @@ export function standingsView(cat, ctx) {
         h('thead', null, h('tr', null,
           h('th', { scope: 'col' }, h('span', { class: 'sr-only' }, '順位')),
           h('th', { scope: 'col', style: { textAlign: 'left' } }, 'チーム'),
-          ['試', '勝', '分', '敗', '得', '失', '差', '点'].map((x) => h('th', { scope: 'col' }, x)))),
+          ['試', '勝', '分', '敗', '得', '失', '差', '点'].map((x) => h('th', { scope: 'col', class: x === '得' || x === '失' ? 'opt' : null }, x)))),
         h('tbody', null, st.rows.map((r) => h('tr', { class: `${r.teamId === ctx.myTeam ? 'mine' : ''} ${r.rank <= advance ? 'advance' : ''}` },
           h('td', { class: 'rank' }, h('span', { class: 'rank-no' }, r.rank)),
           h('td', { class: 'team' }, h('div', { class: 'st-team' }, crest(tm[r.teamId], 22), h('span', null, tm[r.teamId] ? (tm[r.teamId].short_name || tm[r.teamId].name) : '-'),
             r.tied && st.complete ? h('span', { class: 'tie-mark' }, '抽選待ち') : null,
             r.lottery ? h('span', { class: 'tie-mark' }, '抽選') : null)),
           h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
-          h('td', null, r.gf), h('td', null, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
+          h('td', { class: 'opt' }, r.gf), h('td', { class: 'opt' }, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
           h('td', { class: 'pts' }, r.pts)))))),
       note ? h('div', { class: 'st-note' }, h('span', null, advance ? h('i') : null, note)) : null);
   }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, `勝点が並んだときは ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`));

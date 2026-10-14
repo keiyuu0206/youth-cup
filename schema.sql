@@ -3,7 +3,8 @@ CREATE TABLE tournaments (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,          -- 閲覧・関係者URLに使う推測されにくいID
   name TEXT NOT NULL,
-  date TEXT,                          -- YYYY-MM-DD
+  date TEXT,                          -- 開始日 YYYY-MM-DD
+  end_date TEXT,                      -- 終了日（1日開催なら空）
   venue TEXT,
   logo TEXT,                          -- data URL（小さな画像のみ）
   show_logo INTEGER NOT NULL DEFAULT 1,

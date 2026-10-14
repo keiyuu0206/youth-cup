@@ -114,25 +114,33 @@ export async function relative(root, slug) {
         h('button', { type: 'button', 'aria-label': '1点減らす', disabled: locked || !ready, onclick: () => change(side, -1) }, '−'),
         h('output', null, d[side]),
         h('button', { class: 'plus', type: 'button', 'aria-label': '1点増やす', disabled: locked || !ready, onclick: () => change(side, 1) }, '＋'));
-      const statusLine = h('div', { class: 'status-line' },
-        h('span', { class: `tag ${locked ? 'done' : m.status === 'provisional' ? 'wait' : st.cls}` }, locked ? '確定' : m.status === 'provisional' ? '仮登録' : st.key === 'upcoming' ? '未登録' : st.label),
-        m.status === 'provisional' && m.updated_by ? h('span', { class: 'muted' }, `最終更新：${m.updated_by} ${formatUpdated(m.updated_at)}`) : null,
-        m.time_changed ? h('span', { class: 'tag changed' }, '時間変更') : null);
+      const status = locked ? h('span', { class: 'tag done' }, '確定')
+        : m.status === 'provisional' ? h('span', { class: 'tag wait' }, '仮登録')
+          : st.key === 'playing' ? h('span', { class: 'tag live' }, '試合中')
+            : h('span', { class: 'tag' }, '未登録');
+      // チームを上下2段に並べ、各段の右端で得点を増減する（名前の長さで位置がずれない）
+      const teamRow = (side, info) => h('div', { class: 'sc-row' },
+        crest(info.team, 32),
+        h('span', { class: 'sc-name' }, info.text),
+        locked ? h('span', { class: 'sc-final' }, d[side]) : step(side));
+      const pkRow = (side, info) => h('div', { class: 'sc-row pk' },
+        h('span', { class: 'sc-name' }, info.text),
+        step(side === 'home' ? 'hpk' : 'apk', true));
 
       mount(card,
-        h('div', { class: 'row' },
-          h('span', { class: 'num', style: { fontSize: '1.4rem' } }, toHHMM(m.start_min)),
-          dayTotal(cat.config) > 1 ? h('span', { class: 'tag' }, dayLabel(cat, dayOf(cat.config, m.slot), data.tournament, true)) : null,
-          h('span', { class: 'tag' }, courtName(cat.config, m.court)),
-          h('span', { class: 'muted small' }, m.label),
-          isNext && !locked ? h('span', { class: 'tag live' }, '次の試合') : null),
-        statusLine,
-        h('div', { class: 'sc-teams' },
-          h('div', { class: 'side' }, h('div', { class: 'nm' }, crest(home.team, 36), home.text), step('home')),
-          h('div', { class: 'side' }, h('div', { class: 'nm' }, crest(away.team, 36), away.text), step('away'))),
-        isKo && tie && ready && !locked ? h('div', null,
-          h('p', { class: 'small muted', style: { textAlign: 'center', margin: '12px 0 0' } }, '同点のときはPK戦の結果'),
-          h('div', { class: 'sc-teams' }, h('div', { class: 'side' }, step('hpk', true)), h('div', { class: 'side' }, step('apk', true)))) : null,
+        h('div', { class: 'sc-head' },
+          h('span', { class: 'sc-time' }, toHHMM(m.start_min)),
+          h('div', { class: 'sc-info' },
+            h('div', { class: 'sc-tags' },
+              isNext && !locked ? h('span', { class: 'tag live' }, '次の試合') : null,
+              status,
+              m.time_changed ? h('span', { class: 'tag changed' }, '時間変更') : null),
+            h('div', { class: 'sc-where' }, [dayTotal(cat.config) > 1 ? dayLabel(cat, dayOf(cat.config, m.slot), data.tournament, true) : null, courtName(cat.config, m.court), m.label].filter(Boolean).join('　')))),
+        m.status === 'provisional' && m.updated_by ? h('p', { class: 'sc-updated' }, `最終更新：${m.updated_by}（${formatUpdated(m.updated_at)}）`) : null,
+        h('div', { class: 'sc-rows' }, teamRow('home', home), teamRow('away', away)),
+        isKo && tie && ready && !locked ? h('div', { class: 'sc-pk' },
+          h('p', null, '同点のときはPK戦の結果'),
+          pkRow('home', home), pkRow('away', away)) : null,
         stale ? h('p', { class: 'notice', style: { marginTop: '10px' } }, '入力中に相手チームか本部が結果を更新しました。',
           h('button', { class: 'btn btn-sm', type: 'button', style: { marginLeft: '8px' }, onclick: () => { Object.assign(d, fromMatch(m)); draw(); } }, '最新の内容に戻す')) : null,
         !ready ? h('p', { class: 'muted small', style: { marginTop: '10px' } }, '対戦相手が決まると入力できます') : null,

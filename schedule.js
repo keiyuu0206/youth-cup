@@ -1,6 +1,6 @@
 import { roundRobin } from './grouping.js';
 import { buildKnockout } from './bracket.js';
-import { slotTimes, matchLength, dayOf, dayConfig } from './time.js';
+import { slotTimes, matchLength, matchLengthFor, dayOf, dayConfig } from './time.js';
 
 /**
  * 1カテゴリ分の試合を生成する
@@ -69,6 +69,19 @@ export function generateCategory(cfg, teams, koOrder) {
   const breaks = cfg.dayCount > 1
     ? [...new Set((cfg.dayBreaks || []).map(unitKey))].filter((u) => Number.isFinite(u) && u >= 0 && u < lastUnit).sort((a, b) => a - b)
     : [];
+  // 区切りが足りなければ自動で補う（リーグ＋トーナメントならまずリーグ戦の後で区切る）
+  if (cfg.dayCount > 1 && breaks.length < cfg.dayCount - 1 && lastUnit > 0) {
+    const cands = [];
+    if (R > 0 && ko.length) cands.push(R - 1);
+    const total = lastUnit + 1;
+    for (let i = 1; i < cfg.dayCount; i++) cands.push(Math.max(0, Math.round((i * total) / cfg.dayCount) - 1));
+    for (let u = 0; u < lastUnit; u++) cands.push(u);
+    for (const u of cands) {
+      if (breaks.length >= cfg.dayCount - 1) break;
+      if (u < lastUnit && !breaks.includes(u)) breaks.push(u);
+    }
+    breaks.sort((a, b) => a - b);
+  }
   if (cfg.dayCount > 1 && breaks.length < cfg.dayCount - 1) {
     extraWarnings.push({ level: 'warn', ids: [], text: `区切りが重なっているか試合が足りないため、${breaks.length + 1}日間の日程になりました。設定の「開催日」を確認してください` });
   }
@@ -166,11 +179,19 @@ export function placeMatches(cfg, league, ko) {
   for (const m of allM) m.slot = remap[m.slot];
 }
 
+// 枠の中に決勝トーナメントの試合があれば、その長さを使う
+function lenOfSlots(cfg, matches, base = 0) {
+  const ko = new Set(matches.filter((m) => m.stage === 'knockout').map((m) => m.slot - base));
+  const koLen = matchLengthFor(cfg, { stage: 'knockout' });
+  const len = matchLength(cfg);
+  return (i) => (ko.has(i) ? koLen : len);
+}
+
 // 昼休憩が休憩を兼ねるので、昼休憩の直前・直後にできた空き枠は詰める
 export function dropRestAroundLunch(cfg, matches) {
   for (let guard = 0; guard < 4; guard++) {
     const n = matches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
-    const times = slotTimes(cfg, n);
+    const times = slotTimes(cfg, n, lenOfSlots(cfg, matches));
     const used = new Set(matches.map((m) => m.slot));
     const firstPm = times.findIndex((t) => t.session === 'pm');
     if (firstPm <= 0) return;
@@ -188,7 +209,7 @@ export function applyTimes(cfg, matches) {
   for (const [d, list] of Object.entries(byDay)) {
     const start = bounds[d] || 0;
     const n = list.reduce((mx, m) => Math.max(mx, m.slot - start), -1) + 1;
-    const times = slotTimes(dayConfig(cfg, Number(d)), n);
+    const times = slotTimes(dayConfig(cfg, Number(d)), n, lenOfSlots(cfg, list, start));
     for (const m of list) {
       const t = times[m.slot - start];
       m.start_min = t.start;
@@ -212,10 +233,11 @@ export function scheduleWarnings(cfg, matches, teamName = (id) => id) {
     list.sort((a, b) => absMin(cfg, a) - absMin(cfg, b));
     for (let i = 1; i < list.length; i++) {
       if (dayOf(cfg, list[i].slot) !== dayOf(cfg, list[i - 1].slot)) continue; // 日が違えば連戦ではない
-      const gap = list[i].start_min - (list[i - 1].start_min + len);
+      const plen = matchLengthFor(cfg, list[i - 1]);
+      const gap = list[i].start_min - (list[i - 1].start_min + plen);
       const ids = [list[i - 1].id, list[i].id];
       if (gap < 0) out.push({ level: 'error', ids, text: `${teamName(id)} の試合が時間的に重なっています（${list[i - 1].label} と ${list[i].label}）` });
-      else if (cfg.minRestSlots > 0 && gap < len) out.push({ level: 'warn', ids, text: `${teamName(id)} が休憩なしで連戦になります（${list[i - 1].label} → ${list[i].label}）` });
+      else if (cfg.minRestSlots > 0 && gap < Math.min(len, plen)) out.push({ level: 'warn', ids, text: `${teamName(id)} が休憩なしで連戦になります（${list[i - 1].label} → ${list[i].label}）` });
     }
   }
   return out;
@@ -240,7 +262,7 @@ export function planDelay(cfg, matches, target, minutes, lunchMode, teamName = (
   let result = null;
 
   if (minutes > 0 && cfg.lunchEnabled && am.length && pm.length) {
-    const lastAmEnd = Math.max(...am.map((m) => m.start_min)) + len;
+    const lastAmEnd = Math.max(...am.map((m) => m.start_min + matchLengthFor(cfg, m)));
     const firstPm = Math.min(...pm.map((m) => m.start_min));
     const gapNow = firstPm - lastAmEnd;
     const minLunch = Math.min(cfg.minLunchMinutes || 0, gapNow);
