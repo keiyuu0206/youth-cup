@@ -355,3 +355,33 @@ test('順位別トーナメント: 全試合の結果が出ると最終順位が
   assert.equal(new Set(ev.finalRanking.map((r) => r.teamId)).size, 12);
   assert.equal(ev.finalRanking[0].teamId, 't1');
 });
+
+// ---- 品質チェックで見つかった点 ----
+test('抽選: 判定順に「抽選」が無くても、並んだら抽選待ちになり、抽選結果で決まる', () => {
+  const m = (h, a, hs, as) => ({ home_team_id: h, away_team_id: a, home_score: hs, away_score: as, status: 'confirmed', stage: 'league' });
+  const ms = [m('A', 'B', 1, 1)];
+  const s1 = computeStandings(['A', 'B'], ms, ['points', 'gd', 'gf']);
+  assert.equal(s1.needsLottery, true);
+  const s2 = computeStandings(['A', 'B'], ms, ['points', 'gd', 'gf'], ['B', 'A']);
+  assert.equal(s2.rows[0].teamId, 'B');
+  assert.equal(s2.hasTie, false);
+});
+
+test('抽選: 3位どうしが並んでいても、1位・2位の進出先は先に決まる', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, knockoutPlan: { type: 'top', k: 2, mode: 'top3' } });
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches } = generateCategory(cfg, ts);
+  const ms = matches.map((x, i) => ({ ...x, id: `m${i}`, status: 'none' }));
+  // A組: t1 が全勝、t3 が2位、t5 と t7 は全試合引き分け同士で3位タイ
+  const res = { 't1-t3': [2, 0], 't1-t5': [2, 0], 't1-t7': [2, 0], 't3-t5': [1, 0], 't3-t7': [1, 0], 't5-t7': [0, 0] };
+  for (const x of ms.filter((y) => y.stage === 'league')) {
+    const k1 = `${x.home_team_id}-${x.away_team_id}`; const k2 = `${x.away_team_id}-${x.home_team_id}`;
+    const lowerWins = Number(x.home_team_id.slice(1)) < Number(x.away_team_id.slice(1)) ? [2, 0] : [0, 2];
+    const sc = res[k1] || (res[k2] && [res[k2][1], res[k2][0]]) || lowerWins;
+    Object.assign(x, { status: 'confirmed', home_score: sc[0], away_score: sc[1] });
+  }
+  const ev = evaluateCategory(cfg, ts, ms);
+  assert.equal(ev.standings.A.needsLottery, true); // 3位タイ
+  const filled = ev.updates.filter((u) => u.home_team_id && u.away_team_id);
+  assert.equal(filled.length, 2); // 準決勝2試合はA組1・2位を含めて決まる
+});

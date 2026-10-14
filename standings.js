@@ -31,17 +31,19 @@ export function computeStandings(teamIds, allMatches, criteria, lottery = []) {
   const full = table(teamIds, confirmed);
   const byLottery = new Set();
 
+  // 抽選結果があれば並び順を決める（判定順に「抽選」が無くても、最後の手段として使う）
+  const byDraw = (ids) => {
+    if (lottery.length && ids.every((id) => lottery.includes(id))) {
+      ids.forEach((id) => byLottery.add(id));
+      return [...ids].sort((a, b) => lottery.indexOf(a) - lottery.indexOf(b)).map((id) => [id]);
+    }
+    return [ids];
+  };
   const rank = (ids, ci) => {
     if (ids.length <= 1) return [ids];
-    if (ci >= criteria.length) return [ids];
+    if (ci >= criteria.length) return byDraw(ids);
     const c = criteria[ci];
-    if (c === 'lottery') {
-      if (lottery.length && ids.every((id) => lottery.includes(id))) {
-        ids.forEach((id) => byLottery.add(id));
-        return [...ids].sort((a, b) => lottery.indexOf(a) - lottery.indexOf(b)).map((id) => [id]);
-      }
-      return [ids];
-    }
+    if (c === 'lottery') return byDraw(ids);
     let key;
     if (c === 'h2h') {
       const sub = table(ids, confirmed.filter((m) => ids.includes(m.home_team_id) && ids.includes(m.away_team_id)));
@@ -77,7 +79,8 @@ export function computeStandings(teamIds, allMatches, criteria, lottery = []) {
     pos += bk.length;
   }
   const complete = allMatches.length > 0 && allMatches.every((m) => m.status === 'confirmed');
-  return { rows, complete, hasTie, needsLottery: complete && hasTie && criteria.includes('lottery') };
+  // 全試合が終わって順位が並んだままなら抽選（判定順に「抽選」が無い場合も含む）
+  return { rows, complete, hasTie, needsLottery: complete && hasTie };
 }
 
 export function matchOutcome(m) {
@@ -117,9 +120,12 @@ export function evaluateCategory(cfg, teams, matches) {
     if (!ref) return null;
     if (ref.t === 'team') return ref.id;
     if (ref.t === 'grp') {
+      // その順位が並んでいなければ確定（ほかの順位の抽選待ちに巻き込まない）
       const st = standings[ref.g];
-      if (!st || !st.complete || st.hasTie) return null;
-      return st.rows[ref.r - 1]?.teamId ?? null;
+      if (!st || !st.complete) return null;
+      const row = st.rows[ref.r - 1];
+      if (!row || row.tied) return null;
+      return row.teamId;
     }
     const src = byCode[ref.m];
     if (!src) return null;

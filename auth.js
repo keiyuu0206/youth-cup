@@ -71,6 +71,8 @@ export async function isRelative(req, env, t) {
 // 10分間に max 回まで
 export async function rateLimit(db, key, max = 5, windowSec = 600) {
   const now = Math.floor(Date.now() / 1000);
+  // 期限切れの記録が溜まり続けないよう、ときどき掃除する
+  if (Math.random() < 0.02) await db.prepare('DELETE FROM rate_limits WHERE reset_at < ?').bind(now).run();
   const row = await db.prepare('SELECT count, reset_at FROM rate_limits WHERE key = ?').bind(key).first();
   if (!row || row.reset_at < now) {
     await db.prepare('INSERT OR REPLACE INTO rate_limits (key, count, reset_at) VALUES (?, 1, ?)').bind(key, now + windowSec).run();

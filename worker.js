@@ -25,7 +25,7 @@ class HttpError extends Error {
 const fail = (status, message, extra) => { throw new HttpError(status, message, extra); };
 
 const json = (data, status = 200, headers = {}) =>
-  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers } });
+  new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers } });
 
 const now = () => new Date().toISOString();
 const uid = () => crypto.randomUUID();
@@ -47,6 +47,9 @@ function checkLogo(v) {
   if (v.length > MAX_LOGO) fail(400, 'ロゴの画像が大きすぎます（300KBまで）');
   return v;
 }
+
+// 名前などの長さを制限する（表示崩れや極端に大きなデータを防ぐ）
+const clip = (v, max = 100) => String(v ?? '').trim().slice(0, max);
 
 const intOrNull = (v) => (v === '' || v == null ? null : Math.max(0, Math.min(99, Math.trunc(Number(v)))));
 
@@ -123,6 +126,13 @@ async function getTournamentBySlug(db, slug) {
   return t;
 }
 
+// 20秒ごとの更新確認用。ロゴなどの大きな列を読まない
+async function getTournamentHead(db, slug) {
+  const t = await db.prepare('SELECT id, slug, status, rev, pin_version FROM tournaments WHERE slug = ?').bind(slug).first();
+  if (!t) fail(404, '大会が見つかりません');
+  return t;
+}
+
 async function getCategory(db, id) {
   const c = await db.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first();
   if (!c) fail(404, 'カテゴリが見つかりません');
@@ -178,6 +188,7 @@ function checkBanner(v) {
 }
 function checkUrl(v) {
   const u = String(v || '').trim();
+  if (u.length > 500) fail(400, 'リンク先のURLが長すぎます');
   if (!/^https?:\/\/[^\s]+$/i.test(u)) fail(400, 'リンク先は https:// から始まるURLを入力してください');
   return u;
 }
@@ -208,22 +219,36 @@ async function sponsorRedirect(req, db, id) {
   return new Response(null, { status: 302, headers: { Location: sp.url, 'Cache-Control': 'no-store', 'Referrer-Policy': 'origin' } });
 }
 
-// /img/s/:id … バナー画像（ページのデータとは別に配信し、長くキャッシュする）
-async function sponsorImage(db, id) {
-  const sp = await db.prepare('SELECT image FROM sponsors WHERE id = ?').bind(id).first();
-  if (!sp) return new Response('見つかりません', { status: 404 });
+// /img/s/:id … バナー画像、/img/t/:id … 大会ロゴ、/img/team/:id … チームロゴ（ページのデータとは別に配信し、長くキャッシュする）
+async function sponsorImage(db, id, kind = 's') {
+  const q = kind === 's' ? 'SELECT image FROM sponsors WHERE id = ?'
+    : kind === 't' ? 'SELECT logo AS image FROM tournaments WHERE id = ? AND show_logo = 1 AND status != \'draft\''
+      : 'SELECT t.logo AS image FROM teams t JOIN categories c ON c.id = t.category_id JOIN tournaments x ON x.id = c.tournament_id WHERE t.id = ? AND x.show_logo = 1 AND x.status != \'draft\'';
+  const sp = await db.prepare(q).bind(id).first();
+  if (!sp || !sp.image) return new Response('見つかりません', { status: 404 });
   const m = sp.image.match(/^data:([^;]+);base64,(.*)$/);
   if (!m) return new Response('画像が正しくありません', { status: 500 });
   const bin = atob(m[2]);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Response(bytes, { headers: { 'Content-Type': m[1], 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } });
+  // SVG は画像としてのみ表示させ、直接開いてもスクリプトが動かないようにする
+  return new Response(bytes, { headers: { 'Content-Type': m[1], 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } });
 }
 
 // ---------- 公開用の整形 ----------
 
+// 画像の内容が変わったら URL も変わるよう、短い目印を付ける（全体を計算すると重いので長さと末尾から作る）
+function imgVersion(dataUrl) {
+  let x = dataUrl.length;
+  const tail = dataUrl.slice(-64);
+  for (let i = 0; i < tail.length; i++) x = (x * 31 + tail.charCodeAt(i)) >>> 0;
+  return x.toString(36);
+}
+const logoUrl = (kind, id, dataUrl) => (dataUrl ? `/img/${kind}/${id}?v=${imgVersion(dataUrl)}` : null);
+
 function publicTournament(t, withPin = false) {
-  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, end_date: t.end_date || null, venue: t.venue, logo: t.show_logo ? t.logo : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
+  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, end_date: t.end_date || null, venue: t.venue, logo: t.show_logo ? logoUrl('t', t.id, t.logo) : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
   if (withPin) Object.assign(o, { logo: t.logo, pin: t.pin });
   return o;
 }
@@ -255,7 +280,7 @@ async function publicPayload(db, t, level) {
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
-      teams: c.teams.map(({ id, name, short_name, logo, group_label }) => ({ id, name, short_name, logo: t.show_logo ? logo : null, group_label })),
+      teams: c.teams.map(({ id, name, short_name, logo, group_label }) => ({ id, name, short_name, logo: t.show_logo ? logoUrl('team', id, logo) : null, group_label })),
       matches: c.matches.map((m) => maskMatch(m, level)),
     })),
   };
@@ -276,7 +301,15 @@ const STATIC = {
   '/web-admin.js': [WEB_ADMIN, JS],
   '/web-print.js': [WEB_PRINT, JS],
 };
-const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY' };
+// 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+  "connect-src 'self'", "font-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': CSP, 'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+};
 
 // 画面のファイルは毎回サーバーに確認させる（ETag が同じなら 304 で本体は送らない）。
 // 更新直後に新旧のファイルが混ざって画面が壊れるのを防ぐため。
@@ -313,11 +346,11 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const go = url.pathname.match(/^\/go\/([\w-]+)$/);
-    const img = url.pathname.match(/^\/img\/s\/([\w-]+)$/);
+    const img = url.pathname.match(/^\/img\/(s|t|team)\/([\w-]+)$/);
     if (go || img) {
       try {
         await ensureSchema(env.DB);
-        return go ? await sponsorRedirect(req, env.DB, go[1]) : await sponsorImage(env.DB, img[1]);
+        return go ? await sponsorRedirect(req, env.DB, go[1]) : await sponsorImage(env.DB, img[2], img[1]);
       } catch (e) {
         console.error(e);
         return new Response('エラーが発生しました', { status: 500 });
@@ -388,6 +421,7 @@ route('GET', '/api/admin/tournaments', async ({ db }) => {
 route('POST', '/api/admin/tournaments', async ({ req, db }) => {
   const b = await body(req);
   if (!b.name || !String(b.name).trim()) fail(400, '大会名を入力してください');
+  b.name = clip(b.name, 80); b.venue = b.venue ? clip(b.venue, 80) : b.venue;
   const id = uid();
   const end = checkRange(b.date || null, b.end_date || null);
   await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, pin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -414,9 +448,9 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
   const t = await getTournament(db, params.id);
   const b = await body(req);
   const next = {
-    name: b.name !== undefined ? String(b.name).trim() || t.name : t.name,
+    name: b.name !== undefined ? clip(b.name, 80) || t.name : t.name,
     date: b.date !== undefined ? b.date || null : t.date,
-    venue: b.venue !== undefined ? b.venue || null : t.venue,
+    venue: b.venue !== undefined ? clip(b.venue, 80) || null : t.venue,
     logo: b.logo !== undefined ? checkLogo(b.logo) : t.logo,
     show_logo: b.show_logo !== undefined ? (b.show_logo ? 1 : 0) : t.show_logo,
     status: b.status !== undefined ? b.status : t.status,
@@ -496,7 +530,13 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   const t = await getTournament(db, c.tournament_id);
   const b = await body(req);
   const cfg = normalizeConfig({ ...c.config, ...(b.config || {}) });
-  await db.prepare('UPDATE categories SET name = ?, config = ? WHERE id = ?').bind(b.name ? String(b.name) : c.name, JSON.stringify(cfg), c.id).run();
+  if (cfg.courts < c.config.courts) {
+    const used = await db.prepare('SELECT MAX(court) AS mx FROM matches WHERE category_id = ?').bind(c.id).first();
+    if (used && used.mx != null && used.mx >= cfg.courts) {
+      fail(409, `日程で${used.mx + 1}面目のコートを使っているため、コート数を${cfg.courts}面に減らせません。「組み分け・日程」で日程を作り直すか、試合を移動してから変更してください`);
+    }
+  }
+  await db.prepare('UPDATE categories SET name = ?, config = ? WHERE id = ?').bind(b.name ? clip(b.name, 20) : c.name, JSON.stringify(cfg), c.id).run();
   // 準備中なら、開始時刻などの変更を全コートの全試合へ一括反映
   const timingChanged = TIMING_KEYS.some((k) => JSON.stringify(cfg[k]) !== JSON.stringify(c.config[k]));
   if (timingChanged && editable(t)) {
@@ -529,8 +569,10 @@ route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params }) =>
   const count = await db.prepare('SELECT COUNT(*) AS n FROM teams WHERE category_id = ?').bind(c.id).first();
   const stmts = [];
   list.forEach((x, i) => {
-    const name = String(x.name || '').trim();
+    const name = clip(x.name, 60);
     if (!name) return;
+    x.short_name = x.short_name ? clip(x.short_name, 20) : null;
+    x.club = x.club ? clip(x.club, 60) : null;
     stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(uid(), c.id, name, x.short_name || null, x.club || null, checkLogo(x.logo), count.n + i));
   });
@@ -545,9 +587,9 @@ route('PATCH', '/api/admin/teams/:id', async ({ req, db, params }) => {
   if (!team) fail(404, 'チームが見つかりません');
   const b = await body(req);
   await db.prepare('UPDATE teams SET name = ?, short_name = ?, club = ?, logo = ? WHERE id = ?').bind(
-    b.name !== undefined ? String(b.name).trim() || team.name : team.name,
-    b.short_name !== undefined ? b.short_name || null : team.short_name,
-    b.club !== undefined ? b.club || null : team.club,
+    b.name !== undefined ? clip(b.name, 60) || team.name : team.name,
+    b.short_name !== undefined ? clip(b.short_name, 20) || null : team.short_name,
+    b.club !== undefined ? clip(b.club, 60) || null : team.club,
     b.logo !== undefined ? checkLogo(b.logo) : team.logo,
     team.id,
   ).run();
@@ -753,7 +795,7 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 route('POST', '/api/admin/tournaments/:id/sponsors', async ({ req, db, params }) => {
   const t = await getTournament(db, params.id);
   const b = await body(req);
-  const name = String(b.name || '').trim();
+  const name = clip(b.name, 60);
   if (!name) fail(400, 'スポンサー名を入力してください');
   const count = await db.prepare('SELECT COUNT(*) AS n FROM sponsors WHERE tournament_id = ?').bind(t.id).first();
   if (count.n >= 30) fail(400, 'スポンサーは30件まで登録できます');
@@ -768,7 +810,7 @@ route('PATCH', '/api/admin/sponsors/:sid', async ({ req, db, params }) => {
   if (!sp) fail(404, 'スポンサーが見つかりません');
   const b = await body(req);
   await db.prepare('UPDATE sponsors SET name = ?, url = ?, image = ?, active = ?, updated_at = ? WHERE id = ?').bind(
-    b.name !== undefined ? String(b.name).trim() || sp.name : sp.name,
+    b.name !== undefined ? clip(b.name, 60) || sp.name : sp.name,
     b.url !== undefined ? checkUrl(b.url) : sp.url,
     b.image ? checkBanner(b.image) : sp.image,
     b.active !== undefined ? (b.active ? 1 : 0) : sp.active,
@@ -829,9 +871,10 @@ route('DELETE', '/api/admin/templates/:id', async ({ db, params }) => {
 // ---------- 閲覧者 ----------
 
 route('GET', '/api/public/:slug', async ({ db, params, url }) => {
+  const head = await getTournamentHead(db, params.slug);
+  if (head.status === 'draft') fail(404, 'この大会はまだ公開されていません');
+  if (url.searchParams.get('rev') === String(head.rev)) return json({ unchanged: true, rev: head.rev });
   const t = await getTournamentBySlug(db, params.slug);
-  if (t.status === 'draft') fail(404, 'この大会はまだ公開されていません');
-  if (url.searchParams.get('rev') === String(t.rev)) return json({ unchanged: true, rev: t.rev });
   return json(await publicPayload(db, t, 'public'));
 });
 
@@ -851,9 +894,10 @@ route('POST', '/api/rel/:slug/login', async ({ req, env, db, params }) => {
 });
 
 route('GET', '/api/rel/:slug', async ({ req, env, db, params, url }) => {
+  const head = await getTournamentHead(db, params.slug);
+  if (!(await isRelative(req, env, head))) fail(401, 'PINを入力してください');
+  if (url.searchParams.get('rev') === String(head.rev)) return json({ unchanged: true, rev: head.rev });
   const t = await getTournamentBySlug(db, params.slug);
-  if (!(await isRelative(req, env, t))) fail(401, 'PINを入力してください');
-  if (url.searchParams.get('rev') === String(t.rev)) return json({ unchanged: true, rev: t.rev });
   return json(await publicPayload(db, t, 'relative'));
 });
 

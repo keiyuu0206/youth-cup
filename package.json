@@ -10,7 +10,8 @@
     "test": "node --test lib.test.js",
     "test:e2e": "node e2e.mjs",
     "db:init:local": "wrangler d1 execute youth-cup-db --local --file=schema.sql",
-    "db:init:remote": "wrangler d1 execute youth-cup-db --remote --file=schema.sql"
+    "db:init:remote": "wrangler d1 execute youth-cup-db --remote --file=schema.sql",
+    "test:fuzz": "node --test fuzz.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.40.0"
