@@ -10,6 +10,7 @@ import WEB_VIEWS from './web-views.js';
 import WEB_VIEWER from './web-viewer.js';
 import WEB_RELATIVE from './web-relative.js';
 import WEB_ADMIN from './web-admin.js';
+import WEB_PRINT from './web-print.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
@@ -48,6 +49,46 @@ function checkLogo(v) {
 }
 
 const intOrNull = (v) => (v === '' || v == null ? null : Math.max(0, Math.min(99, Math.trunc(Number(v)))));
+
+// ---------- データベースの項目の自動追加 ----------
+// 新しい版で増えた項目を、初回アクセス時に自動で追加する（コンソールでの作業を不要にするため）
+let schemaChecked = false;
+async function ensureSchema(db) {
+  if (schemaChecked) return;
+  const cols = (await db.prepare('PRAGMA table_info(tournaments)').all()).results.map((c) => c.name);
+  if (!cols.includes('end_date')) {
+    try { await db.prepare('ALTER TABLE tournaments ADD COLUMN end_date TEXT').run(); }
+    catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+  }
+  schemaChecked = true;
+}
+
+// 開催期間（開始日〜終了日、最大4日）
+const MAX_DAYS = 4;
+function addDays(date, n) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function tournamentDates(t) {
+  if (!t.date) return [];
+  const out = [t.date];
+  if (t.end_date && t.end_date > t.date) {
+    for (let i = 1; i < MAX_DAYS; i++) {
+      const d = addDays(t.date, i);
+      if (d > t.end_date) break;
+      out.push(d);
+    }
+  }
+  return out;
+}
+function checkRange(date, end) {
+  if (!date) return null;
+  if (!end || end === date) return null;
+  if (end < date) fail(400, '終了日は開始日より後の日付にしてください');
+  if (end > addDays(date, MAX_DAYS - 1)) fail(400, `開催期間は最大${MAX_DAYS}日までです`);
+  return end;
+}
 
 // ---------- 読み込み ----------
 
@@ -115,7 +156,7 @@ async function syncKnockout(db, cat) {
 // ---------- 公開用の整形 ----------
 
 function publicTournament(t, withPin = false) {
-  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, venue: t.venue, logo: t.show_logo ? t.logo : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
+  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, end_date: t.end_date || null, venue: t.venue, logo: t.show_logo ? t.logo : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
   if (withPin) Object.assign(o, { logo: t.logo, pin: t.pin });
   return o;
 }
@@ -165,6 +206,7 @@ const STATIC = {
   '/web-viewer.js': [WEB_VIEWER, JS],
   '/web-relative.js': [WEB_RELATIVE, JS],
   '/web-admin.js': [WEB_ADMIN, JS],
+  '/web-print.js': [WEB_PRINT, JS],
 };
 const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY' };
 
@@ -192,6 +234,7 @@ export default {
     if (!url.pathname.startsWith('/api/')) return serveStatic(url);
     try {
       if (!env.SESSION_SECRET || !env.ADMIN_PASSWORD) fail(500, 'サーバーの初期設定が完了していません（ADMIN_PASSWORD と SESSION_SECRET を設定してください）');
+      await ensureSchema(env.DB);
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         const origin = req.headers.get('Origin');
         if (origin && origin !== url.origin) fail(403, '別のサイトからの操作は受け付けません');
@@ -233,7 +276,7 @@ route('GET', '/api/admin/me', async ({ req, env }) => json({ admin: await isAdmi
 
 route('GET', '/api/admin/tournaments', async ({ db }) => {
   const [r, c] = await Promise.all([
-    db.prepare('SELECT id, slug, name, date, venue, status, logo, show_logo FROM tournaments ORDER BY date DESC, created_at DESC').all(),
+    db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo FROM tournaments ORDER BY date DESC, created_at DESC').all(),
     db.prepare(`SELECT c.id, c.tournament_id, c.name, c.config,
         (SELECT COUNT(*) FROM teams t WHERE t.category_id = c.id) AS team_count,
         (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id) AS match_count,
@@ -254,8 +297,9 @@ route('POST', '/api/admin/tournaments', async ({ req, db }) => {
   const b = await body(req);
   if (!b.name || !String(b.name).trim()) fail(400, '大会名を入力してください');
   const id = uid();
-  await db.prepare('INSERT INTO tournaments (id, slug, name, date, venue, pin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, randomSlug(), String(b.name).trim(), b.date || null, b.venue || null, randomPin(), now(), now()).run();
+  const end = checkRange(b.date || null, b.end_date || null);
+  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, pin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, randomSlug(), String(b.name).trim(), b.date || null, end, b.venue || null, randomPin(), now(), now()).run();
   return json({ id });
 }, 'admin');
 
@@ -285,8 +329,26 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
     status: b.status !== undefined ? b.status : t.status,
   };
   if (!STATUSES.includes(next.status)) fail(400, '大会の状態が正しくありません');
-  await db.prepare('UPDATE tournaments SET name = ?, date = ?, venue = ?, logo = ?, show_logo = ?, status = ? WHERE id = ?')
-    .bind(next.name, next.date, next.venue, next.logo, next.show_logo, next.status, t.id).run();
+  next.end_date = checkRange(next.date, b.end_date !== undefined ? b.end_date || null : t.end_date);
+  await db.prepare('UPDATE tournaments SET name = ?, date = ?, end_date = ?, venue = ?, logo = ?, show_logo = ?, status = ? WHERE id = ?')
+    .bind(next.name, next.date, next.end_date, next.venue, next.logo, next.show_logo, next.status, t.id).run();
+  const oldDates = tournamentDates(t);
+  const newDates = tournamentDates({ date: next.date, end_date: next.end_date });
+  if (JSON.stringify(oldDates) !== JSON.stringify(newDates)) {
+    const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ?').bind(t.id).all()).results;
+    const stmts = [];
+    for (const c of cats) {
+      const cfg = normalizeConfig(JSON.parse(c.config));
+      const had = cfg.dayDates.length ? cfg.dayDates : oldDates.slice(0, cfg.dayCount);
+      // 全日程に出ていたカテゴリは新しい全日程に、それ以外は期間内の日だけ残す（ずれた分は同じ日目に置き換える）
+      let dates = JSON.stringify(had) === JSON.stringify(oldDates) ? newDates
+        : had.map((d) => (newDates.includes(d) ? d : newDates[oldDates.indexOf(d)])).filter(Boolean);
+      dates = [...new Set(dates)].sort();
+      if (!dates.length && newDates.length) dates = [newDates[0]];
+      stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify({ ...cfg, dayDates: dates, dayCount: Math.max(1, dates.length) }), c.id));
+    }
+    if (stmts.length) await db.batch(stmts);
+  }
   await bump(db, t.id);
   return json({ ok: true });
 }, 'admin');
@@ -321,7 +383,9 @@ const mustBeEditable = (t) => { if (!editable(t)) fail(409, '開催中・終了�
 route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params }) => {
   const t = await getTournament(db, params.id);
   const b = await body(req);
-  const cfg = normalizeConfig(b.config);
+  const dates = tournamentDates(t);
+  const given = b.config || {};
+  const cfg = normalizeConfig({ ...given, dayDates: Array.isArray(given.dayDates) && given.dayDates.length ? given.dayDates : Number(given.dayCount) > 1 ? [] : dates });
   const count = await db.prepare('SELECT COUNT(*) AS n FROM categories WHERE tournament_id = ?').bind(t.id).first();
   const id = uid();
   await db.prepare('INSERT INTO categories (id, tournament_id, name, sort, config, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -330,7 +394,7 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params 
   return json({ id });
 }, 'admin');
 
-const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays'];
+const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
 
 route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   const c = await getCategory(db, params.cid);
@@ -591,7 +655,7 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 
 // ---------- 管理者: テンプレート ----------
 
-const TEMPLATE_KEYS = ['dayCount', 'dayBreaks', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
+const TEMPLATE_KEYS = ['dayBreaks', 'koTiming', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
   'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'knockoutPlan', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
 
 route('GET', '/api/admin/templates', async ({ db }) => {

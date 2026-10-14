@@ -1,6 +1,7 @@
 import { api, ApiError } from './web-api.js';
+import { openPrintDialog } from './web-print.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -86,6 +87,25 @@ function knockoutPlanPanel(f, cat, redraw) {
 
 // ---------- 複数日の設定 ----------
 
+function periodText(t) {
+  if (t.end_date && t.end_date > t.date) return `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d+年/, '')}`;
+  return formatDate(t.date);
+}
+
+// 大会の開催期間の日付（最大4日）
+function tournamentDays(t) {
+  if (!t.date) return [];
+  const out = [t.date];
+  if (t.end_date && t.end_date > t.date) {
+    for (let i = 1; i < 4; i++) {
+      const d = addDays(t.date, i);
+      if (d > t.end_date) break;
+      out.push(d);
+    }
+  }
+  return out;
+}
+
 // 「◯日目はどこまで」の選択肢（形式とチーム数から作る）
 function dayBreakOptions(f, cat) {
   const hasLeague = f.format !== 'knockout';
@@ -127,23 +147,31 @@ function addDays(date, n) {
 }
 
 function dayPanel(f, cat, t, redraw) {
+  const all = tournamentDays(t);
+  // このカテゴリが試合をする日（未設定なら、これまでの設定か大会の全日程）
+  let picked = (f.dayDates || []).filter((d) => all.includes(d));
+  if (!picked.length) {
+    const legacy = [t.date, ...(f.extraDays || []).map((x) => x.date)].slice(0, f.dayCount || 1).filter((d) => all.includes(d));
+    picked = legacy.length ? legacy : all.slice(0, 1);
+  }
+  picked = [...new Set(picked)].sort();
+  f.dayDates = picked;
+  f.dayCount = Math.max(1, picked.length);
+  const n = f.dayCount;
+
   const opts = dayBreakOptions(f, cat);
   const keys = opts.map(([k]) => k);
-  const n = f.dayCount || 1;
-  // 足りない項目を既定値で埋める
   f.extraDays = Array.from({ length: n - 1 }, (_, i) => ({
-    date: (f.extraDays && f.extraDays[i] && f.extraDays[i].date) || addDays(t.date, i + 1),
+    date: picked[i + 1],
     startTime: f.extraDays && f.extraDays[i] && f.extraDays[i].startTime != null ? f.extraDays[i].startTime : f.startTime,
   }));
   f.dayBreaks = Array.from({ length: n - 1 }, (_, i) => {
     const cur = f.dayBreaks && f.dayBreaks[i];
     if (cur && keys.includes(cur)) return cur;
-    // 既定: 2日ならリーグ戦とトーナメントで分ける。それ以外は均等に
     const leagueEnd = keys.filter((k) => k[0] === 'L').at(-1);
     if (n === 2 && f.format === 'league_knockout' && leagueEnd) return leagueEnd;
     return keys[Math.min(keys.length - 1, Math.max(0, Math.round(((i + 1) * keys.length) / n) - 1))] || '';
   });
-  // 新しく増えた区切りは、前の日の区切りより後ろを選んでおく
   for (let i = 1; i < f.dayBreaks.length; i++) {
     const prev = keys.indexOf(f.dayBreaks[i - 1]);
     if (keys.indexOf(f.dayBreaks[i]) <= prev && keys[prev + 1] && !(f._touched || {})[i]) f.dayBreaks[i] = keys[prev + 1];
@@ -152,24 +180,38 @@ function dayPanel(f, cat, t, redraw) {
   const bad = order.some((x, i) => x < 0 || (i > 0 && x <= order[i - 1]));
   const tooFew = keys.length < n - 1;
 
-  const breakSelect = (i) => h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, `${i + 1}日目はどこまで`),
-    h('select', { onchange: (e) => { f.dayBreaks[i] = e.target.value; f._touched = { ...(f._touched || {}), [i]: true }; redraw(); } }, opts.map(([k, l]) => h('option', { value: k, selected: f.dayBreaks[i] === k }, l))));
+  const toggle = (date, on) => {
+    const next = on ? [...picked, date] : picked.filter((d) => d !== date);
+    if (!next.length) return toast('少なくとも1日は選んでください', true);
+    f.dayDates = [...new Set(next)].sort();
+    f.dayCount = f.dayDates.length;
+    redraw();
+  };
+  const md = (date) => { const d = new Date(`${date}T00:00:00`); return `${d.getMonth() + 1}/${d.getDate()}（${'日月火水木金土'[d.getDay()]}）`; };
+
+  if (all.length <= 1) {
+    return h('section', { class: 'panel' },
+      h('h2', { style: { marginBottom: '6px' } }, '開催日'),
+      h('p', { class: 'muted small', style: { margin: 0 } }, all.length ? `${formatDate(all[0])}の1日開催です。複数日に分けるときは、左の「大会情報を編集」で終了日を設定してください。` : '大会情報で開始日と終了日を設定してください。'));
+  }
 
   return h('section', { class: 'panel' },
-    h('h2', { style: { marginBottom: '12px' } }, '開催日'),
-    h('div', { class: 'grid-form' },
-      h('label', { class: 'field' }, h('span', null, '開催日数'), h('select', { onchange: (e) => { f.dayCount = Number(e.target.value); redraw(); } },
-        [1, 2, 3, 4].map((v) => h('option', { value: v, selected: n === v }, `${v}日`))))),
-    n > 1 ? h('div', { class: 'stack', style: { marginTop: '14px' } }, Array.from({ length: n }, (_, d) => h('div', { class: 'day-box' },
-      h('div', { class: 'day-box-head' }, h('strong', null, `${d + 1}日目`),
-        d === 0 ? h('span', { class: 'muted small' }, `${formatDate(t.date) || '大会情報の開催日'}　開始は「基本」の第1試合の開始`) : null),
-      d > 0 ? h('div', { class: 'grid-form' },
-        h('label', { class: 'field' }, h('span', null, '日付'), h('input', { type: 'date', value: f.extraDays[d - 1].date, oninput: (e) => { f.extraDays[d - 1].date = e.target.value; } })),
-        h('label', { class: 'field' }, h('span', null, '第1試合の開始'), h('input', { type: 'time', value: toHHMM(f.extraDays[d - 1].startTime), oninput: (e) => { if (e.target.value) f.extraDays[d - 1].startTime = fromHHMM(e.target.value); } }))) : null,
-      d < n - 1 && opts.length ? h('div', { class: 'grid-form', style: { marginTop: d > 0 ? '10px' : '6px' } }, breakSelect(d)) : null))) : null,
-    tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, `いまの形式とチーム数では、${n}日に分けるだけの区切りがありません。日数を減らしてください。`) : null,
+    h('h2', { style: { marginBottom: '4px' } }, '開催日'),
+    h('p', { class: 'muted small', style: { marginTop: 0 } }, `大会の期間（${all.length}日間）のうち、このカテゴリが試合をする日を選んでください。`),
+    h('div', { class: 'day-picks' }, all.map((date) => h('label', { class: `day-pick${picked.includes(date) ? ' on' : ''}` },
+      h('input', { type: 'checkbox', checked: picked.includes(date), onchange: (e) => toggle(date, e.target.checked) }),
+      h('span', null, md(date))))),
+    n > 1 ? h('div', { class: 'stack', style: { marginTop: '14px' } }, picked.map((date, d) => h('div', { class: 'day-box' },
+      h('div', { class: 'day-box-head' }, h('strong', null, `${d + 1}日目`), h('span', { class: 'muted small' }, formatDate(date))),
+      d === 0 ? h('p', { class: 'muted small', style: { margin: '0 0 4px' } }, '第1試合の開始は「基本」の設定を使います') : h('div', { class: 'grid-form' },
+        h('label', { class: 'field' }, h('span', null, '第1試合の開始'), h('input', { type: 'time', value: toHHMM(f.extraDays[d - 1].startTime), oninput: (e) => { if (e.target.value) f.extraDays[d - 1].startTime = fromHHMM(e.target.value); } }))),
+      d < n - 1 && opts.length ? h('div', { class: 'grid-form', style: { marginTop: '8px' } },
+        h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, `${d + 1}日目はどこまで`),
+          h('select', { onchange: (e) => { f.dayBreaks[d] = e.target.value; f._touched = { ...(f._touched || {}), [d]: true }; redraw(); } },
+            opts.map(([k, l]) => h('option', { value: k, selected: f.dayBreaks[d] === k }, l))))) : null))) : null,
+    tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, `いまの形式とチーム数では、${n}日に分けるだけの区切りがありません。試合をする日を減らしてください。`) : null,
     bad && !tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, '区切りは、1日目 → 2日目 … の順に後ろの段階になるように選んでください。') : null,
-    n > 1 ? h('p', { class: 'muted small' }, '開催日数や区切りを変えたときは「組み分け・日程」で日程を作り直してください。各日の昼休憩は「昼休憩」の設定を使います。') : null);
+    h('p', { class: 'muted small' }, '開催日や区切りを変えたときは「組み分け・日程」で日程を作り直してください。'));
 }
 
 export async function admin(root, path, navigate) {
@@ -215,16 +257,19 @@ async function listView(root, navigate) {
   const createDialog = () => {
     const name = h('input', { type: 'text', placeholder: '例: 第5回 さくらカップ' });
     const date = h('input', { type: 'date', value: todayStr() });
+    const end = h('input', { type: 'date', value: todayStr() });
+    date.addEventListener('change', () => { if (!end.value || end.value < date.value) end.value = date.value; });
     const venue = h('input', { type: 'text', placeholder: '例: 市民グラウンド' });
     modal({
       title: '大会を作成',
       content: h('div', { class: 'stack' },
         h('label', { class: 'field' }, h('span', null, '大会名'), name),
         h('div', { class: 'grid-form' },
-          h('label', { class: 'field' }, h('span', null, '開催日'), date),
-          h('label', { class: 'field' }, h('span', null, '会場'), venue))),
+          h('label', { class: 'field' }, h('span', null, '開始日'), date),
+          h('label', { class: 'field' }, h('span', null, '終了日（最大4日間）'), end)),
+        h('label', { class: 'field' }, h('span', null, '会場'), venue)),
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '作成してカテゴリを追加', kind: 'btn-primary', onClick: async () => {
-        const r = await run(() => api('POST', '/api/admin/tournaments', { name: name.value, date: date.value, venue: venue.value }));
+        const r = await run(() => api('POST', '/api/admin/tournaments', { name: name.value, date: date.value, end_date: end.value, venue: venue.value }));
         if (!r) return true;
         navigate(`/admin/t/${r.id}?add=1`);
       } }],
@@ -256,7 +301,7 @@ async function listView(root, navigate) {
         h('div', { class: 'row', style: { gap: '6px' } }, h('span', { class: `tag ${t.status === 'live' ? 'live' : t.status === 'published' ? 'done' : ''}` }, STATUS[t.status].label)),
         h('h2', null, t.name),
         h('div', { class: 't-meta' },
-          t.date ? h('span', null, icon('calendar'), formatDate(t.date)) : null,
+          t.date ? h('span', null, icon('calendar'), periodText(t)) : null,
           t.venue ? h('span', null, icon('pin'), t.venue) : null)),
       icon('chevron', 't-go')),
     h('div', { class: 'cat-grid' },
@@ -378,7 +423,7 @@ async function tournamentView(root, id, navigate) {
   }
 
   function infoPanel(t) {
-    const f = { name: t.name, date: t.date || '', venue: t.venue || '', logo: t.logo, show_logo: !!t.show_logo };
+    const f = { name: t.name, date: t.date || '', end_date: t.end_date || t.date || '', venue: t.venue || '', logo: t.logo, show_logo: !!t.show_logo };
     const preview = h('div');
     const drawLogo = () => mount(preview, f.logo ? h('div', { class: 'row' }, h('img', { src: f.logo, alt: '大会ロゴ', width: 56, height: 56, style: { objectFit: 'contain', background: '#fff', borderRadius: '50%' } }),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.logo = null; drawLogo(); } }, 'ロゴを外す')) : h('span', { class: 'muted small' }, 'ロゴは未設定です'));
@@ -387,7 +432,10 @@ async function tournamentView(root, id, navigate) {
       h('summary', { style: { cursor: 'pointer', fontWeight: 700 } }, '大会情報を編集'),
       h('div', { class: 'stack', style: { marginTop: '12px' } },
         h('label', { class: 'field' }, h('span', null, '大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
-        h('label', { class: 'field' }, h('span', null, '開催日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
+        h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, '開始日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
+          h('label', { class: 'field' }, h('span', null, '終了日'), h('input', { type: 'date', value: f.end_date, oninput: (e) => { f.end_date = e.target.value; } }))),
+        h('p', { class: 'muted small', style: { margin: 0 } }, '最大4日間です。期間を変えると、各カテゴリの開催日も合わせて調整されます。'),
         h('label', { class: 'field' }, h('span', null, '会場'), h('input', { type: 'text', value: f.venue, oninput: (e) => { f.venue = e.target.value; } })),
         h('div', null, h('span', { class: 'small', style: { fontWeight: 700 } }, '大会ロゴ'), preview,
           h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', 'aria-label': '大会ロゴの画像', onchange: async (e) => {
@@ -436,6 +484,8 @@ async function tournamentView(root, id, navigate) {
     const subs = [['settings', '設定'], ['teams', `チーム（${cat.teams.length}）`], ['schedule', '組み分け・日程'], ['results', '結果'], ['standings', '順位']];
     const pending = cat.matches.filter((m) => m.status === 'provisional').length;
     return h('div', null,
+      h('div', { class: 'row no-print', style: { justifyContent: 'flex-end', marginTop: '4px' } },
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
       h('div', { class: 'chips no-print', style: { paddingTop: '4px' } }, subs.map(([k, label]) =>
         h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: () => { st.sub = k; store.set(`a:${id}:sub`, k); st.moveSel = null; render(); } },
           label, k === 'results' && pending ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, pending) : null))),
@@ -458,13 +508,34 @@ async function tournamentView(root, id, navigate) {
     const time = (key, label) => h('label', { class: 'field' }, h('span', null, label),
       h('input', { type: 'time', value: toHHMM(f[key]), oninput: (e) => { if (e.target.value) { f[key] = fromHHMM(e.target.value); drawSummary(); } } }));
     const summary = h('p', { class: 'notice' });
+    const describe = (x) => {
+      const n = x.periods || 2;
+      const len = x.halfMinutes * n + (n > 1 ? x.halftimeMinutes * (n - 1) : 0);
+      const body = n === 1 ? `試合${x.halfMinutes}分`
+        : n === 2 ? `前半${x.halfMinutes}分＋ハーフタイム${x.halftimeMinutes}分＋後半${x.halfMinutes}分`
+          : `${x.halfMinutes}分×${n}ピリオド＋休憩${x.halftimeMinutes}分×${n - 1}`;
+      return `${body}＋試合間隔${f.intervalMinutes}分＝${len + f.intervalMinutes}分`;
+    };
+    const koOn = () => f.format === 'league_knockout' && f.koTiming && f.koTiming.enabled;
     const drawSummary = () => {
-      const n = f.periods || 2;
-      const len = f.halfMinutes * n + (n > 1 ? f.halftimeMinutes * (n - 1) : 0);
-      const body = n === 1 ? `試合${f.halfMinutes}分`
-        : n === 2 ? `前半${f.halfMinutes}分＋ハーフタイム${f.halftimeMinutes}分＋後半${f.halfMinutes}分`
-          : `${f.halfMinutes}分×${n}ピリオド＋休憩${f.halftimeMinutes}分×${n - 1}`;
-      summary.textContent = `1試合の枠：${body}＋試合間隔${f.intervalMinutes}分＝${len + f.intervalMinutes}分`;
+      summary.replaceChildren(
+        h('div', null, `${koOn() ? '予選の1試合の枠' : '1試合の枠'}：${describe(f)}`),
+        koOn() ? h('div', null, `決勝トーナメントの1試合の枠：${describe(f.koTiming)}`) : null);
+    };
+    // 決勝トーナメントの試合時間（予選と違う場合）
+    const koPanel = () => {
+      if (f.format !== 'league_knockout') return null;
+      f.koTiming = f.koTiming || { enabled: false, periods: 2, halfMinutes: 15, halftimeMinutes: 5 };
+      const k = f.koTiming;
+      const kn = (key, label, max) => h('label', { class: 'field' }, h('span', null, label),
+        h('input', { type: 'number', min: key === 'halfMinutes' ? 1 : 0, max, inputmode: 'numeric', value: k[key], oninput: (e) => { k[key] = Number(e.target.value); drawSummary(); } }));
+      return h('div', { class: 'ko-timing' },
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!k.enabled, onchange: (e) => { k.enabled = e.target.checked; draw(); } }), '決勝トーナメントは試合時間を変える'),
+        k.enabled ? h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, '決勝の試合の形'), h('select', { onchange: (e) => { k.periods = Number(e.target.value); draw(); } },
+            [[2, '前後半'], [1, 'ハーフなし'], [3, '3ピリオド']].map(([v, l]) => h('option', { value: v, selected: k.periods === v }, l)))),
+          kn('halfMinutes', k.periods === 1 ? '決勝の試合時間（分）' : k.periods === 2 ? '決勝の前後半（各・分）' : '決勝の1ピリオド（分）', 90),
+          k.periods > 1 ? kn('halftimeMinutes', k.periods === 2 ? '決勝のハーフタイム（分）' : '決勝のピリオド間の休憩（分）', 30) : null) : null);
     };
     drawSummary();
 
@@ -485,7 +556,8 @@ async function tournamentView(root, id, navigate) {
             [[0, '避けない'], [1, '1試合分は休む'], [2, '2試合分は休む']].map(([v, l]) => h('option', { value: v, selected: f.minRestSlots === v }, l))))),
         h('label', { class: 'field', style: { marginTop: '12px' } }, h('span', null, 'コート名（カンマ区切り・空欄なら Aコート, Bコート…）'),
           h('input', { type: 'text', value: (f.courtNames || []).join(', '), placeholder: '例: 第1コート, 第2コート', oninput: (e) => { f.courtNames = e.target.value.split(/[,、]/).map((s) => s.trim()).filter(Boolean); } })),
-        h('div', { style: { marginTop: '12px' } }, summary)),
+        koPanel(),
+        h('div', { style: { marginTop: '12px' } }, (drawSummary(), summary))),
       h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '8px' } }, '昼休憩'),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.lunchEnabled, onchange: (e) => { f.lunchEnabled = e.target.checked; draw(); } }), '昼休憩をとる'),
@@ -533,6 +605,7 @@ async function tournamentView(root, id, navigate) {
         } }, 'カテゴリを削除')),
       !editable ? h('p', { class: 'notice', style: { marginTop: '12px' } }, '開催中は、試合時間などを変えても組み合わせ済みの開始時刻は変わりません。当日の時間調整は「結果」または「組み分け・日程」から行ってください。') : null);
     draw();
+    drawSummary();
     return box;
   }
 
@@ -633,7 +706,7 @@ async function tournamentView(root, id, navigate) {
       const names = teamMap(cat);
       box.append(h('section', { class: 'panel' },
         h('div', { class: 'panel-head' }, h('h2', null, '現在の日程'), h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => window.print() }, '印刷する')),
+          h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力')),
         editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。開始時刻を全体でずらすときは「設定」の第1試合の開始を変更してください。') : null,
         warningsList(cat.warnings),
         h('div', { class: 'table-wrap' }, scheduleGrid(cat, cat.matches, {
@@ -866,7 +939,7 @@ async function tournamentView(root, id, navigate) {
     const filters = [['pending', '要対応'], ['provisional', '仮登録'], ['all', 'すべて'], ['confirmed', '確定済み']];
     const overdue = (m) => t.status === 'live' && m.status !== 'confirmed' && (() => {
       const date = dayDate(cat, dayOf(cat.config, m.slot), t);
-      return date && (date < today || (date === today && nowMin() >= m.start_min + len));
+      return date && (date < today || (date === today && nowMin() >= m.start_min + matchLengthFor(cat.config, m)));
     })();
     const list = [...cat.matches].sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b) || a.court - b.court).filter((m) => {
       if (st.resultFilter === 'pending') return m.status !== 'confirmed';

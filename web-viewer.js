@@ -1,6 +1,7 @@
 import { api } from './web-api.js';
+import { openPrintDialog } from './web-print.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin } from './web-ui.js';
-import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
+import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
 export async function viewer(root, slug) {
   let data = null;
@@ -86,7 +87,9 @@ export async function viewer(root, slug) {
 
     const body = h('main');
     const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, body,
-      h('div', { class: 'share-row' }, h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像')),
+      h('div', { class: 'share-row' },
+        h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像'),
+        h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, icon('list'), 'PDFで保存')),
       h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })));
 
     const pickTeam = () => openTeamPicker(cat, ctx.myTeam, (id) => {
@@ -165,7 +168,7 @@ export async function viewer(root, slug) {
     const ti = todayIndex(cat, t);
     if (!scrolledOnce && st.tab === 'schedule' && t.status === 'live' && ti >= 0) {
       scrolledOnce = true;
-      const len = matchLength(cat.config);
+      const len = Math.max(matchLength(cat.config), matchLengthFor(cat.config, { stage: 'knockout' }));
       const n = nowMin();
       const target = [...body.querySelectorAll('.slot')].find((s) => Number(s.dataset.d || 0) === ti && Number(s.dataset.t) + len > n);
       if (target && target !== body.querySelector('.slot')) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
@@ -175,6 +178,7 @@ export async function viewer(root, slug) {
 
 // 複数日なら「10月18日（土）〜10月19日（日）」
 function dateRange(t, categories) {
+  if (t.end_date && t.end_date > t.date) return `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d+年/, '')}`;
   const dates = new Set([t.date]);
   for (const c of categories) {
     const n = dayTotal(c.config);
