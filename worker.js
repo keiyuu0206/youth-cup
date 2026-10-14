@@ -210,13 +210,26 @@ const STATIC = {
 };
 const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY' };
 
-function serveStatic(url) {
-  const file = STATIC[url.pathname];
-  if (file) {
-    return new Response(file[0], { headers: { 'Content-Type': file[1], 'Cache-Control': 'public, max-age=300', ...SECURITY_HEADERS } });
+// 画面のファイルは毎回サーバーに確認させる（ETag が同じなら 304 で本体は送らない）。
+// 更新直後に新旧のファイルが混ざって画面が壊れるのを防ぐため。
+const etags = {};
+async function etagOf(path, body) {
+  if (!etags[path]) {
+    const d = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(body));
+    etags[path] = `"${[...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('')}"`;
   }
+  return etags[path];
+}
+
+async function serveStatic(req, url) {
+  const file = STATIC[url.pathname];
+  const [body, type] = file || [INDEX_HTML, 'text/html; charset=utf-8'];
+  const key = file ? url.pathname : '/index.html';
+  const etag = await etagOf(key, body);
+  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: etag, ...SECURITY_HEADERS };
+  if (req.headers.get('If-None-Match') === etag) return new Response(null, { status: 304, headers });
   // それ以外の画面のURL（/admin, /t/..., /r/...）はすべて index.html を返し、画面側で振り分ける
-  return new Response(INDEX_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...SECURITY_HEADERS } });
+  return new Response(body, { headers });
 }
 
 // ---------- ルーティング ----------
@@ -231,7 +244,7 @@ const route = (method, pattern, handler, auth = null) => {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    if (!url.pathname.startsWith('/api/')) return serveStatic(url);
+    if (!url.pathname.startsWith('/api/')) return serveStatic(req, url);
     try {
       if (!env.SESSION_SECRET || !env.ADMIN_PASSWORD) fail(500, 'サーバーの初期設定が完了していません（ADMIN_PASSWORD と SESSION_SECRET を設定してください）');
       await ensureSchema(env.DB);

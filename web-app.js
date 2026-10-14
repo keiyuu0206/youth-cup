@@ -24,7 +24,16 @@ async function route() {
     home();
   } catch (e) {
     console.error(e);
-    mount(root, h('div', { class: 'wrap' }, h('p', { class: 'empty' }, '画面を表示できませんでした。再読み込みしてください。')));
+    // どのファイルで失敗したかを表示し、古いファイルを捨てて読み直せるようにする
+    mount(root, h('div', { class: 'wrap', style: { marginTop: '40px' } }, h('div', { class: 'panel stack' },
+      h('h2', null, '画面を表示できませんでした'),
+      h('p', { style: { margin: 0 } }, '更新の直後は、古いファイルが残っていることがあります。下のボタンで読み直してください。'),
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: () => {
+        const u = new URL(location.href);
+        u.searchParams.set('r', Date.now());
+        location.replace(u.toString());
+      } }, 'もう一度読み込む'),
+      h('p', { class: 'muted small', style: { margin: 0, overflowWrap: 'anywhere' } }, `原因：${e && e.message ? e.message : String(e)}`))));
   }
 }
 
