@@ -213,3 +213,53 @@ test('試合の形: ハーフなし・3ピリオドで試合の長さが変わ�
   assert.deepEqual(slotTimes(one, 2).map((x) => toHHMM(x.start)), ['09:00', '09:25']);   // 20分＋間隔5分
   assert.deepEqual(slotTimes(three, 2).map((x) => toHHMM(x.start)), ['09:00', '09:41']); // 10×3＋3×2＋間隔5分
 });
+
+// ---- 複数日 ----
+test('複数日: リーグ戦は1日目、決勝トーナメントは2日目（2日目の開始時刻で計算）', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, startTime: 540, lunchEnabled: false,
+    dayCount: 2, extraDays: [{ date: '2026-10-19', startTime: 600 }], dayBreaks: ['L3'] });
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches, dayBreakSlots, error } = generateCategory(cfg, ts);
+  assert.equal(error, undefined);
+  assert.equal(dayBreakSlots.length, 1);
+  const c2 = { ...cfg, dayBreakSlots };
+  const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
+  assert.ok(matches.filter((m) => m.stage === 'league').every((m) => day(m) === 0));
+  assert.ok(matches.filter((m) => m.stage === 'knockout').every((m) => day(m) === 1));
+  assert.equal(Math.min(...matches.filter((m) => day(m) === 1).map((m) => m.start_min)), 600); // 2日目は10:00開始
+  assert.equal(Math.min(...matches.filter((m) => day(m) === 0).map((m) => m.start_min)), 540);
+  const ids = matches.map((m, i) => ({ ...m, id: `m${i}` }));
+  assert.equal(scheduleWarnings(c2, ids).filter((w) => w.level === 'error').length, 0);
+});
+
+test('複数日: 3日間（リーグ第1節まで／リーグの最後まで／トーナメント）', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, dayCount: 3, dayBreaks: ['L1', 'L3'] });
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches, dayBreakSlots } = generateCategory(cfg, ts);
+  assert.equal(dayBreakSlots.length, 2);
+  const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
+  assert.ok(matches.filter((m) => m.stage === 'league' && m.round === 1).every((m) => day(m) === 0));
+  assert.ok(matches.filter((m) => m.stage === 'league' && m.round > 1).every((m) => day(m) === 1));
+  assert.ok(matches.filter((m) => m.stage === 'knockout').every((m) => day(m) === 2));
+});
+
+test('複数日: トーナメントのみを準々決勝までで区切る', () => {
+  const cfg = normalizeConfig({ format: 'knockout', courts: 2, rankMode: 'top3', dayCount: 2, dayBreaks: ['K0'] });
+  const { matches, dayBreakSlots } = generateCategory(cfg, teams(8), teams(8).map((t) => t.id));
+  const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
+  assert.ok(matches.filter((m) => m.label.startsWith('準々決勝')).every((m) => day(m) === 0));
+  assert.ok(matches.filter((m) => !m.label.startsWith('準々決勝')).every((m) => day(m) === 1));
+});
+
+test('複数日: 遅延調整は同じ日の試合だけを動かす', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, lunchEnabled: false, dayCount: 2, dayBreaks: ['L3'] });
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches, dayBreakSlots } = generateCategory(cfg, ts);
+  const c2 = { ...cfg, dayBreakSlots };
+  const ms = matches.map((m, i) => ({ ...m, id: `m${i}`, status: 'none' }));
+  const first = ms.filter((m) => m.slot === 0)[0];
+  const plan = planDelay(c2, ms, first, 10);
+  const changed = new Set(plan.changes.map((c) => c.id));
+  assert.ok(ms.filter((m) => m.stage === 'knockout').every((m) => !changed.has(m.id)));
+  assert.ok(plan.changes.length > 0);
+});

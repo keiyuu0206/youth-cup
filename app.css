@@ -146,6 +146,9 @@ a { color: var(--turf); }
 .slot-head .t { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 1.35rem; letter-spacing: -0.02em; }
 .slot-head .live-label { color: var(--live); font-weight: 800; font-size: 0.8rem; display: inline-flex; align-items: center; gap: 5px; }
 .slot-list { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); overflow: hidden; }
+.day-head { margin: 28px 4px 0; font-size: 1.05rem; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.day-head::after { content: ""; flex: 1; height: 2px; background: var(--line); border-radius: 1px; }
+.day-head:first-child { margin-top: 18px; }
 .break { display: flex; align-items: center; gap: 12px; margin: 24px 4px 0; color: var(--ink-2); font-size: 0.85rem; font-weight: 700; }
 .break::before, .break::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 
@@ -360,6 +363,7 @@ label.field > span { line-height: 1.35; }
 .cell.selected { box-shadow: inset 0 0 0 3px var(--bib); }
 .cell .cl { font-size: 0.7rem; color: var(--ink-2); display: block; }
 .cell.warn { box-shadow: inset 0 0 0 2px var(--live); }
+.sched tr.day-row td { font-weight: 800; font-size: 0.95rem; padding: 14px 4px 2px; border-bottom: 2px solid var(--line); }
 .sched tr.lunch td { text-align: center; color: var(--ink-2); font-size: 0.78rem; background: var(--surface-2); border-radius: 10px; padding: 4px; }
 
 /* ===== 管理: 結果一覧 ===== */
@@ -380,6 +384,10 @@ label.field > span { line-height: 1.35; }
 }
 .admin-layout { display: grid; gap: 16px; }
 @media (min-width: 960px) { .admin-layout.split { grid-template-columns: 300px 1fr; align-items: start; } }
+
+/* ===== 管理: 開催日 ===== */
+.day-box { padding: 12px; border-radius: var(--r-md); background: var(--surface-2); }
+.day-box-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 
 /* ===== 管理: 大会一覧 ===== */
 .t-grid { display: grid; gap: 16px; margin-top: 16px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); align-items: start; }

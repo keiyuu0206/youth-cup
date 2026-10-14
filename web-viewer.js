@@ -1,6 +1,6 @@
 import { api } from './web-api.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin } from './web-ui.js';
-import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, statusOf } from './web-views.js';
+import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
 export async function viewer(root, slug) {
   let data = null;
@@ -12,6 +12,8 @@ export async function viewer(root, slug) {
     query: '',
     filter: store.get(`v:${slug}:filter`, 'all'),
     searchOpen: false,
+    day: null, // 表示する日（null はすべて）
+    dayPicked: false,
   };
   const myKey = () => `v:${slug}:my:${st.catId}`;
   const myTeam = () => store.get(myKey());
@@ -60,7 +62,7 @@ export async function viewer(root, slug) {
         t.logo ? h('img', { class: 'hero-logo', src: t.logo, alt: '' }) : null,
         h('div', null, h('h1', null, t.name))),
       h('div', { class: 'hero-meta' },
-        t.date ? h('span', null, icon('calendar'), formatDate(t.date)) : null,
+        t.date ? h('span', null, icon('calendar'), dateRange(t, data.categories)) : null,
         t.venue ? h('span', null, icon('pin'), t.venue) : null,
         statePill)));
 
@@ -70,10 +72,17 @@ export async function viewer(root, slug) {
     }
 
     const ctx = { tournament: t, myTeam: myTeam(), cache: { teams: teamMap(cat), codes: codeMap(cat) } };
+    const days = dayTotal(cat.config);
+    if (days > 1 && !st.dayPicked) {
+      const ti = todayIndex(cat, t);
+      st.day = ti >= 0 ? ti : null;
+      st.dayPicked = true;
+    }
+    if (days <= 1 || (st.day != null && st.day >= days)) st.day = null;
 
     const seg = data.categories.length > 1 ? h('div', { class: 'seg', role: 'tablist', 'aria-label': 'カテゴリ' },
       data.categories.map((c) => h('button', { type: 'button', 'aria-pressed': String(c.id === st.catId),
-        onclick: () => { st.catId = c.id; store.set(`v:${slug}:cat`, c.id); scrolledOnce = false; render(); } }, c.name))) : null;
+        onclick: () => { st.catId = c.id; store.set(`v:${slug}:cat`, c.id); scrolledOnce = false; st.dayPicked = false; render(); } }, c.name))) : null;
 
     const body = h('main');
     const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, body,
@@ -94,7 +103,9 @@ export async function viewer(root, slug) {
         blocks.push(toolbar());
         if (st.searchOpen) blocks.push(searchBox());
         const q = st.query.trim();
+        if (days > 1) blocks.splice(1, 0, dayChips());
         const filter = (m) => {
+          if (st.day != null && dayOf(cat.config, m.slot) !== st.day) return false;
           if (st.filter === 'mine' && ctx.myTeam && m.home_team_id !== ctx.myTeam && m.away_team_id !== ctx.myTeam) return false;
           if (st.filter === 'upcoming' && m.status === 'confirmed') return false;
           if (st.filter === 'done' && m.status !== 'confirmed') return false;
@@ -111,6 +122,13 @@ export async function viewer(root, slug) {
         blocks.push(teamsView(cat, { ...ctx, onPickTeam: (id) => { store.set(myKey(), id); st.filter = 'mine'; store.set(`v:${slug}:filter`, 'mine'); st.tab = 'schedule'; render(); window.scrollTo(0, 0); } }));
       }
       mount(body, blocks);
+    }
+
+    function dayChips() {
+      const opts = [[null, 'すべての日'], ...Array.from({ length: days }, (_, d) => [d, dayLabel(cat, d, t, true)])];
+      return h('div', { class: 'chips day-chips', style: { marginTop: '16px' }, role: 'tablist', 'aria-label': '開催日' },
+        opts.map(([d, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.day === d),
+          onclick: () => { st.day = d; renderBody(); } }, label)));
     }
 
     function toolbar() {
@@ -144,14 +162,27 @@ export async function viewer(root, slug) {
     updateStamp();
 
     // 当日は、いま行われている時間帯までスクロールする（最初の1回だけ）
-    if (!scrolledOnce && st.tab === 'schedule' && t.status === 'live' && t.date === todayStr()) {
+    const ti = todayIndex(cat, t);
+    if (!scrolledOnce && st.tab === 'schedule' && t.status === 'live' && ti >= 0) {
       scrolledOnce = true;
       const len = matchLength(cat.config);
       const n = nowMin();
-      const target = [...body.querySelectorAll('.slot')].find((s) => Number(s.dataset.t) + len > n);
+      const target = [...body.querySelectorAll('.slot')].find((s) => Number(s.dataset.d || 0) === ti && Number(s.dataset.t) + len > n);
       if (target && target !== body.querySelector('.slot')) requestAnimationFrame(() => target.scrollIntoView({ block: 'start' }));
     }
   }
+}
+
+// 複数日なら「10月18日（土）〜10月19日（日）」
+function dateRange(t, categories) {
+  const dates = new Set([t.date]);
+  for (const c of categories) {
+    const n = dayTotal(c.config);
+    for (let d = 1; d < n; d++) { const x = dayDate(c, d, t); if (x) dates.add(x); }
+  }
+  const list = [...dates].filter(Boolean).sort();
+  if (list.length <= 1) return formatDate(t.date);
+  return `${formatDate(list[0])} 〜 ${formatDate(list[list.length - 1]).replace(/^\d+年/, '')}`;
 }
 
 function skeleton() {
@@ -166,7 +197,7 @@ function myTeamCard(cat, ctx, onPick) {
     return h('button', { class: 'myteam-cta', type: 'button', onclick: onPick }, icon('star'),
       h('span', null, h('strong', null, '自チームを選ぶ'), h('small', null, '次の試合と結果がすぐに見られます')));
   }
-  const mine = cat.matches.filter((m) => m.home_team_id === team.id || m.away_team_id === team.id).sort((a, b) => a.start_min - b.start_min);
+  const mine = cat.matches.filter((m) => m.home_team_id === team.id || m.away_team_id === team.id).sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b));
   const next = mine.find((m) => ['upcoming', 'playing'].includes(statusOf(m, cat, ctx.tournament).key));
   const pending = mine.some((m) => m.status !== 'confirmed');
   const done = mine.filter((m) => m.status === 'confirmed');
@@ -182,7 +213,7 @@ function myTeamCard(cat, ctx, onPick) {
     const st = statusOf(next, cat, ctx.tournament);
     nextEl = h('div', { class: 'myteam-next' },
       h('span', { class: 't' }, toHHMM(next.start_min)),
-      h('span', null, h('span', { class: 'muted small' }, `${courtName(cat.config, next.court)}  ${next.label}`), h('br'), `対 ${opp.text}`),
+      h('span', null, h('span', { class: 'muted small' }, `${dayTotal(cat.config) > 1 ? `${dayLabel(cat, dayOf(cat.config, next.slot), ctx.tournament, true)}  ` : ''}${courtName(cat.config, next.court)}  ${next.label}`), h('br'), `対 ${opp.text}`),
       st.key === 'playing' ? h('span', { class: 'mc-st live' }, h('i', { class: 'dot pulse' }), '試合中') : null);
   } else if (pending) {
     nextEl = h('div', { class: 'myteam-next' }, h('span', { class: 'mc-st wait', style: { marginLeft: 0 } }, '結果待ち'), h('span', { class: 'muted small' }, '本部が結果を確定するとここに表示されます'));
@@ -254,11 +285,11 @@ function snsMode(t, cat, ctx) {
             h('td', null, `${r.w}勝${r.d}分${r.l}敗`), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd), h('td', { style: { fontWeight: 800 } }, `${r.pts}点`))))));
       }
     } else if (st.kind === 'mine') {
-      const list = confirmed.filter((m) => m.home_team_id === ctx.myTeam || m.away_team_id === ctx.myTeam).sort((a, b) => a.start_min - b.start_min);
+      const list = confirmed.filter((m) => m.home_team_id === ctx.myTeam || m.away_team_id === ctx.myTeam).sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b));
       content.append(h('div', { class: 'sbig' }, crest(tm[ctx.myTeam], 30), tm[ctx.myTeam]?.name || ''));
       content.append(...(list.length ? list.map(line) : [h('p', null, '終わった試合はまだありません')]));
     } else if (st.kind === 'results') {
-      const list = confirmed.sort((a, b) => b.start_min - a.start_min).slice(0, st.shape === 'story' ? 14 : 7).reverse();
+      const list = confirmed.sort((a, b) => absMin(cat.config, b) - absMin(cat.config, a)).slice(0, st.shape === 'story' ? 14 : 7).reverse();
       content.append(...(list.length ? list.map(line) : [h('p', null, '終わった試合はまだありません')]));
     } else {
       content.append(...cat.finalRanking.map((r) => h('div', { class: 'sbig', style: { fontSize: r.rank === 1 ? '1.3rem' : '1rem' } },

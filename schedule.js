@@ -1,6 +1,6 @@
 import { roundRobin } from './grouping.js';
 import { buildKnockout } from './bracket.js';
-import { slotTimes, matchLength } from './time.js';
+import { slotTimes, matchLength, dayOf, dayConfig } from './time.js';
 
 /**
  * 1カテゴリ分の試合を生成する
@@ -55,12 +55,44 @@ export function generateCategory(cfg, teams, koOrder) {
     }));
   }
 
-  placeMatches(cfg, league, ko);
+  // 複数日: 「どこまでが何日目か」を節・トーナメントの段で区切る
+  const R = league.reduce((mx, m) => Math.max(mx, m.round), 0);
+  const unitOf = (m) => (m.stage === 'league' ? m.round - 1 : R + m.level);
+  const lastUnit = Math.max(-1, ...league.map(unitOf), ...ko.map(unitOf));
+  const unitKey = (key) => {
+    const n = Number(String(key).slice(1));
+    if (/^L\d+$/.test(key)) return n - 1;
+    if (/^K\d+$/.test(key)) return R + n;
+    return NaN;
+  };
+  const extraWarnings = [];
+  const breaks = cfg.dayCount > 1
+    ? [...new Set((cfg.dayBreaks || []).map(unitKey))].filter((u) => Number.isFinite(u) && u >= 0 && u < lastUnit).sort((a, b) => a - b)
+    : [];
+  if (cfg.dayCount > 1 && breaks.length < cfg.dayCount - 1) {
+    extraWarnings.push({ level: 'warn', ids: [], text: `区切りが重なっているか試合が足りないため、${breaks.length + 1}日間の日程になりました。設定の「開催日」を確認してください` });
+  }
+  const dayIdx = (m) => breaks.filter((u) => unitOf(m) > u).length;
+
   const all = [...league, ...ko];
-  dropRestAroundLunch(cfg, all);
-  applyTimes(cfg, all);
+  const dayBreakSlots = [];
+  let offset = 0;
+  for (let d = 0; d <= breaks.length; d++) {
+    const dl = league.filter((m) => dayIdx(m) === d);
+    const dk = ko.filter((m) => dayIdx(m) === d);
+    const dayMatches = [...dl, ...dk];
+    if (d > 0) dayBreakSlots.push(offset);
+    if (!dayMatches.length) continue;
+    const dcfg = dayConfig(cfg, d);
+    placeMatches(dcfg, dl, dk);
+    dropRestAroundLunch(dcfg, dayMatches);
+    const used = dayMatches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
+    for (const m of dayMatches) m.slot += offset;
+    offset += used;
+  }
+  applyTimes({ ...cfg, dayBreakSlots }, all);
   for (const m of league) m.label = `${m.group_label}組 第${m.round}節`;
-  return { matches: all };
+  return { matches: all, dayBreakSlots, warnings: extraWarnings };
 }
 
 export function placeMatches(cfg, league, ko) {
@@ -148,14 +180,25 @@ export function dropRestAroundLunch(cfg, matches) {
   }
 }
 
+// 枠番号から開始時刻を決める。日ごとにその日の開始時刻・昼休憩で数え直す
 export function applyTimes(cfg, matches) {
-  const n = matches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
-  const times = slotTimes(cfg, n);
-  for (const m of matches) {
-    m.start_min = times[m.slot].start;
-    m.session = times[m.slot].session;
+  const bounds = [0, ...(cfg.dayBreakSlots || [])];
+  const byDay = {};
+  for (const m of matches) (byDay[dayOf(cfg, m.slot)] ||= []).push(m);
+  for (const [d, list] of Object.entries(byDay)) {
+    const start = bounds[d] || 0;
+    const n = list.reduce((mx, m) => Math.max(mx, m.slot - start), -1) + 1;
+    const times = slotTimes(dayConfig(cfg, Number(d)), n);
+    for (const m of list) {
+      const t = times[m.slot - start];
+      m.start_min = t.start;
+      m.session = t.session;
+    }
   }
 }
+
+// 日をまたいで比べられる時刻（分）
+export const absMin = (cfg, m) => dayOf(cfg, m.slot) * 1440 + m.start_min;
 
 // 同じチームの同時刻・連戦・時間の重なりを検出
 export function scheduleWarnings(cfg, matches, teamName = (id) => id) {
@@ -166,8 +209,9 @@ export function scheduleWarnings(cfg, matches, teamName = (id) => id) {
   }
   const out = [];
   for (const [id, list] of Object.entries(byTeam)) {
-    list.sort((a, b) => a.start_min - b.start_min);
+    list.sort((a, b) => absMin(cfg, a) - absMin(cfg, b));
     for (let i = 1; i < list.length; i++) {
+      if (dayOf(cfg, list[i].slot) !== dayOf(cfg, list[i - 1].slot)) continue; // 日が違えば連戦ではない
       const gap = list[i].start_min - (list[i - 1].start_min + len);
       const ids = [list[i - 1].id, list[i].id];
       if (gap < 0) out.push({ level: 'error', ids, text: `${teamName(id)} の試合が時間的に重なっています（${list[i - 1].label} と ${list[i].label}）` });
@@ -186,7 +230,7 @@ export function scheduleWarnings(cfg, matches, teamName = (id) => id) {
 export function planDelay(cfg, matches, target, minutes, lunchMode, teamName = (id) => id) {
   const len = matchLength(cfg);
   const affected = matches
-    .filter((m) => m.court === target.court && m.start_min >= target.start_min && m.status === 'none')
+    .filter((m) => m.court === target.court && dayOf(cfg, m.slot) === dayOf(cfg, target.slot) && m.start_min >= target.start_min && m.status === 'none')
     .sort((a, b) => a.start_min - b.start_min);
   const am = affected.filter((m) => m.session === 'am');
   const pm = affected.filter((m) => m.session === 'pm');

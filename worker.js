@@ -330,7 +330,7 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params 
   return json({ id });
 }, 'admin');
 
-const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes'];
+const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays'];
 
 route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   const c = await getCategory(db, params.cid);
@@ -339,7 +339,7 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   const cfg = normalizeConfig({ ...c.config, ...(b.config || {}) });
   await db.prepare('UPDATE categories SET name = ?, config = ? WHERE id = ?').bind(b.name ? String(b.name) : c.name, JSON.stringify(cfg), c.id).run();
   // 準備中なら、開始時刻などの変更を全コートの全試合へ一括反映
-  const timingChanged = TIMING_KEYS.some((k) => cfg[k] !== c.config[k]);
+  const timingChanged = TIMING_KEYS.some((k) => JSON.stringify(cfg[k]) !== JSON.stringify(c.config[k]));
   if (timingChanged && editable(t)) {
     const { matches } = await loadCategoryData(db, c.id);
     applyTimes(cfg, matches);
@@ -434,8 +434,9 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params })
   if (res.error) fail(400, res.error);
   const names = Object.fromEntries(teams.map((x) => [x.id, x.name]));
   const matches = res.matches.map((m) => ({ ...m, id: uid(), status: 'none' }));
-  const warnings = scheduleWarnings(c.config, matches, (id) => names[id] || '未定');
-  if (b.dryRun) return json({ matches, warnings });
+  const dayBreakSlots = res.dayBreakSlots || [];
+  const warnings = [...(res.warnings || []), ...scheduleWarnings({ ...c.config, dayBreakSlots }, matches, (id) => names[id] || '未定')];
+  if (b.dryRun) return json({ matches, warnings, dayBreakSlots });
 
   const stmts = [db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id)];
   for (const x of ts) stmts.push(db.prepare('UPDATE teams SET group_label = ? WHERE id = ?').bind(x.group_label, x.id));
@@ -447,7 +448,7 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params })
         m.place_w ?? null, m.place_l ?? null));
   }
   // 組み分けが変わったら抽選結果はリセット
-  const cfg = { ...c.config, lottery: {} };
+  const cfg = { ...c.config, lottery: {}, dayBreakSlots };
   stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(cfg), c.id));
   await db.batch(stmts);
   await bump(db, t.id);
@@ -590,7 +591,7 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 
 // ---------- 管理者: テンプレート ----------
 
-const TEMPLATE_KEYS = ['periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
+const TEMPLATE_KEYS = ['dayCount', 'dayBreaks', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
   'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'knockoutPlan', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
 
 route('GET', '/api/admin/templates', async ({ db }) => {

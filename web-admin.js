@@ -1,6 +1,6 @@
 import { api, ApiError } from './web-api.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, standingsView, bracketView, TIEBREAK_LABEL } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -82,6 +82,94 @@ function knockoutPlanPanel(f, cat, redraw) {
       h('div', { style: { fontWeight: 700, marginBottom: '4px' } }, cat.teams.length ? `いまの${cat.teams.length}チーム・${f.groups}組の場合` : `${f.groups}組の場合（チーム登録後に人数が正確になります）`),
       preview.map((p) => h('div', null, p.text, p.warn ? h('span', { style: { color: 'var(--live)', fontWeight: 700 } }, `　${p.warn}`) : null))),
     h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。'));
+}
+
+// ---------- 複数日の設定 ----------
+
+// 「◯日目はどこまで」の選択肢（形式とチーム数から作る）
+function dayBreakOptions(f, cat) {
+  const hasLeague = f.format !== 'knockout';
+  const hasKo = f.format !== 'league';
+  const sizes = estimateGroupSizes(f, cat);
+  const mx = Math.max(...Object.values(sizes));
+  const R = hasLeague ? (mx % 2 ? mx : mx - 1) : 0;
+  let T = 0;
+  if (hasKo) {
+    let N;
+    if (f.format === 'knockout') N = Math.max(2, cat.teams.length);
+    else {
+      const plan = f.knockoutPlan || { type: 'top', k: 2 };
+      N = Math.max(2, ...expandPlanPreview(plan, mx).map((b) => {
+        let n = 0;
+        for (let r = b.from; r <= b.to; r++) for (const v of Object.values(sizes)) if (v >= r) n++;
+        return n;
+      }));
+    }
+    T = Math.ceil(Math.log2(N));
+  }
+  const opts = [];
+  for (let r = 1; r <= R; r++) {
+    if (r === R && !hasKo) break;
+    opts.push([`L${r}`, r === R ? `リーグ戦の最後（第${r}節）まで` : `リーグ第${r}節まで`]);
+  }
+  for (let i = 0; i < T - 1; i++) {
+    const d = T - 1 - i;
+    opts.push([`K${i}`, `トーナメントの${d === 1 ? '準決勝' : d === 2 ? '準々決勝' : `${i + 1}回戦`}まで`]);
+  }
+  return opts;
+}
+
+function addDays(date, n) {
+  if (!date) return '';
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function dayPanel(f, cat, t, redraw) {
+  const opts = dayBreakOptions(f, cat);
+  const keys = opts.map(([k]) => k);
+  const n = f.dayCount || 1;
+  // 足りない項目を既定値で埋める
+  f.extraDays = Array.from({ length: n - 1 }, (_, i) => ({
+    date: (f.extraDays && f.extraDays[i] && f.extraDays[i].date) || addDays(t.date, i + 1),
+    startTime: f.extraDays && f.extraDays[i] && f.extraDays[i].startTime != null ? f.extraDays[i].startTime : f.startTime,
+  }));
+  f.dayBreaks = Array.from({ length: n - 1 }, (_, i) => {
+    const cur = f.dayBreaks && f.dayBreaks[i];
+    if (cur && keys.includes(cur)) return cur;
+    // 既定: 2日ならリーグ戦とトーナメントで分ける。それ以外は均等に
+    const leagueEnd = keys.filter((k) => k[0] === 'L').at(-1);
+    if (n === 2 && f.format === 'league_knockout' && leagueEnd) return leagueEnd;
+    return keys[Math.min(keys.length - 1, Math.max(0, Math.round(((i + 1) * keys.length) / n) - 1))] || '';
+  });
+  // 新しく増えた区切りは、前の日の区切りより後ろを選んでおく
+  for (let i = 1; i < f.dayBreaks.length; i++) {
+    const prev = keys.indexOf(f.dayBreaks[i - 1]);
+    if (keys.indexOf(f.dayBreaks[i]) <= prev && keys[prev + 1] && !(f._touched || {})[i]) f.dayBreaks[i] = keys[prev + 1];
+  }
+  const order = f.dayBreaks.map((k) => keys.indexOf(k));
+  const bad = order.some((x, i) => x < 0 || (i > 0 && x <= order[i - 1]));
+  const tooFew = keys.length < n - 1;
+
+  const breakSelect = (i) => h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, `${i + 1}日目はどこまで`),
+    h('select', { onchange: (e) => { f.dayBreaks[i] = e.target.value; f._touched = { ...(f._touched || {}), [i]: true }; redraw(); } }, opts.map(([k, l]) => h('option', { value: k, selected: f.dayBreaks[i] === k }, l))));
+
+  return h('section', { class: 'panel' },
+    h('h2', { style: { marginBottom: '12px' } }, '開催日'),
+    h('div', { class: 'grid-form' },
+      h('label', { class: 'field' }, h('span', null, '開催日数'), h('select', { onchange: (e) => { f.dayCount = Number(e.target.value); redraw(); } },
+        [1, 2, 3, 4].map((v) => h('option', { value: v, selected: n === v }, `${v}日`))))),
+    n > 1 ? h('div', { class: 'stack', style: { marginTop: '14px' } }, Array.from({ length: n }, (_, d) => h('div', { class: 'day-box' },
+      h('div', { class: 'day-box-head' }, h('strong', null, `${d + 1}日目`),
+        d === 0 ? h('span', { class: 'muted small' }, `${formatDate(t.date) || '大会情報の開催日'}　開始は「基本」の第1試合の開始`) : null),
+      d > 0 ? h('div', { class: 'grid-form' },
+        h('label', { class: 'field' }, h('span', null, '日付'), h('input', { type: 'date', value: f.extraDays[d - 1].date, oninput: (e) => { f.extraDays[d - 1].date = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', null, '第1試合の開始'), h('input', { type: 'time', value: toHHMM(f.extraDays[d - 1].startTime), oninput: (e) => { if (e.target.value) f.extraDays[d - 1].startTime = fromHHMM(e.target.value); } }))) : null,
+      d < n - 1 && opts.length ? h('div', { class: 'grid-form', style: { marginTop: d > 0 ? '10px' : '6px' } }, breakSelect(d)) : null))) : null,
+    tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, `いまの形式とチーム数では、${n}日に分けるだけの区切りがありません。日数を減らしてください。`) : null,
+    bad && !tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, '区切りは、1日目 → 2日目 … の順に後ろの段階になるように選んでください。') : null,
+    n > 1 ? h('p', { class: 'muted small' }, '開催日数や区切りを変えたときは「組み分け・日程」で日程を作り直してください。各日の昼休憩は「昼休憩」の設定を使います。') : null);
 }
 
 export async function admin(root, path, navigate) {
@@ -417,6 +505,7 @@ async function tournamentView(root, id, navigate) {
         f.format === 'league_knockout' ? knockoutPlanPanel(f, cat, draw) : null,
         f.format !== 'knockout' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.showStandings, onchange: (e) => { f.showStandings = e.target.checked; } }), '閲覧ページに順位表を表示する') : null,
         h('p', { class: 'muted small' }, '形式・組の数・コート数を変えた場合は「組み分け・日程」で日程を作り直してください。')),
+      dayPanel(f, cat, t, draw),
       f.format !== 'knockout' ? h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '4px' } }, '勝点が並んだときの判定順'),
         h('p', { class: 'muted small', style: { marginTop: 0 } }, '勝点は 勝ち3・引き分け1・負け0 です。上から順に比べます。'),
@@ -432,7 +521,7 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, '不戦勝のスコア（負け）'), h('input', { type: 'number', min: 0, max: 20, value: f.forfeitScore[1], oninput: (e) => { f.forfeitScore[1] = Number(e.target.value); } })))) : null,
       h('div', { class: 'row', style: { marginTop: '12px' } },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-          const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: f }));
+          const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: { ...f, _touched: undefined } }));
           if (r) { toast(r.retimed ? '保存し、全試合の開始時刻を再計算しました' : '保存しました'); await reload(); }
         } }, '設定を保存'),
         h('span', { class: 'spacer' }),
@@ -662,7 +751,7 @@ async function tournamentView(root, id, navigate) {
       preview ? h('div', { style: { marginTop: '16px' } },
         h('h3', { style: { marginBottom: '6px' } }, '日程の確認（まだ反映されていません）'),
         warningsList(preview.warnings),
-        h('div', { class: 'table-wrap' }, scheduleGrid(cat, preview.matches, { names: tm, editable: false })),
+        h('div', { class: 'table-wrap' }, scheduleGrid(cat, preview.matches, { names: tm, editable: false, breaks: preview.dayBreakSlots })),
         h('div', { class: 'row', style: { marginTop: '12px' } },
           h('button', { class: 'btn btn-primary', type: 'button', onclick: apply }, 'この内容で反映'),
           h('button', { class: 'btn', type: 'button', onclick: () => { delete st.preview[cat.id]; render(); } }, 'やり直す'))) : null);
@@ -670,7 +759,9 @@ async function tournamentView(root, id, navigate) {
   }
 
   function scheduleGrid(cat, matches, opts) {
-    const cfg = cat.config;
+    const cfg = opts.breaks ? { ...cat.config, dayBreakSlots: opts.breaks } : cat.config;
+    const multi = dayTotal(cfg) > 1;
+    let prevDay = -1;
     const cache = { teams: opts.names || teamMap(cat), codes: Object.fromEntries(matches.filter((m) => m.code).map((m) => [m.code, m])) };
     const fakeCat = { ...cat, matches };
     const slots = [...new Set(matches.map((m) => m.slot))].sort((a, b) => a - b);
@@ -680,6 +771,12 @@ async function tournamentView(root, id, navigate) {
     let prevSession = null;
     for (const s of slots) {
       const inSlot = matches.filter((m) => m.slot === s);
+      const d = dayOf(cfg, s);
+      if (multi && d !== prevDay) {
+        rows.push(h('tr', { class: 'day-row' }, h('td', { colspan: cfg.courts + 1 }, dayLabel({ ...cat, config: cfg }, d, data.tournament))));
+        prevSession = null;
+      }
+      prevDay = d;
       const session = inSlot[0]?.session || prevSession;
       if (prevSession === 'am' && session === 'pm') rows.push(h('tr', { class: 'lunch' }, h('td', { colspan: cfg.courts + 1 }, '昼休憩')));
       prevSession = session;
@@ -765,10 +862,13 @@ async function tournamentView(root, id, navigate) {
   function resultsTab(t, cat) {
     const cache = { teams: teamMap(cat), codes: codeMap(cat) };
     const len = matchLength(cat.config);
-    const isToday = t.date === todayStr();
+    const today = todayStr();
     const filters = [['pending', '要対応'], ['provisional', '仮登録'], ['all', 'すべて'], ['confirmed', '確定済み']];
-    const overdue = (m) => t.status === 'live' && isToday && nowMin() >= m.start_min + len && m.status !== 'confirmed';
-    const list = cat.matches.filter((m) => {
+    const overdue = (m) => t.status === 'live' && m.status !== 'confirmed' && (() => {
+      const date = dayDate(cat, dayOf(cat.config, m.slot), t);
+      return date && (date < today || (date === today && nowMin() >= m.start_min + len));
+    })();
+    const list = [...cat.matches].sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b) || a.court - b.court).filter((m) => {
       if (st.resultFilter === 'pending') return m.status !== 'confirmed';
       if (st.resultFilter === 'provisional') return m.status === 'provisional';
       if (st.resultFilter === 'confirmed') return m.status === 'confirmed';
@@ -819,6 +919,7 @@ async function tournamentView(root, id, navigate) {
           h('div', { class: 'muted small' }, courtName(cat.config, m.court))),
         h('div', { class: 'ri' },
           h('div', { class: 'row small' },
+            dayTotal(cat.config) > 1 ? h('span', { class: 'tag' }, dayLabel(cat, dayOf(cat.config, m.slot), t, true)) : null,
             h('span', null, m.label),
             locked ? h('span', { class: 'tag done' }, '確定') : m.status === 'provisional' ? h('span', { class: 'tag wait' }, `仮登録：${m.updated_by || ''} ${formatUpdated(m.updated_at)}`) : h('span', { class: 'tag' }, '未登録'),
             isOverdue ? h('span', { class: 'tag alert' }, '確定待ち') : null,

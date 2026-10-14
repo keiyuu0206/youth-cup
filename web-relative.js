@@ -1,6 +1,6 @@
 import { api, ApiError } from './web-api.js';
 import { h, mount, store, poller, toast, toHHMM, formatUpdated, formatDate } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, statusOf, crest } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, statusOf, crest, absMin, dayOf, dayTotal, dayLabel } from './web-views.js';
 
 export async function relative(root, slug) {
   let data = null;
@@ -83,7 +83,7 @@ export async function relative(root, slug) {
   function matchesView(cat, team) {
     const cache = { teams: teamMap(cat), codes: codeMap(cat) };
     const mine = cat.matches.filter((m) => m.home_team_id === team.id || m.away_team_id === team.id)
-      .sort((a, b) => a.start_min - b.start_min);
+      .sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b));
     const nextIdx = mine.findIndex((m) => m.status !== 'confirmed');
     return h('div', { class: 'wrap', style: { marginTop: '12px' } },
       h('div', { class: 'row' },
@@ -122,6 +122,7 @@ export async function relative(root, slug) {
       mount(card,
         h('div', { class: 'row' },
           h('span', { class: 'num', style: { fontSize: '1.4rem' } }, toHHMM(m.start_min)),
+          dayTotal(cat.config) > 1 ? h('span', { class: 'tag' }, dayLabel(cat, dayOf(cat.config, m.slot), data.tournament, true)) : null,
           h('span', { class: 'tag' }, courtName(cat.config, m.court)),
           h('span', { class: 'muted small' }, m.label),
           isNext && !locked ? h('span', { class: 'tag live' }, '次の試合') : null),

@@ -12,6 +12,18 @@ export const fromHHMM = (s) => {
   return h * 60 + (m || 0);
 };
 
+export const MAX_DAYS = 4;
+
+// 枠番号が何日目（0始まり）か
+export const dayOf = (cfg, slot) => (cfg.dayBreakSlots || []).filter((b) => slot >= b).length;
+
+// その日の設定（2日目以降は開始時刻を差し替える）
+export function dayConfig(cfg, d) {
+  if (!d) return cfg;
+  const x = (cfg.extraDays || [])[d - 1];
+  return { ...cfg, startTime: x && x.startTime != null ? x.startTime : cfg.startTime };
+}
+
 export const CATEGORY_NAMES = ['U7', 'U8', 'U9', 'U10', 'U11', 'U12'];
 
 export const TIEBREAK_KEYS = {
@@ -46,6 +58,10 @@ export function defaultConfig() {
     forfeitScore: [3, 0],
     showStandings: true,
     minRestSlots: 1, // 同じチームの試合の間に空ける枠数
+    dayCount: 1, // 開催日数（最大4日）
+    extraDays: [], // 2日目以降 [{date, startTime}]
+    dayBreaks: [], // 各日の区切り（'L2' = リーグ第2節まで、'K0' = トーナメント1段目まで）
+    dayBreakSlots: [], // 日程作成時に決まる「◯日目が始まる枠番号」
     grouping: { fixed: {}, separate: [] },
     lottery: {},
   };
@@ -63,6 +79,14 @@ export function normalizeConfig(c) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }
   out.periods = [1, 2, 3].includes(Number(out.periods)) ? Number(out.periods) : 2;
+  out.dayCount = Math.max(1, Math.min(MAX_DAYS, Number(out.dayCount) || 1));
+  const ed = Array.isArray(out.extraDays) ? out.extraDays : [];
+  out.extraDays = Array.from({ length: out.dayCount - 1 }, (_, i) => ({
+    date: (ed[i] && ed[i].date) || '',
+    startTime: ed[i] && ed[i].startTime != null && ed[i].startTime !== '' ? Math.max(0, Number(ed[i].startTime) || 0) : out.startTime,
+  }));
+  out.dayBreaks = (Array.isArray(out.dayBreaks) ? out.dayBreaks : []).slice(0, out.dayCount - 1).map(String);
+  out.dayBreakSlots = (Array.isArray(out.dayBreakSlots) ? out.dayBreakSlots : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);
   if (!out.knockoutPlan || typeof out.knockoutPlan !== 'object') {
     // 旧設定（advance / rankMode）から移行
     out.knockoutPlan = { type: 'top', k: out.advance, mode: out.rankMode === 'all' ? 'all' : out.rankMode };

@@ -1,10 +1,33 @@
-import { h, toHHMM, todayStr, nowMin, icon } from './web-ui.js';
+import { h, toHHMM, todayStr, nowMin, icon, formatDate } from './web-ui.js';
 
 export const matchLength = (cfg) => {
   const n = cfg.periods || 2;
   return cfg.halfMinutes * n + (n > 1 ? cfg.halftimeMinutes * (n - 1) : 0);
 };
 export const courtName = (cfg, i) => (cfg.courtNames && cfg.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;
+
+// 複数日開催
+export const dayOf = (cfg, slot) => (cfg.dayBreakSlots || []).filter((b) => slot >= b).length;
+export const dayTotal = (cfg) => (cfg.dayBreakSlots || []).length + 1;
+export const absMin = (cfg, m) => dayOf(cfg, m.slot) * 1440 + m.start_min;
+export function dayDate(cat, d, tournament) {
+  if (!d) return tournament.date || null;
+  const x = (cat.config.extraDays || [])[d - 1];
+  return (x && x.date) || null;
+}
+export function dayLabel(cat, d, tournament, short = false) {
+  const date = dayDate(cat, d, tournament);
+  if (!date) return `${d + 1}日目`;
+  const dt = new Date(`${date}T00:00:00`);
+  const md = `${dt.getMonth() + 1}/${dt.getDate()}（${'日月火水木金土'[dt.getDay()]}）`;
+  return short ? `${d + 1}日目 ${md}` : `${d + 1}日目　${formatDate(date)}`;
+}
+// 今日が何日目か（無ければ -1）
+export function todayIndex(cat, tournament) {
+  const t = todayStr();
+  for (let d = 0; d < dayTotal(cat.config); d++) if (dayDate(cat, d, tournament) === t) return d;
+  return -1;
+}
 
 export const teamMap = (cat) => Object.fromEntries(cat.teams.map((t) => [t.id, t]));
 export const codeMap = (cat) => Object.fromEntries(cat.matches.filter((m) => m.code).map((m) => [m.code, m]));
@@ -42,8 +65,9 @@ export function statusOf(m, cat, tournament) {
   if (m.status === 'provisional') return { key: 'provisional', label: '結果待ち', cls: 'wait' };
   const today = todayStr();
   const end = m.start_min + matchLength(cat.config);
-  if (tournament.date && tournament.date < today) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
-  if (tournament.date === today && tournament.status === 'live') {
+  const date = dayDate(cat, dayOf(cat.config, m.slot), tournament);
+  if (date && date < today) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
+  if (date === today && tournament.status === 'live') {
     const n = nowMin();
     if (n >= m.start_min && n < end) return { key: 'playing', label: '試合中', cls: 'live' };
     if (n >= end) return { key: 'waiting', label: '結果待ち', cls: 'wait' };
@@ -107,19 +131,29 @@ export function matchCard(m, cat, ctx) {
 }
 
 export function scheduleView(cat, ctx, filter = () => true) {
-  const list = cat.matches.filter(filter).sort((a, b) => a.start_min - b.start_min || a.court - b.court);
+  const cfg = cat.config;
+  const list = cat.matches.filter(filter).sort((a, b) => absMin(cfg, a) - absMin(cfg, b) || a.court - b.court);
   if (!list.length) return h('p', { class: 'empty' }, ctx.emptyText || '表示できる試合がありません');
+  const multi = dayTotal(cfg) > 1;
   const out = [];
   let cur = null;
   let prevSession = null;
+  let prevDay = -1;
   for (const m of list) {
+    const d = dayOf(cfg, m.slot);
+    if (d !== prevDay) {
+      if (multi) out.push(h('h2', { class: 'day-head' }, dayLabel(cat, d, ctx.tournament)));
+      prevDay = d;
+      prevSession = null;
+      cur = null;
+    }
     if (prevSession === 'am' && m.session === 'pm') out.push(h('div', { class: 'break' }, '昼休憩'));
     prevSession = m.session;
     if (!cur || cur.t !== m.start_min) {
       const listEl = h('div', { class: 'slot-list' });
       const head = h('div', { class: 'slot-head' }, h('span', { class: 't' }, toHHMM(m.start_min)));
       cur = { t: m.start_min, list: listEl, head, live: false };
-      out.push(h('section', { class: 'slot', 'data-t': m.start_min }, head, listEl));
+      out.push(h('section', { class: 'slot', 'data-t': m.start_min, 'data-d': d }, head, listEl));
     }
     if (!cur.live && statusOf(m, cat, ctx.tournament).key === 'playing') {
       cur.live = true;
@@ -204,7 +238,7 @@ export function bracketView(cat, ctx) {
         crest(info.team, 20), h('span', { class: 'nm' }, info.placeholder ? strip(info.text, sec.name) : info.text), h('span', { class: 's' }, sc ?? '', pk));
     };
     return h('div', { class: `node bm${isFinal ? ' final' : ''}` },
-      h('div', { class: 'bl' }, h('span', null, strip(m.label, sec.name)), h('span', null, `${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}`)),
+      h('div', { class: 'bl' }, h('span', null, strip(m.label, sec.name)), h('span', null, `${dayTotal(cat.config) > 1 ? `${dayOf(cat.config, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}`)),
       line('home'), line('away'));
   };
 
