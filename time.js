@@ -13,6 +13,7 @@ export const fromHHMM = (s) => {
 };
 
 export const MAX_DAYS = 4;
+export const MAX_GROUPS = 26; // A〜Z組
 
 // 枠番号が何日目（0始まり）か
 export const dayOf = (cfg, slot) => (cfg.dayBreakSlots || []).filter((b) => slot >= b).length;
@@ -75,7 +76,7 @@ export function normalizeConfig(c) {
   out.grouping = { ...d.grouping, ...(out.grouping || {}) };
   out.lottery = out.lottery || {};
   out.courts = Math.max(1, Math.min(12, Number(out.courts) || 1));
-  out.groups = Math.max(1, Math.min(16, Number(out.groups) || 1));
+  out.groups = Math.max(1, Math.min(MAX_GROUPS, Number(out.groups) || 1));
   out.advance = Number(out.advance) === 1 ? 1 : 2;
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);

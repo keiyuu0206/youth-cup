@@ -197,9 +197,11 @@ test('決勝: 同じ順位どうしのトーナメントが順位の数だけで
   for (const m of r.matches.filter((x) => x.home_ref?.t === 'grp')) assert.equal(m.home_ref.r, m.away_ref.r);
 });
 
-test('決勝: 全順位決定は2のべき乗でないと分かりやすいエラーを返す', () => {
+test('決勝: 12チームでも全順位決定ができ、1〜12位がもれなく決まる', () => {
   const r = norm(buildKnockout(lkCfg({ type: 'top', k: 3, mode: 'all' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
-  assert.match(r.error, /12チーム/);
+  assert.equal(r.error, undefined);
+  const places = r.matches.flatMap((m) => [m.place_w, m.place_l]).filter(Boolean).sort((a, b) => a - b);
+  assert.deepEqual(places, Array.from({ length: 12 }, (_, i) => i + 1));
 });
 
 test('設定の移行: 旧形式（各組から2チーム）は「上位チームだけ」に読み替える', () => {
@@ -292,4 +294,64 @@ test('複数日: 区切りを選んでいなくても、リーグ戦と決勝ト
   const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
   assert.ok(matches.filter((m) => m.stage === 'league').every((m) => day(m) === 0));
   assert.ok(matches.filter((m) => m.stage === 'knockout').every((m) => day(m) === 1));
+});
+
+// ---- 同じ順位どうしのトーナメントで全順位を決める ----
+const placesOf = (ms) => ms.flatMap((m) => [m.place_w, m.place_l]).filter(Boolean).sort((a, b) => a - b);
+const seq = (n) => Array.from({ length: n }, (_, i) => i + 1);
+
+test('順位別トーナメント: 4組×4チームで1〜16位が決まる（2位トーナメントの優勝は5位）', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'byrank', mode: 'all' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  assert.equal(r.error, undefined);
+  assert.deepEqual(placesOf(r.matches), seq(16));
+  const final2 = r.matches.find((m) => m.bracket === '2位トーナメント' && m.label.endsWith('決勝'));
+  assert.equal(final2.place_w, 5);
+  for (const m of r.matches.filter((x) => x.home_ref?.t === 'grp')) assert.equal(m.home_ref.r, m.away_ref.r);
+});
+
+test('順位別トーナメント: 3組（各トーナメント3チーム）でも1〜12位が決まる', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'byrank', mode: 'all' }, 3), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4 } }));
+  assert.equal(r.error, undefined);
+  assert.deepEqual(placesOf(r.matches), seq(12));
+  // 3チームのトーナメントは2試合（1チームがシード）
+  assert.equal(r.matches.filter((m) => m.bracket === '1位トーナメント').length, 2);
+});
+
+test('順位別トーナメント: 組の人数がそろっていなくても、いるチームの分だけ順位が決まる', () => {
+  // A・B組は4チーム、C組は3チーム → 4位トーナメントは2チーム
+  const r = norm(buildKnockout(lkCfg({ type: 'byrank', mode: 'all' }, 3), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 3 } }));
+  assert.deepEqual(placesOf(r.matches), seq(11));
+});
+
+test('トーナメントのみ: 6チームでも全順位決定で1〜6位が決まる', () => {
+  const cfg = normalizeConfig({ format: 'knockout', rankMode: 'all' });
+  const r = buildKnockout(cfg, { format: 'knockout', teamIds: 'abcdef'.split('') });
+  assert.equal(r.error, undefined);
+  assert.deepEqual(placesOf(r.matches), seq(6));
+});
+
+test('順位別トーナメント: 全試合の結果が出ると最終順位が1〜12位まで並ぶ（3組）', () => {
+  const cfg = lkCfg({ type: 'byrank', mode: 'all' }, 3);
+  const ts = teams(12).map((t, i) => ({ ...t, group_label: 'ABC'[i % 3] }));
+  const { matches } = generateCategory(cfg, ts);
+  const ms = matches.map((m, i) => ({ ...m, id: `m${i}`, status: 'none' }));
+  const num = (id) => Number(id.slice(1));
+  // 予選: 番号の若いチームが勝つ
+  for (const m of ms.filter((x) => x.stage === 'league')) {
+    const win = num(m.home_team_id) < num(m.away_team_id);
+    Object.assign(m, { status: 'confirmed', home_score: win ? 2 : 0, away_score: win ? 0 : 2 });
+  }
+  // 決勝トーナメント: 段ごとにチームを埋めて、番号の若いチームが勝つ
+  for (let round = 0; round < 6; round++) {
+    const ev = evaluateCategory(cfg, ts, ms);
+    for (const u of ev.updates) Object.assign(ms.find((m) => m.id === u.id), u);
+    for (const m of ms.filter((x) => x.stage === 'knockout' && x.status === 'none' && x.home_team_id && x.away_team_id)) {
+      const win = num(m.home_team_id) < num(m.away_team_id);
+      Object.assign(m, { status: 'confirmed', home_score: win ? 1 : 0, away_score: win ? 0 : 1 });
+    }
+  }
+  const ev = evaluateCategory(cfg, ts, ms);
+  assert.deepEqual(ev.finalRanking.map((r) => r.rank), seq(12));
+  assert.equal(new Set(ev.finalRanking.map((r) => r.teamId)).size, 12);
+  assert.equal(ev.finalRanking[0].teamId, 't1');
 });

@@ -86,7 +86,9 @@ export async function viewer(root, slug) {
         onclick: () => { st.catId = c.id; store.set(`v:${slug}:cat`, c.id); scrolledOnce = false; st.dayPicked = false; render(); } }, c.name))) : null;
 
     const body = h('main');
-    const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, body,
+    const sponsors = t.sponsors || [];
+    const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, sponsorTop(sponsors), body,
+      sponsorAll(sponsors),
       h('div', { class: 'share-row' },
         h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像'),
         h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, icon('list'), 'PDFで保存')),
@@ -119,7 +121,7 @@ export async function viewer(root, slug) {
       } else if (st.tab === 'standings') {
         blocks.push(standingsView(cat, ctx));
       } else if (st.tab === 'bracket') {
-        blocks.push(bracketView(cat, ctx));
+        blocks.push(bracketView(cat, { ...ctx, jumpNav: true }));
       } else {
         blocks.push(h('div', { style: { marginTop: '18px' } }, h('p', { class: 'muted small', style: { margin: '0 4px' } }, 'チームを選ぶと、そのチームの試合だけを表示します。')));
         blocks.push(teamsView(cat, { ...ctx, onPickTeam: (id) => { store.set(myKey(), id); st.filter = 'mine'; store.set(`v:${slug}:filter`, 'mine'); st.tab = 'schedule'; render(); window.scrollTo(0, 0); } }));
@@ -187,6 +189,42 @@ function dateRange(t, categories) {
   const list = [...dates].filter(Boolean).sort();
   if (list.length <= 1) return formatDate(t.date);
   return `${formatDate(list[0])} 〜 ${formatDate(list[list.length - 1]).replace(/^\d+年/, '')}`;
+}
+
+// ---------- スポンサー ----------
+// リンクはアプリのサーバー（/go/…）を経由し、クリック数を数えてから新しいタブで開く
+const sponsorLink = (sp, cls, child) => h('a', { class: cls, href: `/go/${sp.id}`, target: '_blank', rel: 'noopener sponsored', 'aria-label': `${sp.name}（新しいタブで開きます）` }, child);
+
+// 上部：自動で切り替わるバナー枠
+function sponsorTop(list) {
+  if (!list.length) return null;
+  const track = h('div', { class: 'sp-track' }, list.map((sp) => sponsorLink(sp, 'sp-slide', h('img', { src: sp.img, alt: sp.name }))));
+  const dots = list.length > 1 ? h('div', { class: 'sp-dots', 'aria-hidden': 'true' }, list.map((_, i) => h('i', { class: i === 0 ? 'on' : '' }))) : null;
+  const box = h('div', { class: 'sp-top' }, h('span', { class: 'sp-label' }, '協賛'), track, dots);
+  if (list.length > 1) {
+    const sync = () => {
+      const i = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+      [...dots.children].forEach((d, j) => d.classList.toggle('on', j === i));
+    };
+    track.addEventListener('scroll', () => requestAnimationFrame(sync), { passive: true });
+    let paused = false;
+    track.addEventListener('pointerdown', () => { paused = true; setTimeout(() => { paused = false; }, 8000); });
+    const timer = setInterval(() => {
+      if (!document.body.contains(track)) return clearInterval(timer);
+      if (paused || document.visibilityState !== 'visible') return;
+      const i = (Math.round(track.scrollLeft / Math.max(1, track.clientWidth)) + 1) % list.length;
+      track.scrollTo({ left: track.clientWidth * i, behavior: 'smooth' });
+    }, 5000);
+  }
+  return box;
+}
+
+// 下部：全スポンサーの一覧
+function sponsorAll(list) {
+  if (!list.length) return null;
+  return h('section', { class: 'sp-all', 'aria-label': '協賛' },
+    h('h2', { class: 'group-title' }, 'ご協賛'),
+    h('div', { class: 'sp-grid' }, list.map((sp) => sponsorLink(sp, 'sp-banner', h('img', { src: sp.img, alt: sp.name, loading: 'lazy' })))));
 }
 
 function skeleton() {

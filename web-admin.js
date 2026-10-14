@@ -1,6 +1,6 @@
 import { api, ApiError } from './web-api.js';
 import { openPrintDialog } from './web-print.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
@@ -41,13 +41,19 @@ function knockoutPlanPanel(f, cat, redraw) {
   const plan = f.knockoutPlan || (f.knockoutPlan = { type: 'top', k: f.advance || 2, mode: f.rankMode || 'top3', brackets: [] });
   const sizes = estimateGroupSizes(f, cat);
   const maxRank = Math.max(...Object.values(sizes));
+  // 各トーナメントのチーム数と、決まる順位（全体の通し順位）
+  let offset = 0;
   const preview = expandPlanPreview(plan, maxRank).map((b) => {
     let n = 0;
     for (let r = b.from; r <= b.to; r++) for (const v of Object.values(sizes)) if (v >= r) n++;
     const range = b.from === b.to ? `各組${b.from}位` : `各組${b.from}〜${b.to}位`;
-    const pow2 = n >= 2 && (n & (n - 1)) === 0;
     const mode = b.mode || plan.mode;
-    return { text: `${b.name}：${range}（${n}チーム）`, warn: n < 2 ? '2チーム未満のため作られません' : mode === 'all' && !pow2 ? '2・4・8・16チームでないため全順位決定にできません' : null };
+    const first = offset + 1;
+    const decided = n < 2 ? null
+      : mode === 'all' ? (n === 2 ? `${first}・${first + 1}位` : `${first}〜${offset + n}位`)
+        : n >= 4 ? `${first}〜${first + 2}位` : `${first}・${first + 1}位`;
+    offset += n;
+    return { name: b.name, range, n, decided, warn: n < 2 ? '2チーム未満のため作られません' : null };
   });
   const set = (patch) => { Object.assign(plan, patch); redraw(); };
 
@@ -81,8 +87,11 @@ function knockoutPlanPanel(f, cat, redraw) {
     custom,
     h('div', { class: 'notice', style: { marginTop: '12px' } },
       h('div', { style: { fontWeight: 700, marginBottom: '4px' } }, cat.teams.length ? `いまの${cat.teams.length}チーム・${f.groups}組の場合` : `${f.groups}組の場合（チーム登録後に人数が正確になります）`),
-      preview.map((p) => h('div', null, p.text, p.warn ? h('span', { style: { color: 'var(--live)', fontWeight: 700 } }, `　${p.warn}`) : null))),
-    h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。'));
+      h('div', { class: 'plan-preview' }, preview.map((p) => h('div', { class: 'pp-row' },
+        h('strong', null, p.name),
+        h('span', null, `${p.range}（${p.n}チーム）`),
+        p.warn ? h('span', { class: 'pp-warn' }, p.warn) : h('span', { class: 'pp-rank' }, `${p.decided}を決定`))))),
+    h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。チーム数が2・4・8・16でないときは、上位の組の1位から順にシード（不戦）が入ります。'));
 }
 
 // ---------- 複数日の設定 ----------
@@ -372,7 +381,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), infoPanel(t)),
+          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), infoPanel(t), sponsorPanel()),
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
@@ -450,6 +459,79 @@ async function tournamentView(root, id, navigate) {
           if (!(await confirmDialog('大会を削除します', `「${t.name}」のチーム・日程・結果がすべて消えます。元に戻せません。`, '削除する', true))) return;
           if (await run(() => api('DELETE', `/api/admin/tournaments/${id}`), '削除しました')) navigate('/admin');
         } }, 'この大会を削除')));
+  }
+
+  // ----- スポンサー -----
+
+  function sponsorPanel() {
+    const list = data.sponsors || [];
+    const move = async (i, d) => {
+      const ids = list.map((x) => x.id);
+      [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+      if (await run(() => api('POST', `/api/admin/tournaments/${id}/sponsors/order`, { ids }))) await reload();
+    };
+    return h('section', { class: 'panel' },
+      h('div', { class: 'panel-head' }, h('h2', null, 'スポンサー'), h('span', { class: 'muted small' }, `${list.length}件`), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editSponsor(null) }, '＋ 追加')),
+      list.length ? h('div', { class: 'sp-list' }, list.map((sp, i) => h('div', { class: `sp-item${sp.active ? '' : ' off'}` },
+        h('img', { class: 'sp-thumb', src: sp.img, alt: sp.name, loading: 'lazy' }),
+        h('div', { class: 'sp-row' },
+          h('strong', null, sp.name), sp.active ? null : h('span', { class: 'tag' }, '非表示'), h('span', { class: 'spacer' }),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': '上へ', disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': '下へ', disabled: i === list.length - 1, onclick: () => move(i, 1) }, '↓')),
+        h('div', { class: 'sp-stat' },
+          h('span', { class: 'sp-count' }, 'クリック ', h('strong', null, `${sp.clicks}回`), h('span', { class: 'muted' }, `（今日 ${sp.clicksToday}回）`)),
+          h('span', { class: 'sp-actions' },
+            h('button', { class: 'link-btn', type: 'button', onclick: () => clickHistory(sp) }, '日別の回数'),
+            h('button', { class: 'link-btn', type: 'button', onclick: () => editSponsor(sp) }, '編集')))))) :
+        h('p', { class: 'muted small', style: { margin: 0 } }, 'バナー画像とリンク先を登録すると、閲覧ページとPDFに表示されます。'));
+  }
+
+  function editSponsor(sp) {
+    const f = { name: sp ? sp.name : '', url: sp ? sp.url : 'https://', image: null, active: sp ? !!sp.active : true };
+    const preview = h('div', { class: 'sp-preview' });
+    const drawPreview = () => mount(preview, f.image || sp ? h('img', { src: f.image || sp.img, alt: '' }) : h('span', { class: 'muted small' }, '横4：縦1の画像（例：1200×300）がきれいに表示されます'));
+    drawPreview();
+    modal({
+      title: sp ? 'スポンサーを編集' : 'スポンサーを追加',
+      content: h('div', { class: 'stack' },
+        h('label', { class: 'field' }, h('span', null, 'スポンサー名'), h('input', { type: 'text', value: f.name, placeholder: '例: さくらスポーツ', oninput: (e) => { f.name = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', null, 'リンク先URL'), h('input', { type: 'text', inputmode: 'url', value: f.url, oninput: (e) => { f.url = e.target.value.trim(); } })),
+        h('div', null, h('span', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, 'バナー画像'), preview,
+          h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'バナー画像', onchange: async (e) => {
+            const v = await run(() => resizeBanner(e.target.files[0]));
+            if (v) { f.image = v; drawPreview(); }
+          } })),
+        sp ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.active, onchange: (e) => { f.active = e.target.checked; } }), '閲覧ページとPDFに表示する') : null,
+        sp ? h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
+          if (!(await confirmDialog(`${sp.name}を削除します`, 'クリック数の記録も消えます。', '削除する', true))) return;
+          document.querySelector('.modal-back')?.remove();
+          if (await run(() => api('DELETE', `/api/admin/sponsors/${sp.id}`), '削除しました')) await reload();
+        } }, 'このスポンサーを削除') : null),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '保存', kind: 'btn-primary', onClick: async () => {
+        if (!sp && !f.image) { toast('バナー画像を選んでください', true); return true; }
+        const r = sp
+          ? await run(() => api('PATCH', `/api/admin/sponsors/${sp.id}`, f), '保存しました')
+          : await run(() => api('POST', `/api/admin/tournaments/${id}/sponsors`, f), '追加しました');
+        if (!r) return true;
+        await reload();
+      } }],
+    });
+  }
+
+  async function clickHistory(sp) {
+    const r = await run(() => api('GET', `/api/admin/sponsors/${sp.id}/clicks`));
+    if (!r) return;
+    const max = Math.max(1, ...r.days.map((x) => x.count));
+    modal({
+      title: `${sp.name}のクリック数`,
+      content: r.days.length ? h('div', { class: 'stack' },
+        h('p', { class: 'muted small', style: { margin: 0 } }, `合計 ${sp.clicks}回。同じ人が30秒以内に何度押しても1回と数えます。`),
+        h('div', { class: 'sp-days' }, r.days.map((x) => h('div', { class: 'sp-day' },
+          h('span', null, formatDate(x.day)), h('span', { class: 'bar' }, h('i', { style: { width: `${Math.round((x.count / max) * 100)}%` } })), h('strong', null, `${x.count}回`))))) :
+        h('p', null, 'まだクリックされていません。'),
+      actions: [{ label: '閉じる', kind: 'btn-ghost' }],
+    });
   }
 
   async function getTemplates() {
@@ -571,7 +653,7 @@ async function tournamentView(root, id, navigate) {
         h('div', { class: 'grid-form' },
           h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '形式'), h('select', { onchange: (e) => { f.format = e.target.value; draw(); } },
             Object.entries(FORMAT_LABEL).map(([v, l]) => h('option', { value: v, selected: f.format === v }, l)))),
-          f.format !== 'knockout' ? num('groups', '組の数', { min: 1, max: 16 }) : null,
+          f.format !== 'knockout' ? num('groups', '組の数', { min: 1, max: 26 }) : null,
           f.format === 'knockout' ? h('label', { class: 'field', style: { gridColumn: 'span 2' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => { f.rankMode = e.target.value; } },
             Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: f.rankMode === v }, l)))) : null),
         f.format === 'league_knockout' ? knockoutPlanPanel(f, cat, draw) : null,

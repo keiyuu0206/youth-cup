@@ -95,3 +95,25 @@ CREATE TABLE rate_limits (
   count INTEGER NOT NULL,
   reset_at INTEGER NOT NULL
 );
+
+-- スポンサー（バナーとリンク先）
+CREATE TABLE sponsors (
+  id TEXT PRIMARY KEY,
+  tournament_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  image TEXT NOT NULL,              -- data URL
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_sponsors_tournament ON sponsors(tournament_id);
+
+-- スポンサーの日ごとのクリック数
+CREATE TABLE sponsor_clicks (
+  sponsor_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (sponsor_id, day)
+);

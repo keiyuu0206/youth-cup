@@ -16,7 +16,9 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     sections: { groups: true, schedule: true, league: true, bracket: true },
     blank: false,
     day: 'all',
+    sponsors: true,
   };
+  const sponsors = tournament.sponsors || [];
   const content = h('div');
   const draw = () => {
     const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
@@ -41,6 +43,8 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           Array.from({ length: maxDays }, (_, d) => h('option', { value: String(d), selected: st.day === String(d) }, `${d + 1}日目のみ`)))) : null,
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
           'スコア欄を空欄にする（記入用・貼り出し用）'),
+        sponsors.length ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
+          `協賛スポンサーを表示する（${sponsors.length}件）`) : null,
         h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
   };
   draw();
@@ -75,6 +79,9 @@ function printDocument(t, cats, opts) {
         h('h1', null, t.name),
         h('div', { class: 'pd-sub' }, t.date ? h('span', null, `開催日　${periodText(t)}`) : null, t.venue ? h('span', null, `会場　${t.venue}`) : null)),
       h('div', { class: 'pd-out' }, `${stamp} 時点`, h('br'), opts.blank ? '記入用' : '確定した結果のみ掲載')),
+    opts.sponsors && (t.sponsors || []).length ? h('div', { class: 'pd-sponsors' },
+      h('span', { class: 'pd-sp-label' }, '協賛'),
+      h('div', { class: 'pd-sp-list' }, t.sponsors.map((sp) => h('img', { src: sp.img, alt: sp.name })))) : null,
     cats.map((cat, i) => categoryBlock(t, cat, opts, i === 0)));
   mount(root, doc);
 
@@ -100,7 +107,10 @@ function printDocument(t, cats, opts) {
   document.body.classList.add('printing');
   const done = () => { document.title = title; };
   window.addEventListener('afterprint', done, { once: true });
-  setTimeout(() => window.print(), 120);
+  // バナー画像などの読み込みを待ってから印刷画面を開く（最大4秒）
+  const imgs = [...root.querySelectorAll('img')].filter((img) => !img.complete);
+  const loaded = Promise.all(imgs.map((img) => new Promise((ok) => { img.onload = ok; img.onerror = ok; })));
+  Promise.race([loaded, new Promise((ok) => setTimeout(ok, 4000))]).then(() => setTimeout(() => window.print(), 120));
 }
 
 function categoryBlock(t, catIn, opts, first) {

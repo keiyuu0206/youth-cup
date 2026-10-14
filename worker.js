@@ -60,6 +60,15 @@ async function ensureSchema(db) {
     try { await db.prepare('ALTER TABLE tournaments ADD COLUMN end_date TEXT').run(); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
+  const tables = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).results.map((r) => r.name);
+  if (!tables.includes('sponsors') || !tables.includes('sponsor_clicks')) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS sponsors (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
+        image TEXT NOT NULL, sort INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_sponsors_tournament ON sponsors(tournament_id)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS sponsor_clicks (sponsor_id TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (sponsor_id, day))'),
+    ]);
+  }
   schemaChecked = true;
 }
 
@@ -88,6 +97,12 @@ function checkRange(date, end) {
   if (end < date) fail(400, '終了日は開始日より後の日付にしてください');
   if (end > addDays(date, MAX_DAYS - 1)) fail(400, `開催期間は最大${MAX_DAYS}日までです`);
   return end;
+}
+
+// ---------- 書き込み ----------
+// 大きな大会（300試合など）でも確実に保存できるよう、100件ずつに分けて実行する
+async function batchAll(db, stmts, size = 100) {
+  for (let i = 0; i < stmts.length; i += size) await db.batch(stmts.slice(i, i + size));
 }
 
 // ---------- 読み込み ----------
@@ -150,7 +165,59 @@ async function syncKnockout(db, cat) {
     const flag = conflict.has(m.id) ? 1 : 0;
     if (flag !== m.ref_conflict) stmts.push(db.prepare('UPDATE matches SET ref_conflict = ? WHERE id = ?').bind(flag, m.id));
   }
-  if (stmts.length) await db.batch(stmts);
+  if (stmts.length) await batchAll(db, stmts);
+}
+
+// ---------- スポンサー ----------
+
+const MAX_BANNER = 700_000;
+function checkBanner(v) {
+  if (typeof v !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(v)) fail(400, 'バナーは PNG・JPEG・WebP の画像を選んでください');
+  if (v.length > MAX_BANNER) fail(400, 'バナーの画像が大きすぎます');
+  return v;
+}
+function checkUrl(v) {
+  const u = String(v || '').trim();
+  if (!/^https?:\/\/[^\s]+$/i.test(u)) fail(400, 'リンク先は https:// から始まるURLを入力してください');
+  return u;
+}
+const jstDay = () => new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+const sponsorImg = (sp) => `/img/s/${sp.id}?v=${encodeURIComponent(sp.updated_at)}`;
+
+async function listSponsors(db, tid, withStats = false) {
+  const rows = (await db.prepare('SELECT id, tournament_id, name, url, sort, active, created_at, updated_at FROM sponsors WHERE tournament_id = ? ORDER BY sort, created_at').bind(tid).all()).results;
+  if (!withStats || !rows.length) return rows.map((r) => ({ ...r, img: sponsorImg(r) }));
+  const today = jstDay();
+  const stats = (await db.prepare(`SELECT sponsor_id, SUM(count) AS total, SUM(CASE WHEN day = ? THEN count ELSE 0 END) AS today
+      FROM sponsor_clicks WHERE sponsor_id IN (SELECT id FROM sponsors WHERE tournament_id = ?) GROUP BY sponsor_id`).bind(today, tid).all()).results;
+  const by = Object.fromEntries(stats.map((x) => [x.sponsor_id, x]));
+  return rows.map((r) => ({ ...r, img: sponsorImg(r), clicks: by[r.id] ? by[r.id].total : 0, clicksToday: by[r.id] ? by[r.id].today : 0 }));
+}
+const publicSponsors = (list) => list.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, img: x.img }));
+
+// /go/:id … クリック数を数えてからスポンサーのサイトへ移動する
+async function sponsorRedirect(req, db, id) {
+  const sp = await db.prepare('SELECT id, url FROM sponsors WHERE id = ?').bind(id).first();
+  if (!sp) return new Response('見つかりません', { status: 404 });
+  const ip = req.headers.get('CF-Connecting-IP') || 'local';
+  // 同じ人の短時間の連打は1回に数える
+  const rl = await rateLimit(db, `click:${id}:${ip}`, 1, 30);
+  if (rl.ok) {
+    await db.prepare('INSERT INTO sponsor_clicks (sponsor_id, day, count) VALUES (?, ?, 1) ON CONFLICT(sponsor_id, day) DO UPDATE SET count = count + 1').bind(id, jstDay()).run();
+  }
+  return new Response(null, { status: 302, headers: { Location: sp.url, 'Cache-Control': 'no-store', 'Referrer-Policy': 'origin' } });
+}
+
+// /img/s/:id … バナー画像（ページのデータとは別に配信し、長くキャッシュする）
+async function sponsorImage(db, id) {
+  const sp = await db.prepare('SELECT image FROM sponsors WHERE id = ?').bind(id).first();
+  if (!sp) return new Response('見つかりません', { status: 404 });
+  const m = sp.image.match(/^data:([^;]+);base64,(.*)$/);
+  if (!m) return new Response('画像が正しくありません', { status: 500 });
+  const bin = atob(m[2]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Response(bytes, { headers: { 'Content-Type': m[1], 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' } });
 }
 
 // ---------- 公開用の整形 ----------
@@ -182,8 +249,9 @@ function stripConfig(cfg) {
 
 async function publicPayload(db, t, level) {
   const cats = await loadFull(db, t);
+  const sponsors = publicSponsors(await listSponsors(db, t.id));
   return {
-    tournament: publicTournament(t),
+    tournament: { ...publicTournament(t), sponsors },
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
@@ -244,6 +312,17 @@ const route = (method, pattern, handler, auth = null) => {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    const go = url.pathname.match(/^\/go\/([\w-]+)$/);
+    const img = url.pathname.match(/^\/img\/s\/([\w-]+)$/);
+    if (go || img) {
+      try {
+        await ensureSchema(env.DB);
+        return go ? await sponsorRedirect(req, env.DB, go[1]) : await sponsorImage(env.DB, img[1]);
+      } catch (e) {
+        console.error(e);
+        return new Response('エラーが発生しました', { status: 500 });
+      }
+    }
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, url);
     try {
       if (!env.SESSION_SECRET || !env.ADMIN_PASSWORD) fail(500, 'サーバーの初期設定が完了していません（ADMIN_PASSWORD と SESSION_SECRET を設定してください）');
@@ -325,7 +404,8 @@ route('GET', '/api/admin/tournaments/:id', async ({ db, params, url }) => {
     const names = Object.fromEntries(c.teams.map((x) => [x.id, x.name]));
     return { ...c, warnings: scheduleWarnings(c.config, c.matches, (id) => names[id] || '未定'), matchLength: len };
   });
-  return json({ tournament: publicTournament(t, true), categories: out });
+  const sponsors = await listSponsors(db, t.id, true);
+  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors) }, categories: out, sponsors });
 }, 'admin');
 
 const STATUSES = ['draft', 'published', 'live', 'finished'];
@@ -360,7 +440,7 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
       if (!dates.length && newDates.length) dates = [newDates[0]];
       stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify({ ...cfg, dayDates: dates, dayCount: Math.max(1, dates.length) }), c.id));
     }
-    if (stmts.length) await db.batch(stmts);
+    if (stmts.length) await batchAll(db, stmts);
   }
   await bump(db, t.id);
   return json({ ok: true });
@@ -382,9 +462,11 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params }) => {
     stmts.push(db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id));
     stmts.push(db.prepare('DELETE FROM teams WHERE category_id = ?').bind(c.id));
   }
+  stmts.push(db.prepare('DELETE FROM sponsor_clicks WHERE sponsor_id IN (SELECT id FROM sponsors WHERE tournament_id = ?)').bind(t.id));
+  stmts.push(db.prepare('DELETE FROM sponsors WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM categories WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM tournaments WHERE id = ?').bind(t.id));
-  await db.batch(stmts);
+  await batchAll(db, stmts);
   return json({ ok: true });
 }, 'admin');
 
@@ -420,7 +502,7 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   if (timingChanged && editable(t)) {
     const { matches } = await loadCategoryData(db, c.id);
     applyTimes(cfg, matches);
-    await db.batch(matches.map((m) => db.prepare('UPDATE matches SET start_min = ?, session = ?, time_changed = 0 WHERE id = ?').bind(m.start_min, m.session, m.id)));
+    await batchAll(db, matches.map((m) => db.prepare('UPDATE matches SET start_min = ?, session = ?, time_changed = 0 WHERE id = ?').bind(m.start_min, m.session, m.id)));
   }
   await syncKnockout(db, { ...c, config: cfg });
   await bump(db, t.id);
@@ -429,7 +511,7 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
 
 route('DELETE', '/api/admin/categories/:cid', async ({ db, params }) => {
   const c = await getCategory(db, params.cid);
-  await db.batch([
+  await batchAll(db, [
     db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id),
     db.prepare('DELETE FROM teams WHERE category_id = ?').bind(c.id),
     db.prepare('DELETE FROM categories WHERE id = ?').bind(c.id),
@@ -453,7 +535,7 @@ route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params }) =>
       .bind(uid(), c.id, name, x.short_name || null, x.club || null, checkLogo(x.logo), count.n + i));
   });
   if (!stmts.length) fail(400, 'チーム名を入力してください');
-  await db.batch(stmts);
+  await batchAll(db, stmts);
   await bump(db, c.tournament_id);
   return json({ ok: true, added: stmts.length });
 }, 'admin');
@@ -527,7 +609,7 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params })
   // 組み分けが変わったら抽選結果はリセット
   const cfg = { ...c.config, lottery: {}, dayBreakSlots };
   stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(cfg), c.id));
-  await db.batch(stmts);
+  await batchAll(db, stmts);
   await bump(db, t.id);
   return json({ ok: true, warnings });
 }, 'admin');
@@ -548,7 +630,7 @@ route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params }) => 
   if (other) { other.slot = m.slot; other.court = m.court; }
   m.slot = slot; m.court = court;
   applyTimes(c.config, matches);
-  await db.batch(matches.map((x) => db.prepare('UPDATE matches SET slot = ?, court = ?, start_min = ?, session = ? WHERE id = ?').bind(x.slot, x.court, x.start_min, x.session, x.id)));
+  await batchAll(db, matches.map((x) => db.prepare('UPDATE matches SET slot = ?, court = ?, start_min = ?, session = ? WHERE id = ?').bind(x.slot, x.court, x.start_min, x.session, x.id)));
   await bump(db, t.id);
   return json({ ok: true });
 }, 'admin');
@@ -568,7 +650,7 @@ route('POST', '/api/admin/categories/:cid/delay', async ({ req, db, params }) =>
   const names = Object.fromEntries(teams.map((x) => [x.id, x.name]));
   const plan = planDelay(c.config, matches, target, minutes, b.lunchMode, (id) => names[id] || '未定');
   if (plan.needsLunchChoice || b.dryRun) return json(plan);
-  await db.batch(plan.changes.map((ch) => db.prepare('UPDATE matches SET start_min = ?, time_changed = 1 WHERE id = ?').bind(ch.start_min, ch.id)));
+  await batchAll(db, plan.changes.map((ch) => db.prepare('UPDATE matches SET start_min = ?, time_changed = 1 WHERE id = ?').bind(ch.start_min, ch.id)));
   await bump(db, t.id);
   return json({ ok: true, changed: plan.changes.length, warnings: plan.warnings });
 }, 'admin');
@@ -630,7 +712,7 @@ route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params }) 
   const targets = picked.filter((m) => !needsPk(m));
   const skipped = picked.length - targets.length;
   if (targets.length) {
-    await db.batch(targets.map((m) => db.prepare("UPDATE matches SET status = 'confirmed', version = version + 1 WHERE id = ? AND status = 'provisional'").bind(m.id)));
+    await batchAll(db, targets.map((m) => db.prepare("UPDATE matches SET status = 'confirmed', version = version + 1 WHERE id = ? AND status = 'provisional'").bind(m.id)));
     await syncKnockout(db, c);
     await bump(db, c.tournament_id);
   }
@@ -664,6 +746,61 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
   await syncKnockout(db, { ...c, config: cfg });
   await bump(db, c.tournament_id);
   return json({ ok: true });
+}, 'admin');
+
+// ---------- 管理者: スポンサー ----------
+
+route('POST', '/api/admin/tournaments/:id/sponsors', async ({ req, db, params }) => {
+  const t = await getTournament(db, params.id);
+  const b = await body(req);
+  const name = String(b.name || '').trim();
+  if (!name) fail(400, 'スポンサー名を入力してください');
+  const count = await db.prepare('SELECT COUNT(*) AS n FROM sponsors WHERE tournament_id = ?').bind(t.id).first();
+  if (count.n >= 30) fail(400, 'スポンサーは30件まで登録できます');
+  await db.prepare('INSERT INTO sponsors (id, tournament_id, name, url, image, sort, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)')
+    .bind(uid(), t.id, name, checkUrl(b.url), checkBanner(b.image), count.n, now(), now()).run();
+  await bump(db, t.id);
+  return json({ ok: true });
+}, 'admin');
+
+route('PATCH', '/api/admin/sponsors/:sid', async ({ req, db, params }) => {
+  const sp = await db.prepare('SELECT * FROM sponsors WHERE id = ?').bind(params.sid).first();
+  if (!sp) fail(404, 'スポンサーが見つかりません');
+  const b = await body(req);
+  await db.prepare('UPDATE sponsors SET name = ?, url = ?, image = ?, active = ?, updated_at = ? WHERE id = ?').bind(
+    b.name !== undefined ? String(b.name).trim() || sp.name : sp.name,
+    b.url !== undefined ? checkUrl(b.url) : sp.url,
+    b.image ? checkBanner(b.image) : sp.image,
+    b.active !== undefined ? (b.active ? 1 : 0) : sp.active,
+    now(), sp.id).run();
+  await bump(db, sp.tournament_id);
+  return json({ ok: true });
+}, 'admin');
+
+route('DELETE', '/api/admin/sponsors/:sid', async ({ db, params }) => {
+  const sp = await db.prepare('SELECT * FROM sponsors WHERE id = ?').bind(params.sid).first();
+  if (!sp) fail(404, 'スポンサーが見つかりません');
+  await db.batch([
+    db.prepare('DELETE FROM sponsor_clicks WHERE sponsor_id = ?').bind(sp.id),
+    db.prepare('DELETE FROM sponsors WHERE id = ?').bind(sp.id),
+  ]);
+  await bump(db, sp.tournament_id);
+  return json({ ok: true });
+}, 'admin');
+
+route('POST', '/api/admin/tournaments/:id/sponsors/order', async ({ req, db, params }) => {
+  const t = await getTournament(db, params.id);
+  const b = await body(req);
+  const ids = Array.isArray(b.ids) ? b.ids : [];
+  await batchAll(db, ids.map((id, i) => db.prepare('UPDATE sponsors SET sort = ? WHERE id = ? AND tournament_id = ?').bind(i, id, t.id)));
+  await bump(db, t.id);
+  return json({ ok: true });
+}, 'admin');
+
+// 日ごとのクリック数
+route('GET', '/api/admin/sponsors/:sid/clicks', async ({ db, params }) => {
+  const r = await db.prepare('SELECT day, count FROM sponsor_clicks WHERE sponsor_id = ? ORDER BY day DESC LIMIT 60').bind(params.sid).all();
+  return json({ days: r.results });
 }, 'admin');
 
 // ---------- 管理者: テンプレート ----------

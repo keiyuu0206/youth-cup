@@ -116,12 +116,18 @@ class Builder {
     }
   }
 
-  // 全順位決定（2のべき乗のみ）
+  // 全順位決定。不戦（null）があっても順位を決める（試合をしない枠は、相手側の結果で順位を割り当てる）
   placement(entrants, base, level, prefix = '', offset = 0, bracket = null) {
     const L = (x) => (prefix ? `${prefix} ${x}` : x);
     const size = entrants.length;
+    const real = entrants.filter(Boolean);
+    if (!real.length) return;
     if (size === 2) {
-      this.add({ home: entrants[0], away: entrants[1], label: L(base === 1 ? '決勝' : `${base}位決定戦`), level, base: offset + base, bracket, place_w: offset + base, place_l: offset + base + 1 });
+      if (real.length === 2) {
+        this.add({ home: entrants[0], away: entrants[1], label: L(base === 1 ? '決勝' : `${base}位決定戦`), level, base: offset + base, bracket, place_w: offset + base, place_l: offset + base + 1 });
+      } else {
+        this.assignPlace(real[0], offset + base);
+      }
       return;
     }
     const round = mainName(size) || '1回戦';
@@ -129,12 +135,28 @@ class Builder {
     const winners = [];
     const losers = [];
     for (let i = 0; i < size; i += 2) {
-      const code = this.add({ home: entrants[i], away: entrants[i + 1], label, level, base: offset + base, bracket });
-      winners.push({ t: 'win', m: code });
-      losers.push({ t: 'lose', m: code });
+      const a = entrants[i];
+      const b = entrants[i + 1];
+      if (a && b) {
+        const code = this.add({ home: a, away: b, label, level, base: offset + base, bracket });
+        winners.push({ t: 'win', m: code });
+        losers.push({ t: 'lose', m: code });
+      } else {
+        winners.push(a || b || null);
+        losers.push(null);
+      }
     }
     this.placement(winners, base, level + 1, prefix, offset, bracket);
     this.placement(losers, base + size / 2, level + 1, prefix, offset, bracket);
+  }
+
+  // 試合をせずに順位が決まるとき（相手が不戦）、その順位を元の試合の勝者・敗者に付ける
+  assignPlace(ref, place) {
+    if (!ref || (ref.t !== 'win' && ref.t !== 'lose')) return;
+    const m = this.matches.find((x) => x.code === ref.m);
+    if (!m) return;
+    if (ref.t === 'win') m.place_w = place;
+    else m.place_l = place;
   }
 
   finish() {
@@ -183,7 +205,6 @@ export function buildKnockout(cfg, ctx) {
     const n = ctx.teamIds.length;
     if (n < 2) return { matches: [], error: 'トーナメントには2チーム以上が必要です' };
     const size = nextPow2(n);
-    if (mode === 'all' && !isPow2(n)) return { matches: [], error: `全順位決定は 2・4・8・16 チームのときに使えます（現在 ${n} チーム）` };
     const order = seedOrder(size);
     const entrants = order.map((seed) => (seed <= n ? { t: 'team', id: ctx.teamIds[seed - 1] } : null));
     if (mode === 'all') b.placement(entrants, 1, 0);
@@ -207,9 +228,6 @@ export function buildKnockout(cfg, ctx) {
     const k = br.to - br.from + 1;
     const cross = [2, 4, 8].includes(G) && k <= 2 && groups.every((g) => ctx.groupSizes[g] >= br.to);
     const entrants = cross ? crossEntrants(G, k, br.from - 1) : seedPositions(refs);
-    if (br.mode === 'all' && !isPow2(N)) {
-      return { matches: [], error: `${br.name}は${N}チームなので全順位決定にできません（2・4・8・16チームのときに使えます）。「1〜3位を決める」を選んでください` };
-    }
     const prefix = multi ? br.name : '';
     const tag = multi ? br.name : null;
     if (br.mode === 'all') b.placement(entrants, 1, 0, prefix, offset, tag);

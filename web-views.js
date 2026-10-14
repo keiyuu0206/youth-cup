@@ -249,7 +249,7 @@ export function bracketView(cat, ctx) {
   };
 
   // 「どの試合の勝者か」をたどって木を作り、線でつないで描く
-  const bracketOf = (sec) => {
+  const bracketOf = (sec, si) => {
     const byCode = Object.fromEntries(sec.list.map((m) => [m.code, m]));
     const fed = new Set();
     for (const m of sec.list) for (const r of [m.home_ref, m.away_ref]) if (r && r.t === 'win' && byCode[r.m]) fed.add(r.m);
@@ -270,19 +270,85 @@ export function bracketView(cat, ctx) {
       const info = sideInfo(main, w, cat, cache);
       return h('div', { class: `champ${info.team && info.team.id === ctx.myTeam ? ' mine' : ''}` }, icon('trophy'), h('span', null, h('small', null, main.place_w === 1 ? '優勝' : `${main.place_w}位`), info.text));
     };
+    const title = (r) => strip(r.label, sec.name).replace(/\s\d+$/, '');
+    // 移動ボタン用に、図ごとの目印を記録する
+    sec.subs = [{ id: `bk-${si}-main`, label: `${title(main)}まで` }, ...others.map((r, j) => ({ id: `bk-${si}-${j}`, label: title(r) }))];
     return h('div', null,
       depth(main) > 2 ? h('p', { class: 'muted small scroll-hint' }, '横にスクロールすると決勝まで見られます') : null,
-      h('div', { class: 'tree-scroll' }, h('div', { class: 'tree-root' }, node(main, true), champ())),
-      others.length ? h('div', { class: 'tree-others' }, others.map((r) => h('div', null,
-        h('h3', null, strip(r.label, sec.name).replace(/\s\d+$/, '')),
+      h('div', { class: 'tree-scroll bk-target', id: `bk-${si}-main` }, h('div', { class: 'tree-root' }, node(main, true), champ())),
+      others.length ? h('div', { class: 'tree-others' }, others.map((r, j) => h('div', { class: 'bk-target', id: `bk-${si}-${j}` },
+        h('h3', null, title(r)),
         h('div', { class: 'tree-scroll' }, h('div', { class: 'tree-root' }, node(r)))))) : null);
   };
 
-  return h('div', null,
-    finalRankingView(cat, ctx),
-    sections.map((sec) => h('section', null,
-      h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表')),
-      bracketOf(sec))));
+  const ranking = finalRankingView(cat, ctx);
+  if (ranking) { ranking.id = 'bk-rank'; ranking.classList.add('bk-target'); }
+  const secEls = sections.map((sec, si) => h('section', { class: 'bk-target', id: `bk-${si}` },
+    h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表')),
+    bracketOf(sec, si)));
+  const items = [
+    ranking ? { id: 'bk-rank', label: '最終順位', subs: [] } : null,
+    ...sections.map((sec, si) => ({ id: `bk-${si}`, label: sec.name || 'トーナメント表', subs: sec.subs.length > 1 ? sec.subs : [] })),
+  ].filter(Boolean);
+  const needNav = ctx.jumpNav && (items.length > 1 || items.some((x) => x.subs.length));
+  return h('div', null, needNav ? bracketNav(items) : null, ranking, secEls);
+}
+
+// トーナメント表の上部に固定する移動ボタン（1段目: トーナメント、2段目: その中の順位決定戦）
+function bracketNav(items) {
+  const st = { sec: items[0].id, sub: null, lockUntil: 0 };
+  const nav = h('nav', { class: 'bk-nav', 'aria-label': 'トーナメント内の移動' });
+  const jump = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    st.lockUntil = Date.now() + 1200; // 移動中は選択状態を自動で変えない
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const chip = (id, label, on, small) => h('button', { class: `chip-btn${small ? ' sm' : ''}`, type: 'button', 'aria-pressed': String(on), 'data-id': id,
+    onclick: () => { const sec = items.find((x) => x.id === id || x.subs.some((s) => s.id === id)); st.sec = sec.id; st.sub = sec.id === id ? null : id; draw(); jump(id); } }, label);
+  const draw = () => {
+    const cur = items.find((x) => x.id === st.sec) || items[0];
+    mountTo(nav,
+      h('div', { class: 'chips' }, items.map((x) => chip(x.id, x.label, x.id === cur.id))),
+      cur.subs.length ? h('div', { class: 'chips sub' }, cur.subs.map((x) => chip(x.id, x.label, x.id === st.sub, true))) : null);
+    // 選択中のボタンが見えるように、ボタンの帯の中だけを横にずらす（ページは動かさない）
+    for (const el of nav.querySelectorAll('[aria-pressed="true"]')) {
+      const row = el.parentElement;
+      const left = el.offsetLeft - row.offsetLeft;
+      if (left < row.scrollLeft || left + el.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = Math.max(0, left - 16);
+    }
+  };
+  draw();
+  // スクロールに合わせて、いま見ている場所を選択状態にする
+  let ticking = false;
+  const onScroll = () => {
+    if (!document.body.contains(nav)) return window.removeEventListener('scroll', onScroll);
+    if (ticking || Date.now() < st.lockUntil) return;
+    ticking = true;
+    requestAnimationFrame(() => {
+      ticking = false;
+      const line = nav.getBoundingClientRect().bottom + 24;
+      let sec = items[0].id;
+      let sub = null;
+      for (const x of items) {
+        const el = document.getElementById(x.id);
+        if (el && el.getBoundingClientRect().top <= line) { sec = x.id; sub = null; }
+      }
+      const cur = items.find((x) => x.id === sec);
+      for (const sItem of cur.subs) {
+        const el = document.getElementById(sItem.id);
+        if (el && el.getBoundingClientRect().top <= line) sub = sItem.id;
+      }
+      if (sec !== st.sec || sub !== st.sub) { st.sec = sec; st.sub = sub; draw(); }
+    });
+  };
+  window.addEventListener('scroll', onScroll, { passive: true });
+  return nav;
+}
+
+function mountTo(el, ...kids) {
+  el.replaceChildren();
+  for (const k of kids) if (k) el.append(k);
 }
 
 export function teamsView(cat, ctx, query = '') {

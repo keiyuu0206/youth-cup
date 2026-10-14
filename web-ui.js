@@ -208,3 +208,30 @@ export function sheet({ title, content }) {
   first && first.focus();
   return { close, body };
 }
+
+// バナー画像を縮小して data URL にする（透過部分は白で塗り、JPEG で保存）
+export function resizeBanner(file, maxW = 1200, maxH = 600) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve(null);
+    if (!/^image\//.test(file.type)) return reject(new Error('画像ファイルを選んでください'));
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const scale = Math.min(1, maxW / img.width, maxH / img.height);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * scale));
+      c.height = Math.max(1, Math.round(img.height * scale));
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      let q = 0.88;
+      let out = c.toDataURL('image/jpeg', q);
+      while (out.length > 600_000 && q > 0.4) { q -= 0.1; out = c.toDataURL('image/jpeg', q); }
+      resolve(out);
+    };
+    img.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    img.src = url;
+  });
+}
