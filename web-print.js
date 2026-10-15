@@ -17,8 +17,10 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     blank: false,
     day: 'all',
     sponsors: true,
+    logos: true,
   };
   const sponsors = tournament.sponsors || [];
+  const hasLogos = categories.some((c) => c.teams.some((x) => x.logo));
   const content = h('div');
   const draw = () => {
     const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
@@ -43,6 +45,8 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           Array.from({ length: maxDays }, (_, d) => h('option', { value: String(d), selected: st.day === String(d) }, `${d + 1}日目のみ`)))) : null,
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
           'スコア欄を空欄にする（記入用・貼り出し用）'),
+        hasLogos ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.logos, onchange: (e) => { st.logos = e.target.checked; } }),
+          'チームのロゴを表示する') : null,
         sponsors.length ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
           `協賛スポンサーを表示する（${sponsors.length}件）`) : null,
         h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
@@ -72,7 +76,7 @@ function printDocument(t, cats, opts) {
   }
   const now = new Date();
   const stamp = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${toHHMM(now.getHours() * 60 + now.getMinutes())}`;
-  const doc = h('div', { class: 'pd' },
+  const doc = h('div', { class: `pd${opts.logos ? ' pd-logos' : ''}` },
     h('header', { class: 'pd-head' },
       t.logo ? h('img', { src: t.logo, alt: '' }) : null,
       h('div', { class: 'pd-title' },
@@ -131,11 +135,15 @@ function categoryBlock(t, catIn, opts, first) {
     !cat.matches.length && (s.schedule || s.league || s.bracket) ? h('p', { class: 'pd-note' }, '日程はまだ作成されていません。') : null);
 }
 
+// ロゴがあるチームだけ小さな画像を返す（無ければ何も出さない）
+const logo = (team) => (team && team.logo ? h('img', { class: 'pd-logo', src: team.logo, alt: '' }) : null);
+const named = (team, text) => [logo(team), h('span', null, text)];
+
 function groupsSection(cat, groups) {
   return h('div', { class: 'pd-sec' }, h('h2', null, '組分け'),
     h('div', { class: 'pd-groups', style: { gridTemplateColumns: `repeat(${Math.min(4, groups.length)}, 1fr)` } }, groups.map((g) => h('div', { class: 'pd-group' },
       h('strong', null, `${g}組`),
-      cat.teams.filter((x) => x.group_label === g).map((x) => h('div', null, x.name))))));
+      cat.teams.filter((x) => x.group_label === g).map((x) => h('div', { class: 'pd-named' }, named(x, x.name)))))));
 }
 
 function scoreCells(m, side, blank) {
@@ -151,6 +159,7 @@ function matchCell(cat, m, cache, opts, rowTime) {
   const line = (side) => {
     const info = sideInfo(m, side, cat, cache);
     return h('div', { class: `tr${w ? (w === side ? ' w' : ' l') : ''}` },
+      logo(info.team),
       h('span', { class: `n${info.placeholder ? ' ph' : ''}` }, info.text), scoreCells(m, side, blank));
   };
   return h('td', { class: `pd-cell${blank ? ' pd-blank' : ''}` },
@@ -202,9 +211,9 @@ function scheduleSection(t, cat, opts) {
       return h('tr', null,
         h('td', { class: 'c' }, i + 1), h('td', { class: 'pd-time' }, toHHMM(m.start_min)), h('td', { class: 'c' }, courtName(cfg, m.court)),
         h('td', { class: 'sm' }, m.label),
-        h('td', { class: `r${w === 'home' ? ' b' : ''}` }, sideInfo(m, 'home', cat, cache).text),
+        h('td', { class: `r${w === 'home' ? ' b' : ''}` }, h('span', { class: 'pd-named r' }, named(sideInfo(m, 'home', cat, cache).team, sideInfo(m, 'home', cat, cache).text))),
         h('td', { class: `c res${opts.blank ? ' pd-blank-res' : ''}` }, sc),
-        h('td', { class: w === 'away' ? 'b' : '' }, sideInfo(m, 'away', cat, cache).text));
+        h('td', { class: w === 'away' ? 'b' : '' }, h('span', { class: 'pd-named' }, named(sideInfo(m, 'away', cat, cache).team, sideInfo(m, 'away', cat, cache).text))));
     })));
 
   const table = cfg.courts <= 4 ? gridTable : listTable;
@@ -238,10 +247,10 @@ function leagueSection(cat, groups, opts) {
         h('h3', null, `${g}組${st && st.complete && show ? '' : show ? '（途中経過）' : ''}`),
         h('table', { class: 'pd-t pd-star' },
           h('colgroup', null, h('col', { style: { width: n > 6 ? '30mm' : '36mm' } }), order.map(() => h('col')), ['10mm', '10mm', '10mm', '10mm'].map((w) => h('col', { style: { width: w } }))),
-          h('thead', null, h('tr', null, h('th', null, ''), order.map((x) => h('th', { class: 'tn-h' }, x.short_name || x.name)), ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
+          h('thead', null, h('tr', null, h('th', null, ''), order.map((x) => h('th', { class: 'tn-h' }, logo(x), h('div', null, x.short_name || x.name))), ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
           h('tbody', null, order.map((a) => {
             const r = rowOf[a.id];
-            return h('tr', null, h('td', { class: 'tn' }, a.name), order.map((b) => cell(a, b)),
+            return h('tr', null, h('td', { class: 'tn' }, h('span', { class: 'pd-named' }, named(a, a.name))), order.map((b) => cell(a, b)),
               h('td', { class: 'b' }, show && r ? r.pts : ''), h('td', null, show && r ? (r.gd > 0 ? `+${r.gd}` : r.gd) : ''), h('td', null, show && r ? r.gf : ''),
               h('td', { class: 'b' }, show && r && r.p ? `${r.rank}${r.tied ? '=' : ''}` : ''));
           }))));
