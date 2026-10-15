@@ -103,6 +103,43 @@ function knockoutPlanPanel(f, cat, redraw) {
     h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。チーム数が2・4・8・16でないときは、上位の組の1位から順にシード（不戦）が入ります。'));
 }
 
+// ---------- カテゴリの色（取り違え防止） ----------
+const CAT_COLORS = ['#0f7b4a', '#1d5fbf', '#c2410c', '#7c3aed', '#be185d', '#0e7490', '#a16207', '#4d7c0f'];
+const catColor = (i) => CAT_COLORS[(i < 0 ? 0 : i) % CAT_COLORS.length];
+
+// ---------- 大会のコピー ----------
+function openCopyDialog(t, navigate) {
+  const f = { name: `${t.name}（コピー）`, date: todayStr(), end_date: todayStr(), scope: 'all', withResults: false };
+  const body = h('div');
+  const draw = () => mount(body, h('div', { class: 'stack' },
+    h('label', { class: 'field' }, h('span', null, '新しい大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+    h('div', { class: 'grid-form' },
+      h('label', { class: 'field' }, h('span', null, '開始日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
+      h('label', { class: 'field' }, h('span', null, '終了日'), h('input', { type: 'date', value: f.end_date, oninput: (e) => { f.end_date = e.target.value; } }))),
+    h('div', null,
+      h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)', marginBottom: '4px' } }, 'コピーする範囲'),
+      [['all', '丸ごと', 'カテゴリの設定・チーム・組分け・日程（試合の組み合わせと時刻）・要項・駐車券・スポンサー'],
+        ['teams', '設定とチーム', '組分けと日程は作り直します'],
+        ['settings', '設定だけ', 'カテゴリの設定（試合時間・形式・判定順など）・要項・駐車券・スポンサー']].map(([k, l, d]) =>
+        h('label', { class: `copy-opt${f.scope === k ? ' on' : ''}` },
+          h('input', { type: 'radio', name: 'copy-scope', checked: f.scope === k, onchange: () => { f.scope = k; draw(); } }),
+          h('span', null, h('strong', null, l), h('small', null, d))))),
+    f.scope === 'all' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.withResults, onchange: (e) => { f.withResults = e.target.checked; } }), '試合結果もコピーする（通常はオフ。結果が空の状態で始まります）') : null,
+    h('p', { class: 'muted small', style: { margin: 0 } }, '日程は新しい開始日に合わせて日付がずれます（試合の時刻・コートはそのまま）。忘れ物はコピーしません。コピー後は「準備中」の状態で作られます。')));
+  draw();
+  modal({
+    title: '大会をコピー',
+    content: body,
+    actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: 'コピーして作成', kind: 'btn-primary', onClick: async () => {
+      if (!f.date) { toast('開始日を入力してください', true); return true; }
+      const r = await run(() => api('POST', `/api/admin/tournaments/${t.id}/copy`, f));
+      if (!r) return true;
+      toast(`コピーしました（${r.categories}カテゴリ・${r.teams}チーム・${r.matches}試合）`);
+      navigate(`/admin/t/${r.id}`);
+    } }],
+  });
+}
+
 // ---------- 勝点が並んだときの判定順 ----------
 const MANUAL = ['janken', 'lottery'];
 function tiebreakEditor(f, redraw) {
@@ -491,7 +528,9 @@ async function listView(root, navigate) {
       icon('chevron', 't-go')),
     h('div', { class: 'cat-grid' },
       t.categories.map((c) => catCard(t, c)),
-      h('button', { class: 'cat-card cat-add', type: 'button', onclick: () => navigate(`/admin/t/${t.id}?add=1`) }, '＋ カテゴリを追加')));
+      h('button', { class: 'cat-card cat-add', type: 'button', onclick: () => navigate(`/admin/t/${t.id}?add=1`) }, '＋ カテゴリを追加')),
+    h('div', { class: 't-actions' },
+      h('button', { class: 'link-btn', type: 'button', onclick: () => openCopyDialog(t, navigate) }, icon('list'), 'この大会をコピー')));
 
   const live = tournaments.filter((t) => t.status !== 'finished');
   const done = tournaments.filter((t) => t.status === 'finished');
@@ -547,7 +586,7 @@ async function tournamentView(root, id, navigate) {
   const stopPoll = poller(async () => {
     if (!document.body.contains(root.firstChild)) return stopPoll();
     const a = document.activeElement;
-    if (document.querySelector('.modal-back') || st.moveSel || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
+    if (document.querySelector('.modal-back') || st.moveSel || st.dirty || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
     if (await load()) render();
   }, 15000);
 
@@ -564,10 +603,29 @@ async function tournamentView(root, id, navigate) {
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
-                data.categories.map((c) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(c.id === st.catId),
-                  onclick: () => { st.catId = c.id; store.set(`a:${id}:cat`, c.id); st.moveSel = null; render(); } }, c.name))),
+                data.categories.map((c, i) => h('button', { class: 'chip-btn cat-chip', type: 'button', 'aria-pressed': String(c.id === st.catId), style: `--cat:${catColor(i)}`,
+                  onclick: () => switchCategory(c) }, h('i', { class: 'cat-dot' }), c.name, h('small', null, `${c.teams.length}チーム`)))),
               h('button', { class: 'btn btn-sm', type: 'button', onclick: addCategory }, '＋ カテゴリを追加')),
             cat ? categoryView(t, cat, editable) : h('div', { class: 'panel empty', style: { marginTop: '12px' } }, 'カテゴリ（U7〜U12）を追加すると、チーム登録と日程作成ができます。')))));
+  }
+
+  // ----- カテゴリの切り替え（保存していない設定があれば確認） -----
+
+  async function leaveSettings() {
+    if (!st.dirty) return true;
+    const c = data.categories.find((x) => x.id === st.dirty);
+    const ok = await confirmDialog(`${c ? c.name : 'カテゴリ'}の設定が保存されていません`, '切り替えると、入力した内容は失われます。保存する場合は「キャンセル」を押して、「設定を保存」を押してください。', '保存せずに切り替える', true);
+    if (ok) st.dirty = null;
+    return ok;
+  }
+
+  async function switchCategory(c) {
+    if (c.id === st.catId) return;
+    if (!(await leaveSettings())) return;
+    st.catId = c.id; store.set(`a:${id}:cat`, c.id); st.moveSel = null;
+    render();
+    toast(`${c.name} に切り替えました`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   // ----- 左側: 状態・共有・大会情報 -----
@@ -640,6 +698,17 @@ async function tournamentView(root, id, navigate) {
         } }, 'この大会を削除')));
   }
 
+  // ----- 日程の削除 -----
+
+  async function deleteSchedule(cat) {
+    const results = cat.matches.filter((m) => m.status !== 'none').length;
+    const ok = await confirmDialog(`${cat.name}の日程を削除します`,
+      `${cat.matches.length}試合の日程を削除します。チームと組み分けは残るので、「組み分け・日程」から日程を作り直せます。${results ? `　※結果が入っている試合が${results}試合あります。結果も削除され、元に戻せません。` : ''}`,
+      '日程を削除する', true);
+    if (!ok) return;
+    if (await run(() => api('DELETE', `/api/admin/categories/${cat.id}/schedule${results ? '?force=1' : ''}`), '日程を削除しました')) await reload();
+  }
+
   // ----- 大会要項・大会のコピー -----
 
   function outlinePanel(t) {
@@ -653,26 +722,7 @@ async function tournamentView(root, id, navigate) {
           onSave: async (o) => { const r = await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { outline: o } })); if (r) await reload(); return !!r; } }) }, '要項を作成・編集'),
         h('button', { class: 'btn btn-block', type: 'button', onclick: () => openOutlineDialog(data.tournament, data.categories, outline) }, '要項をPDFで出力'),
         h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openPresetList({ t, categories: data.categories, onApply: () => reload() }) }, '要項のプリセットを管理'),
-        h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => copyTournament(t) }, 'この大会をコピーして新しい大会を作る')));
-  }
-
-  function copyTournament(t) {
-    const f = { name: `${t.name}（コピー）`, date: todayStr(), end_date: todayStr(), withTeams: false };
-    modal({
-      title: '大会をコピー',
-      content: h('div', { class: 'stack' },
-        h('p', { class: 'muted small', style: { margin: 0 } }, 'カテゴリの設定（試合時間・形式・判定順など）、大会要項、駐車券、スポンサーをコピーします。日程と結果はコピーしません。'),
-        h('label', { class: 'field' }, h('span', null, '新しい大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
-        h('div', { class: 'grid-form' },
-          h('label', { class: 'field' }, h('span', null, '開始日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
-          h('label', { class: 'field' }, h('span', null, '終了日'), h('input', { type: 'date', value: f.end_date, oninput: (e) => { f.end_date = e.target.value; } }))),
-        h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: (e) => { f.withTeams = e.target.checked; } }), '参加チームもコピーする')),
-      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: 'コピーして作成', kind: 'btn-primary', onClick: async () => {
-        const r = await run(() => api('POST', `/api/admin/tournaments/${id}/copy`, f), 'コピーしました');
-        if (!r) return true;
-        navigate(`/admin/t/${r.id}`);
-      } }],
-    });
+        h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openCopyDialog(t, navigate) }, 'この大会をコピーして新しい大会を作る')));
   }
 
   // ----- 忘れ物 -----
@@ -849,13 +899,24 @@ async function tournamentView(root, id, navigate) {
   function categoryView(t, cat, editable) {
     const subs = [['settings', '設定'], ['teams', `チーム（${cat.teams.length}）`], ['schedule', '組み分け・日程'], ['results', '結果'], ['standings', '順位']];
     const pending = cat.matches.filter((m) => m.status === 'provisional').length;
-    return h('div', null,
-      h('div', { class: 'row no-print', style: { justifyContent: 'flex-end', marginTop: '4px' } },
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
-      h('div', { class: 'chips no-print', style: { paddingTop: '4px' } }, subs.map(([k, label]) =>
-        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: () => { st.sub = k; store.set(`a:${id}:sub`, k); st.moveSel = null; render(); } },
-          label, k === 'results' && pending ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, pending) : null))),
-      h('div', { style: { marginTop: '8px' } },
+    const idx = data.categories.findIndex((c) => c.id === cat.id);
+    const FORMAT = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
+    const markDirty = () => { if (st.sub === 'settings') st.dirty = cat.id; };
+    return h('div', { class: 'cat-scope', style: `--cat:${catColor(idx)}` },
+      h('div', { class: 'cat-bar no-print' },
+        h('div', { class: 'cat-bar-head' },
+          h('span', { class: 'cat-bar-name' }, cat.name),
+          h('span', { class: 'cat-bar-label' }, 'を編集中'),
+          h('span', { class: 'cat-bar-meta' }, `${FORMAT[cat.config.format] || ''}　${cat.teams.length}チーム`),
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
+        h('div', { class: 'chips' }, subs.map(([k, label]) =>
+          h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: async () => {
+            if (k === st.sub || !(await leaveSettings())) return;
+            st.sub = k; store.set(`a:${id}:sub`, k); st.moveSel = null; render();
+          } },
+            label, k === 'results' && pending ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, pending) : null)))),
+      h('div', { style: { marginTop: '8px' }, oninput: markDirty, onchange: markDirty },
         st.sub === 'settings' ? settingsView(t, cat, editable)
           : st.sub === 'teams' ? teamsView(t, cat, editable)
             : st.sub === 'schedule' ? scheduleTab(t, cat, editable)
@@ -884,9 +945,11 @@ async function tournamentView(root, id, navigate) {
     };
     const koOn = () => f.format === 'league_knockout' && f.koTiming && f.koTiming.enabled;
     const drawSummary = () => {
-      summary.replaceChildren(
+      // null をそのまま渡すと「null」という文字が表示されるため、表示する行だけを渡す
+      summary.replaceChildren(...[
         h('div', null, `${koOn() ? '予選の1試合の枠' : '1試合の枠'}：${describe(f)}`),
-        koOn() ? h('div', null, `決勝トーナメントの1試合の枠：${describe(f.koTiming)}`) : null);
+        koOn() ? h('div', null, `決勝トーナメントの1試合の枠：${describe(f.koTiming)}`) : null,
+      ].filter(Boolean));
     };
     // 決勝トーナメントの試合時間（予選と違う場合）
     const koPanel = () => {
@@ -953,8 +1016,8 @@ async function tournamentView(root, id, navigate) {
       h('div', { class: 'row', style: { marginTop: '12px' } },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
           const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: { ...f, _touched: undefined } }));
-          if (r) { toast(r.retimed ? '保存し、全試合の開始時刻を再計算しました' : '保存しました'); await reload(); }
-        } }, '設定を保存'),
+          if (r) { st.dirty = null; toast(r.retimed ? `${cat.name}の設定を保存し、全試合の開始時刻を再計算しました` : `${cat.name}の設定を保存しました`); await reload(); }
+        } }, `${cat.name}の設定を保存`),
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => saveTemplate(f) }, 'テンプレートとして保存'),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => applyTemplate(f, draw) }, 'テンプレートの読み込み・編集'),
@@ -1075,7 +1138,8 @@ async function tournamentView(root, id, navigate) {
       const names = teamMap(cat);
       box.append(h('section', { class: 'panel' },
         h('div', { class: 'panel-head' }, h('h2', null, '現在の日程'), h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力')),
+          h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
+          editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),
         editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。開始時刻を全体でずらすときは「設定」の第1試合の開始を変更してください。') : null,
         warningsList(cat.warnings),
         h('div', { class: 'table-wrap' }, scheduleGrid(cat, cat.matches, {

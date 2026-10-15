@@ -1,8 +1,18 @@
 // 組合せ・結果を A4 縦で出力する（ブラウザの印刷から「PDFとして保存」）
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
+import { qrDataUrl } from './web-qr.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength } from './web-views.js';
 
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
+
+// 閲覧ページのURLとQRコード
+export const viewerUrl = (t) => `${location.origin}/t/${t.slug}`;
+export function qrBlock(t, caption = '試合結果・速報はこちら', cls = 'pd-qr') {
+  if (!t.slug) return null;
+  let src;
+  try { src = qrDataUrl(viewerUrl(t)); } catch { return null; }
+  return h('div', { class: cls }, h('img', { src, alt: '閲覧ページのQRコード' }), h('span', null, caption));
+}
 
 export function periodText(t) {
   if (t.end_date && t.end_date > t.date) return `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d+年/, '')}`;
@@ -19,6 +29,7 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     sponsors: true,
     logos: true,
     mode: 'normal',
+    qr: true,
     post: { blocks: true, brackets: true, timeline: true },
   };
   const sponsors = tournament.sponsors || [];
@@ -56,6 +67,8 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           Array.from({ length: maxDays }, (_, d) => h('option', { value: String(d), selected: st.day === String(d) }, `${d + 1}日目のみ`)))) : null,
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
           'スコア欄を空欄にする（記入用・貼り出し用）'),
+        tournament.slug ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.qr, onchange: (e) => { st.qr = e.target.checked; } }),
+          '閲覧ページのQRコードを入れる') : null,
         hasLogos && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.logos, onchange: (e) => { st.logos = e.target.checked; } }),
           'チームのロゴを表示する') : null,
         sponsors.length && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
@@ -129,7 +142,6 @@ export function runPrint(doc, fileTitle, pageCss = '', onAfter = null) {
 
 function printDocument(t, cats, opts) {
   if (opts.mode === 'posting') return printPosting(t, cats, opts);
-  const root = printRoot();
   const now = new Date();
   const stamp = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${toHHMM(now.getHours() * 60 + now.getMinutes())}`;
   const doc = h('div', { class: `pd${opts.logos ? ' pd-logos' : ''}` },
@@ -138,21 +150,57 @@ function printDocument(t, cats, opts) {
       h('div', { class: 'pd-title' },
         h('h1', null, t.name),
         h('div', { class: 'pd-sub' }, t.date ? h('span', null, `開催日　${periodText(t)}`) : null, t.venue ? h('span', null, `会場　${t.venue}`) : null)),
-      h('div', { class: 'pd-out' }, `${stamp} 時点`, h('br'), opts.blank ? '記入用' : '確定した結果のみ掲載')),
+      h('div', { class: 'pd-out' }, `${stamp} 時点`, h('br'), opts.blank ? '記入用' : '確定した結果のみ掲載'),
+      opts.qr ? qrBlock(t) : null),
     opts.sponsors && (t.sponsors || []).length ? h('div', { class: 'pd-sponsors' },
       h('span', { class: 'pd-sp-label' }, '協賛'),
       h('div', { class: 'pd-sp-list' }, t.sponsors.map((sp) => h('img', { src: sp.img, alt: sp.name })))) : null,
     cats.map((cat, i) => categoryBlock(t, cat, opts, i === 0)));
-  mount(root, doc);
-
   // 各ページの上部に大会名、下部にページ番号（対応するブラウザのみ）
-  let pageStyle = document.getElementById('print-page-style');
-  if (!pageStyle) { pageStyle = h('style', { id: 'print-page-style' }); document.head.append(pageStyle); }
   const esc = (x) => String(x || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  pageStyle.textContent = `@page { @top-left { content: "${esc(t.name)}"; font-size: 7.5pt; color: #777; } @top-right { content: "${esc(t.venue)}"; font-size: 7.5pt; color: #777; } @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #555; } }`;
+  const pageCss = `@page { @top-left { content: "${esc(t.name)}"; font-size: 7.5pt; color: #777; } @top-right { content: "${esc(t.venue)}"; font-size: 7.5pt; color: #777; } @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #555; } }`;
+  const title = `${t.name}_${cats.length === 1 ? cats[0].name : '全カテゴリ'}_${opts.blank ? '組合せ' : '結果'}`;
+  openPreview({ doc, title, pageCss, kind: 'normal', multiCat: cats.length > 1 });
+}
 
-  // トーナメント表を用紙の幅に収める（測るために一時的に画面外で表示する）
-  Object.assign(root.style, { display: 'block', position: 'absolute', left: '-10000px', top: '0', width: '188mm' });
+// ======================================================================
+// 印刷プレビュー：ページの区切りを確認し、改ページの位置を調整してから印刷する
+// ======================================================================
+
+const PX_MM = 96 / 25.4;
+const PAGE_W_MM = 188; // A4（210mm）から左右の余白を除いた幅
+const PAGE_H_MM = 271; // A4（297mm）から上下の余白を除いた高さ
+
+// ページの区切りを計算する単位（ブロック）と、調整ボタンを出すブロック
+const BLOCKS = {
+  normal: ['.pd-head', '.pd-sponsors', '.pd-cat-title', '.pd-sec > h2', '.pd-groups', '.pd-day', '.pd-star-wrap', '.pd-sec > .pd-note', '.pd-sec > p',
+    '.pd-bracket #bk-rank', '.pd-bracket section.bk-target > .section-title', '.pd-bracket .pd-zoom', '.pd-bracket .tree-others > div'],
+  outline: ['.ol-hero', '.ol-info', '.ol-qr', '.ol-sec > h2', '.ol-sec > .ol-h4', '.ol-sec > .ol-li', '.ol-sec > .ol-p', '.ol-sec > .ol-note',
+    '.ol-imgs figure', '.ol-sponsors', '.ol-foot'],
+};
+const CONTROLS = '.pd-sponsors, .pd-cat-title, .pd-sec > h2, .pd-groups, .pd-day, .pd-star-wrap, .pd-bracket #bk-rank, .pd-bracket section.bk-target > .section-title, .pd-bracket .tree-others > div, '
+  + '.ol-info, .ol-qr, .ol-sec > h2, .ol-sec > .ol-h4, .ol-imgs figure, .ol-sponsors';
+const HEADINGS = '.pd-sec > h2, .pd-cat-title, .pd-bracket section.bk-target > .section-title, .ol-sec > h2, .ol-sec > .ol-h4';
+const SPLIT = '.pd-day, .ol-info'; // 行の区切りでページをまたげる表
+
+function markBlocks(doc, kind) {
+  for (const el of doc.querySelectorAll(BLOCKS[kind].join(','))) {
+    if (!el.parentElement.closest('.pb')) el.classList.add('pb');
+  }
+  let prev = null;
+  doc.querySelectorAll('.pb').forEach((el) => {
+    if (el.matches(SPLIT)) el.classList.add('pb-split');
+    if (el.matches(HEADINGS)) el.classList.add('pb-head');
+    // 見出しの直後のブロックには改ページのボタンを出さない（見出しだけが前のページに残るため）。改ページは見出しの位置で行う
+    if (el.matches(CONTROLS) && !(prev && prev.classList.contains('pb-head'))) el.classList.add('pb-ctl');
+    prev = el;
+  });
+  // 「分けない」は表に付けるので、見出しの直後の表でもボタンを出す
+  doc.querySelectorAll('.pb-split:not(.pb-ctl)').forEach((el) => el.classList.add('pb-ctl', 'pb-keeponly'));
+}
+
+// トーナメント表を用紙の幅に収める
+function fitZoom(root) {
   for (const el of root.querySelectorAll('.pd-zoom')) {
     el.style.zoom = '';
     const inner = el.firstElementChild;
@@ -160,17 +208,183 @@ function printDocument(t, cats, opts) {
     const scale = Math.min(1, (el.clientWidth - 2) / need);
     if (scale < 1) el.style.zoom = String(Math.max(0.45, scale));
   }
-  root.removeAttribute('style');
+}
 
-  const title = document.title;
-  document.title = `${t.name}_${cats.length === 1 ? cats[0].name : '全カテゴリ'}_${opts.blank ? '組合せ' : '結果'}`;
-  document.body.classList.add('printing');
-  const done = () => { document.title = title; };
-  window.addEventListener('afterprint', done, { once: true });
-  // バナー画像などの読み込みを待ってから印刷画面を開く（最大4秒）
-  const imgs = [...root.querySelectorAll('img')].filter((img) => !img.complete);
-  const loaded = Promise.all(imgs.map((img) => new Promise((ok) => { img.onload = ok; img.onerror = ok; })));
-  Promise.race([loaded, new Promise((ok) => setTimeout(ok, 4000))]).then(() => setTimeout(() => window.print(), 120));
+// ブラウザの印刷と同じ考え方で、どこでページが変わるかを計算する
+function simulate(doc) {
+  const H = PAGE_H_MM * PX_MM;
+  const top0 = doc.getBoundingClientRect().top;
+  const blocks = [...doc.querySelectorAll('.pb')];
+  const forcedBreak = (b) => {
+    if (getComputedStyle(b).breakBefore === 'page') return true;
+    for (let a = b.parentElement; a && a !== doc; a = a.parentElement) {
+      if (getComputedStyle(a).breakBefore === 'page' && a.querySelector('.pb') === b) return true;
+    }
+    return false;
+  };
+  let shift = 0; // ページ送りで空いた分（画面上の位置 + shift = 用紙上の位置）
+  const breaks = []; // { el, y（画面上の位置）, page, reason }
+  const tooTall = new Set();
+  let prev = null;
+  let lastPage = 0; // 直前に置いたものがあるページ（0始まり）
+  const pageEnd = (v) => (Math.floor(v / H) + 1) * H;
+  // ブロックの上の余白（中の最初の要素の余白と重なる分も含む）
+  const marginTop = (el) => {
+    let m = parseFloat(getComputedStyle(el).marginTop) || 0;
+    // 外側のまとまりの先頭にあるときは、外側の余白も重なって残る（例：要項の見出しを含むセクションの上の余白）
+    for (let a = el; a.parentElement && a.parentElement !== doc && a.parentElement.firstElementChild === a; a = a.parentElement) {
+      const ps = getComputedStyle(a.parentElement);
+      if (parseFloat(ps.paddingTop) || parseFloat(ps.borderTopWidth) || ps.display === 'flex' || ps.display === 'grid') break;
+      m = Math.max(m, parseFloat(ps.marginTop) || 0);
+    }
+    for (let c = el; c.firstElementChild; c = c.firstElementChild) {
+      const cs = getComputedStyle(c);
+      if (parseFloat(cs.paddingTop) || parseFloat(cs.borderTopWidth) || cs.display === 'flex' || cs.display === 'grid' || cs.display === 'table') break;
+      m = Math.max(m, parseFloat(getComputedStyle(c.firstElementChild).marginTop) || 0);
+    }
+    return m;
+  };
+  const moveTo = (el, y, reason) => {
+    const v = y + shift;
+    const forced = reason === 'manual' || reason === 'auto';
+    if (forced) {
+      // 指定した改ページは「直前の内容があるページの、次のページ」から始める（余白で自然に次のページへ出ていても同じ）
+      if (v - lastPage * H < 1) return; // 今のページにまだ何も無い（先頭）
+      // ページ先頭でもブロックの上の余白は残る（マイナスの余白は除く）
+      shift += (lastPage + 1) * H + Math.max(0, marginTop(el)) - v;
+    } else {
+      if (v % H < 1) return; // すでにページの先頭
+      shift += pageEnd(v) - v;
+    }
+    lastPage = Math.floor((y + shift) / H);
+    breaks.push({ el, y, page: lastPage + 1, reason });
+  };
+  // 押し出しが無くても、前の内容がページを使い切って自然に次のページから始まる場合も記録する
+  const mark = (el, y, isBlock = true) => {
+    const pi = Math.floor((y + shift + 0.5) / H);
+    if (pi > lastPage) {
+      // 印刷ではページ先頭の余白（見出しの上の隙間など）は省かれ、ページの一番上から始まる
+      if (isBlock) shift -= (y + shift) - pi * H;
+      breaks.push({ el, y, page: pi + 1, reason: 'flow' });
+      lastPage = pi;
+    }
+  };
+  let heads = []; // 直前に続いている見出し（見出しだけがページ末尾に残らないよう、まとめて送る）
+  let maxBottom = 0; // 用紙上で一番下にある内容の位置（横に並ぶ図があるため、最後のブロックとは限らない）
+  const reach = (el) => { maxBottom = Math.max(maxBottom, el.getBoundingClientRect().bottom - top0 + shift); };
+  for (const b of blocks) {
+    const r = b.getBoundingClientRect();
+    const y = r.top - top0;
+    const hgt = r.height;
+    if (forcedBreak(b)) {
+      moveTo(b, y, b.classList.contains('pb-break') ? 'manual' : 'auto'); mark(b, y);
+      reach(b);
+      heads = b.classList.contains('pb-head') ? [b] : [];
+      prev = b; continue;
+    }
+    const v = y + shift;
+    const keep = !b.classList.contains('pb-split') || b.classList.contains('pb-keep');
+    if (hgt > H - 2 && keep) tooTall.add(b);
+    if (keep && hgt <= H && v + hgt > pageEnd(v) + 0.5) {
+      // 見出しだけがページの末尾に残らないよう、同じページにある直前の見出しごと次のページへ
+      const sameHeads = heads.filter((x) => Math.floor((x.getBoundingClientRect().top - top0 + shift) / H) === Math.floor(v / H));
+      if (sameHeads.length) moveTo(sameHeads[0], sameHeads[0].getBoundingClientRect().top - top0, 'flow');
+      else moveTo(b, y, 'flow');
+      mark(b, y);
+    } else if (!keep) {
+      mark(b, y);
+      // 表は行の区切りでページをまたぐ（次のページでは見出しの行を繰り返す）
+      const thead = b.querySelector('thead');
+      const theadH = thead ? thead.getBoundingClientRect().height : 0;
+      const first = b.querySelector('tbody tr');
+      for (const tr of b.querySelectorAll('tbody tr')) {
+        const rr = tr.getBoundingClientRect();
+        const ty = rr.top - top0;
+        const tv = ty + shift;
+        if (tv + rr.height > pageEnd(tv) + 0.5) {
+          if (tr === first) {
+            // 最初の行が入らないなら、表の見出し（h3 など）ごと次のページへ（直前の見出しも一緒に）
+            const sameHeads = heads.filter((x) => Math.floor((x.getBoundingClientRect().top - top0 + shift) / H) === Math.floor((y + shift) / H));
+            if (sameHeads.length) moveTo(sameHeads[0], sameHeads[0].getBoundingClientRect().top - top0, 'flow');
+            else moveTo(b, y, 'flow');
+          } else {
+            moveTo(tr, ty, 'flow');
+            shift += theadH;
+          }
+        }
+        mark(tr, ty, false);
+      }
+    } else mark(b, y);
+    reach(b);
+    heads = b.classList.contains('pb-head') ? [...heads, b] : [];
+    prev = b;
+  }
+  return { breaks, pages: Math.max(1, Math.ceil((maxBottom - 1) / H), lastPage + 1), tooTall };
+}
+
+export function openPreview({ doc, title, pageCss = '', kind = 'normal', multiCat = false }) {
+  markBlocks(doc, kind);
+  document.querySelector('.pv')?.remove();
+  const paper = h('div', { class: 'pv-paper' }, doc);
+  const layer = h('div', { class: 'pv-layer' });
+  const wrap = h('div', { class: 'pv-wrap' }, paper, layer);
+  const info = h('span', { class: 'pv-info' });
+  const opt = { catBreak: true, secBreak: false, keepAll: false };
+  const toggle = (label, key, apply, show = true) => (show ? h('label', { class: 'check pv-opt' },
+    h('input', { type: 'checkbox', checked: opt[key], onchange: (e) => { opt[key] = e.target.checked; apply(opt[key]); redraw(); } }), label) : null);
+  const ov = h('div', { class: 'pv', role: 'dialog', 'aria-label': '印刷プレビュー' },
+    h('div', { class: 'pv-bar' },
+      h('div', { class: 'pv-title' }, h('strong', null, '印刷プレビュー'), info),
+      h('div', { class: 'pv-opts' },
+        toggle('カテゴリごとに新しいページから', 'catBreak', (on) => doc.classList.toggle('no-catbreak', !on), kind === 'normal' && multiCat),
+        toggle(kind === 'outline' ? '見出しごとに新しいページから' : '組分け・日程・星取表・トーナメント表を新しいページから', 'secBreak', (on) => doc.classList.toggle('sec-break', on)),
+        toggle('表を途中で分けない', 'keepAll', (on) => doc.querySelectorAll('.pb-split').forEach((el) => el.classList.toggle('pb-keep', on)))),
+      h('div', { class: 'pv-actions' },
+        h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { doc.querySelectorAll('.pb-break').forEach((el) => el.classList.remove('pb-break')); redraw(); } }, '手動の改ページを解除'),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { ov.remove(); document.body.style.overflow = ''; } }, '閉じる'),
+        h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => runPrint(doc.cloneNode(true), title, pageCss) }, 'この内容でPDFを作成'))),
+    h('p', { class: 'pv-help' }, '赤い線がページの区切りです。左の「ここで改ページ」で、その見出しや表から次のページに送れます（もう一度押すと解除）。表の「分けない」を押すと、その表がページをまたがないようにします。実際の出力とは1〜2行ずれることがあります。'),
+    h('div', { class: 'pv-scroll' }, wrap));
+
+  const redraw = () => {
+    const res = simulate(doc);
+    const wTop = wrap.getBoundingClientRect().top;
+    const yOf = (el) => el.getBoundingClientRect().top - wTop;
+    const items = [];
+    // 1ページ目の表示
+    items.push(h('div', { class: 'pv-page', style: { top: `${yOf(doc) - 22}px` } }, '1ページ目'));
+    for (const br of res.breaks) {
+      items.push(h('div', { class: `pv-break${br.reason === 'manual' ? ' manual' : ''}`, style: { top: `${yOf(br.el) - 4}px` } },
+        h('span', null, `${br.page}ページ目${br.reason === 'manual' ? '（手動）' : br.reason === 'auto' ? '（新しいページ）' : ''}`)));
+    }
+    // 調整ボタン（用紙の左の余白に置くので、印刷物には影響しない）
+    const ctls = [...doc.querySelectorAll('.pb-ctl')];
+    ctls.forEach((b, i) => {
+      if (i === 0 && b.getBoundingClientRect().top - doc.getBoundingClientRect().top < 5) return;
+      const on = b.classList.contains('pb-break');
+      const split = b.classList.contains('pb-split');
+      const keepOn = b.classList.contains('pb-keep');
+      items.push(h('div', { class: 'pv-ctl', style: { top: `${yOf(b)}px` } },
+        b.classList.contains('pb-keeponly') ? null : h('button', { class: `pv-btn${on ? ' on' : ''}`, type: 'button', title: on ? '改ページを解除' : 'この位置から次のページにする',
+          onclick: () => { b.classList.toggle('pb-break'); redraw(); } }, on ? '✓ 改ページ' : 'ここで改ページ'),
+        split ? h('button', { class: `pv-btn sub${keepOn ? ' on' : ''}`, type: 'button', title: '表をページの途中で分けない',
+          onclick: () => { b.classList.toggle('pb-keep'); redraw(); } }, keepOn ? '✓ 分けない' : '分けない') : null,
+        res.tooTall.has(b) ? h('span', { class: 'pv-warn' }, '1ページに収まらない長さです') : null));
+    });
+    mount(layer, items);
+    info.textContent = `全${res.pages}ページ`;
+  };
+
+  document.body.append(ov);
+  document.body.style.overflow = 'hidden';
+  fitZoom(doc);
+  redraw();
+  // 画像の読み込みや文字の描画で高さが変わったら計算し直す
+  doc.querySelectorAll('img').forEach((img) => { if (!img.complete) img.addEventListener('load', redraw, { once: true }); });
+  if ('ResizeObserver' in window) {
+    let t0 = 0;
+    new ResizeObserver(() => { cancelAnimationFrame(t0); t0 = requestAnimationFrame(() => { if (document.body.contains(doc)) redraw(); }); }).observe(doc);
+  }
 }
 
 function categoryBlock(t, catIn, opts, first) {
@@ -395,15 +609,18 @@ function bracketSection(t, cat) {
 
 const sheet = (orient, ...kids) => h('section', { class: `ps-sheet ps-${orient}` }, h('div', { class: 'ps-inner' }, kids));
 const growSheet = (orient, ...kids) => { const el = sheet(orient, ...kids); el.classList.add('grow'); return el; };
+let postingQr = true;
 const sheetHead = (t, cat, title, sub) => h('header', { class: 'ps-head' },
   t.logo ? h('img', { src: t.logo, alt: '' }) : null,
   h('div', { class: 'ps-head-t' }, h('div', { class: 'ps-tname' }, t.name), h('div', { class: 'ps-tsub' }, [cat.name, periodText(t), t.venue].filter(Boolean).join('　'))),
-  h('div', { class: 'ps-title' }, title, sub ? h('small', null, sub) : null));
+  h('div', { class: 'ps-title' }, title, sub ? h('small', null, sub) : null),
+  postingQr ? qrBlock(t, '結果・速報', 'ps-qr') : null);
 
 const PAGE_PORT = '@page { size: A4 portrait; margin: 8mm; }';
 const PAGE_LAND = '@page { size: A4 landscape; margin: 8mm; }';
 
 function printPosting(t, cats, opts) {
+  postingQr = opts.qr !== false;
   const sheets = [];
   for (const catIn of cats) {
     const cat = opts.blank ? { ...catIn, finalRanking: [], matches: catIn.matches.map((m) => ({ ...m, status: 'none', home_score: null, away_score: null, home_pk: null, away_pk: null })) } : catIn;

@@ -2,7 +2,7 @@
 import { api } from './web-api.js';
 import { h, mount, modal, toast, confirmDialog, run, formatDate, resizeBanner, icon } from './web-ui.js';
 import { dayTotal, dayDate, TIEBREAK_LABEL, matchLength, matchLengthFor } from './web-views.js';
-import { runPrint, periodText } from './web-print.js';
+import { openPreview, periodText, qrBlock, viewerUrl } from './web-print.js';
 
 // ---------- 初期値（サンプルの要項と同じ構成） ----------
 
@@ -172,6 +172,8 @@ export function printOutline(t, cats, outline, opts = {}) {
         o.subtitle ? h('div', { class: 'ol-sub' }, o.subtitle) : null,
         o.catch ? h('div', { class: 'ol-catch' }, o.catch) : null)),
     info.length ? h('table', { class: 'ol-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, v])))))) : null,
+    opts.qr && t.slug ? h('div', { class: 'ol-qr' }, qrBlock(t, '', 'ol-qr-img'),
+      h('div', null, h('strong', null, '大会当日の試合結果・速報はこちら'), h('p', null, 'スマートフォンで読み取ると、日程・結果・順位表・トーナメント表をいつでも確認できます。'), h('small', null, viewerUrl(t)))) : null,
     (o.sections || []).map((sec) => {
       const text = [sec.auto ? autoSection(sec.auto, t, cats) : '', sec.body || ''].filter((x) => x.trim()).join('\n');
       const imgs = sec.images || [];
@@ -183,21 +185,22 @@ export function printOutline(t, cats, outline, opts = {}) {
     }),
     opts.sponsors && (t.sponsors || []).length ? h('div', { class: 'ol-sponsors' }, h('span', null, 'ご協賛'), h('div', null, t.sponsors.map((sp) => h('img', { src: sp.img, alt: sp.name })))) : null,
     h('footer', { class: 'ol-foot' }, `${t.name}　大会要項`));
-  runPrint(doc, `${t.name}_大会要項`, '@page { @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #666; } }');
+  openPreview({ doc, title: `${t.name}_大会要項`, pageCss: '@page { @bottom-center { content: counter(page) " / " counter(pages); font-size: 8pt; color: #666; } }', kind: 'outline' });
 }
 
 // 要項のPDF出力（含めるカテゴリを選ぶ）
 export function openOutlineDialog(t, categories, outline) {
-  const st = { cats: new Set(categories.map((c) => c.id)), sponsors: true };
+  const st = { cats: new Set(categories.map((c) => c.id)), sponsors: true, qr: true };
   const body = h('div', { class: 'stack' },
     h('div', null, h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '要項に含めるカテゴリ'),
       categories.map((c) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) st.cats.add(c.id); else st.cats.delete(c.id); } }), `${c.name}（${c.teams.length}チーム）`))),
     (t.sponsors || []).length ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { st.sponsors = e.target.checked; } }), '最後に協賛スポンサーのバナーを入れる') : null,
+    t.slug ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: true, onchange: (e) => { st.qr = e.target.checked; } }), '閲覧ページのQRコードを入れる') : null,
     h('p', { class: 'muted small', style: { margin: 0 } }, '参加チーム・競技日程・順位決定方法の自動の文章は、選んだカテゴリから作られます。'));
   modal({ title: '大会要項をPDFで出力', content: body, actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: 'PDFを作成', kind: 'btn-primary', onClick: () => {
     const cats = categories.filter((c) => st.cats.has(c.id));
     if (!cats.length) { toast('カテゴリを1つ以上選んでください', true); return true; }
-    setTimeout(() => printOutline(t, cats, outline, { sponsors: st.sponsors }), 50);
+    setTimeout(() => printOutline(t, cats, outline, { sponsors: st.sponsors, qr: st.qr }), 50);
   } }] });
 }
 

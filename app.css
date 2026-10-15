@@ -603,7 +603,7 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .pd-star th.tn-h { font-size: 7pt; line-height: 1.2; }
 .pd-star td { text-align: center; font-size: 8.3pt; font-variant-numeric: tabular-nums; height: 7mm; }
 .pd-star td.tn { text-align: left; font-weight: 700; font-size: 8.3pt; }
-.pd-star td.diag { background: repeating-linear-gradient(135deg, #d8ddd9 0 0.6mm, #fff 0.6mm 2mm); }
+.pd-star td.diag { background: #dde2df; } /* 同じチーム同士のマス（対戦なし）は薄いグレーで塗る */
 .pd-star .mk { font-weight: 800; margin-right: 0.8mm; }
 .pd-bracket .section-title { margin: 2mm 0 1.5mm; }
 .pd-bracket .section-title h2 { font-size: 10pt; border: 0; padding: 0; margin: 0; }
@@ -830,3 +830,76 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .acc-stat strong { font-size: 1.3rem; color: var(--turf); font-variant-numeric: tabular-nums; }
 .acc-stat b { font-size: 0.95rem; font-variant-numeric: tabular-nums; }
 pre.issued { white-space: pre-wrap; background: var(--surface-2); padding: 12px; border-radius: 10px; font-family: var(--font); font-size: 0.88rem; margin: 0; }
+
+/* 大会のコピー */
+.t-actions { display: flex; justify-content: flex-end; padding: 0 14px 10px; }
+.t-actions .link-btn { display: inline-flex; align-items: center; gap: 4px; font-size: 0.82rem; }
+.t-actions .ico { width: 16px; height: 16px; }
+.copy-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; margin-top: 6px; cursor: pointer; }
+.copy-opt.on { border-color: var(--turf); background: var(--turf-soft); }
+.copy-opt input { margin-top: 3px; accent-color: var(--turf); }
+.copy-opt span { display: grid; gap: 2px; }
+.copy-opt small { color: var(--ink-2); font-size: 0.78rem; }
+
+/* カテゴリの取り違え防止：色分けと「編集中」の帯 */
+.cat-chip { display: inline-flex; align-items: center; gap: 6px; }
+.cat-chip small { font-size: 0.7rem; font-weight: 600; opacity: 0.75; }
+.cat-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cat); flex: none; }
+.cat-chip[aria-pressed="true"] { background: var(--cat); border-color: var(--cat); color: #fff; }
+.cat-chip[aria-pressed="true"] .cat-dot { background: #fff; }
+.cat-bar { position: sticky; top: 0; z-index: 12; margin-top: 10px; padding: 10px 14px 6px; border-radius: 14px;
+  background: color-mix(in srgb, var(--cat) 12%, var(--surface)); border: 2px solid var(--cat); box-shadow: var(--shadow); }
+.cat-bar-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cat-bar-name { font-size: 1.35rem; font-weight: 900; color: #fff; background: var(--cat); padding: 2px 12px; border-radius: 10px; }
+.cat-bar-label { font-weight: 800; color: var(--cat); }
+.cat-bar-meta { font-size: 0.8rem; color: var(--ink-2); }
+.cat-bar .chips { padding: 6px 0 2px; }
+.cat-bar .chip-btn[aria-pressed="true"] { background: var(--cat); border-color: var(--cat); color: #fff; }
+.cat-scope .panel { border-left: 4px solid var(--cat); }
+@media (prefers-color-scheme: dark) { .cat-bar-label { color: color-mix(in srgb, var(--cat) 55%, #fff); } }
+
+/* PDFのQRコード */
+.pd-qr { display: grid; justify-items: center; gap: 0.6mm; margin-left: 3mm; flex: none; }
+.pd-qr img { width: 19mm; height: 19mm; display: block; }
+.pd-qr span { font-size: 6.5pt; color: #333; font-weight: 700; white-space: nowrap; }
+.ps-qr { display: grid; justify-items: center; gap: 0.6mm; margin-left: 4mm; flex: none; }
+.ps-qr img { width: 20mm; height: 20mm; display: block; }
+.ps-qr span { font-size: 7pt; color: #333; font-weight: 700; white-space: nowrap; }
+.ol-qr { display: flex; gap: 5mm; align-items: center; margin: 1mm 0 5mm; padding: 3.5mm 4mm; border: 0.4mm solid #0f7b4a; border-radius: 2.5mm; background: #f3faf6; break-inside: avoid; }
+.ol-qr-img img { width: 24mm; height: 24mm; display: block; }
+.ol-qr-img span { display: none; }
+.ol-qr strong { font-size: 11pt; color: #0a4f31; }
+.ol-qr p { margin: 1mm 0; font-size: 9pt; }
+.ol-qr small { font-size: 8pt; color: #555; word-break: break-all; }
+
+/* ===== 印刷プレビュー（改ページの調整） ===== */
+.pb-break { break-before: page !important; }
+.pb-keep, .pb-keep table { break-inside: avoid !important; }
+.pd.no-catbreak .pd-cat { break-before: auto; }
+.pd.sec-break .pd-sec + .pd-sec { break-before: page; }
+.ol.sec-break .ol-sec + .ol-sec { break-before: page; }
+.pv { position: fixed; inset: 0; z-index: 58; background: #5b625e; display: flex; flex-direction: column; }
+.pv-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.pv-title { display: flex; align-items: baseline; gap: 10px; }
+.pv-info { font-weight: 800; color: var(--turf); }
+.pv-opts { display: flex; flex-wrap: wrap; gap: 4px 14px; flex: 1; }
+.pv-opt { font-size: 0.85rem; min-height: 32px; }
+.pv-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pv-help { margin: 0; padding: 6px 16px; font-size: 0.78rem; color: #fff; background: #3f4642; }
+.pv-scroll { flex: 1; overflow: auto; padding: 30px 16px 80px; }
+.pv-wrap { position: relative; width: calc(210mm + 150px); margin: 0 auto; }
+.pv-paper { margin-left: 150px; width: 210mm; padding: 13mm 11mm; background: #fff; color: #111; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); }
+.pv-paper > .pd { width: 188mm; }
+.pv-layer { position: absolute; inset: 0; pointer-events: none; }
+.pv-page { position: absolute; left: 150px; font-size: 11px; font-weight: 800; color: #fff; }
+.pv-break { position: absolute; left: 150px; right: 0; height: 0; border-top: 3px dashed #e5484d; }
+.pv-break.manual { border-top-color: #1d5fbf; border-top-style: solid; }
+.pv-break span { position: absolute; right: 6px; top: -22px; background: #e5484d; color: #fff; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.pv-break.manual span { background: #1d5fbf; }
+.pv-ctl { position: absolute; left: 0; width: 142px; display: grid; gap: 3px; justify-items: end; pointer-events: auto; }
+.pv-btn { font: inherit; font-size: 11px; font-weight: 800; border: 1px solid #c9d1cb; background: #fff; color: #333; border-radius: 999px; padding: 3px 10px; cursor: pointer; white-space: nowrap; }
+.pv-btn:hover { border-color: #1d5fbf; color: #1d5fbf; }
+.pv-btn.on { background: #1d5fbf; border-color: #1d5fbf; color: #fff; }
+.pv-btn.sub.on { background: #0f7b4a; border-color: #0f7b4a; }
+.pv-warn { font-size: 10px; color: #ffd60a; font-weight: 700; text-align: right; }
+@media (max-width: 760px) { .pv-scroll { padding-left: 4px; } .pv-wrap { transform-origin: top left; } }

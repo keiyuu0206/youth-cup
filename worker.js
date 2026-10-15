@@ -12,6 +12,7 @@ import WEB_RELATIVE from './web-relative.js';
 import WEB_ADMIN from './web-admin.js';
 import WEB_PRINT from './web-print.js';
 import WEB_OUTLINE from './web-outline.js';
+import WEB_QR from './web-qr.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
@@ -386,6 +387,7 @@ const STATIC = {
   '/web-admin.js': [WEB_ADMIN, JS],
   '/web-print.js': [WEB_PRINT, JS],
   '/web-outline.js': [WEB_OUTLINE, JS],
+  '/web-qr.js': [WEB_QR, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -835,6 +837,23 @@ route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params, user }
   return json(assignGroups(teams, { groups: c.config.groups, ...c.config.grouping }));
 }, 'admin');
 
+// 日程を削除する（チームと組み分けは残す）。結果が入っている場合は force が必要
+route('DELETE', '/api/admin/categories/:cid/schedule', async ({ req, db, params, url, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  mustBeEditable(t);
+  const n = await db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status != 'none' THEN 1 ELSE 0 END) AS results FROM matches WHERE category_id = ?").bind(c.id).first();
+  if (!n.total) return json({ ok: true, deleted: 0 });
+  if (n.results && url.searchParams.get('force') !== '1') fail(409, `結果が入っている試合が${n.results}試合あります`);
+  const cfg = { ...c.config, dayBreakSlots: [], lottery: {} };
+  await db.batch([
+    db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id),
+    db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(cfg), c.id),
+  ]);
+  await bump(db, t.id);
+  return json({ ok: true, deleted: n.total });
+}, 'admin');
+
 route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, user }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
@@ -1197,34 +1216,84 @@ route('PATCH', '/api/admin/templates/:id', async ({ req, db, params, user }) => 
 }, 'admin');
 
 // 大会をコピーして新しい大会を作る（カテゴリの設定・要項・駐車券・スポンサー。チームは任意）
+// 大会をコピーして新しい大会を作る
+//  scope: settings（設定・要項・駐車券・スポンサー） / teams（＋チーム） / all（丸ごと：チーム・組分け・日程）
+//  withResults: 丸ごとのとき、結果もコピーする
+const MATCH_COLS = ['stage', 'group_label', 'round', 'code', 'label', 'slot', 'court', 'start_min', 'session', 'home_team_id', 'away_team_id', 'home_ref', 'away_ref',
+  'place_w', 'place_l', 'home_score', 'away_score', 'home_pk', 'away_pk', 'forfeit', 'status', 'updated_by', 'updated_at', 'version', 'time_changed', 'corrected', 'ref_conflict'];
 route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user }) => {
   const t = await getTournament(db, params.id, user);
   const b = await body(req);
+  const scope = ['settings', 'teams', 'all'].includes(b.scope) ? b.scope : b.withTeams ? 'teams' : 'settings';
+  const withTeams = scope !== 'settings';
+  const withSchedule = scope === 'all';
+  const withResults = withSchedule && !!b.withResults;
   const name = clip(b.name, 80) || `${t.name}（コピー）`;
-  const end = checkRange(b.date || null, b.end_date || null);
+  const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ? ORDER BY sort, created_at').bind(t.id).all()).results;
+  // 日程ごとコピーするときは、元の日程の日数分の期間を確保する
+  let end = b.end_date || null;
+  if (withSchedule && b.date) {
+    const need = Math.max(1, ...cats.map((c) => normalizeConfig(JSON.parse(c.config)).dayCount || 1));
+    const last = addDays(b.date, need - 1);
+    if (!end || end < last) end = last;
+  }
+  end = checkRange(b.date || null, end);
   const nid = uid();
   const settings = readSettings(t);
-  const map = await copyAssets(db, outlineImageIds(settings.outline), nid);
-  if (settings.outline) settings.outline = remapOutline(settings.outline, map);
+  const amap = await copyAssets(db, outlineImageIds(settings.outline), nid);
+  if (settings.outline) settings.outline = remapOutline(settings.outline, amap);
   await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(settings), user.id === 'root' ? null : user.id, now(), now()).run();
   const dates = tournamentDates({ date: b.date, end_date: end });
   const stmts = [];
-  const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ?').bind(t.id).all()).results;
+  let teamCount = 0, matchCount = 0;
   for (const c of cats) {
     const cfg = normalizeConfig(JSON.parse(c.config));
-    const ncfg = { ...cfg, lottery: {}, dayBreakSlots: [], grouping: { fixed: {}, separate: [] }, dayDates: dates.slice(0, Math.max(1, cfg.dayCount)) };
+    const days = Math.max(1, cfg.dayCount || 1);
+    const tmap = {};
+    const teams = withTeams ? (await db.prepare('SELECT * FROM teams WHERE category_id = ?').bind(c.id).all()).results : [];
+    for (const x of teams) tmap[x.id] = uid();
+    const mapIds = (arr) => (arr || []).map((id) => tmap[id]).filter(Boolean);
+    const ncfg = {
+      ...cfg,
+      dayDates: dates.slice(0, days),
+      dayBreakSlots: withSchedule ? cfg.dayBreakSlots || [] : [],
+      lottery: withResults ? Object.fromEntries(Object.entries(cfg.lottery || {}).map(([g, ids]) => [g, mapIds(ids)])) : {},
+      grouping: withTeams ? {
+        fixed: Object.fromEntries(Object.entries((cfg.grouping || {}).fixed || {}).filter(([id]) => tmap[id]).map(([id, g]) => [tmap[id], g])),
+        separate: ((cfg.grouping || {}).separate || []).map(mapIds).filter((x) => x.length > 1),
+      } : { fixed: {}, separate: [] },
+    };
     const cid = uid();
     stmts.push(db.prepare('INSERT INTO categories (id, tournament_id, name, sort, config, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(cid, nid, c.name, c.sort, JSON.stringify(normalizeConfig(ncfg)), now()));
-    if (b.withTeams) {
-      const teams = (await db.prepare('SELECT * FROM teams WHERE category_id = ?').bind(c.id).all()).results;
-      for (const x of teams) stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(uid(), cid, x.name, x.short_name, x.club, x.logo, x.sort));
+    for (const x of teams) {
+      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(tmap[x.id], cid, x.name, x.short_name, x.club, x.logo, x.sort, withSchedule ? x.group_label : null));
+      teamCount++;
+    }
+    if (withSchedule) {
+      const ms = (await db.prepare('SELECT * FROM matches WHERE category_id = ?').bind(c.id).all()).results;
+      for (const m of ms) {
+        const v = { ...m };
+        v.home_team_id = m.home_team_id ? tmap[m.home_team_id] || null : null;
+        v.away_team_id = m.away_team_id ? tmap[m.away_team_id] || null : null;
+        if (!withResults) {
+          Object.assign(v, { home_score: null, away_score: null, home_pk: null, away_pk: null, forfeit: null, status: 'none', updated_by: null, updated_at: null,
+            version: 1, time_changed: 0, corrected: 0, ref_conflict: 0 });
+          // トーナメントの「A組1位」などで決まる枠は、結果が無いので未定に戻す
+          if (m.home_ref) v.home_team_id = null;
+          if (m.away_ref) v.away_team_id = null;
+        }
+        stmts.push(db.prepare(`INSERT INTO matches (id, category_id, ${MATCH_COLS.join(', ')}) VALUES (?, ?, ${MATCH_COLS.map(() => '?').join(', ')})`)
+          .bind(uid(), cid, ...MATCH_COLS.map((k) => (v[k] === undefined ? null : v[k]))));
+        matchCount++;
+      }
     }
   }
   const sps = (await db.prepare('SELECT * FROM sponsors WHERE tournament_id = ?').bind(t.id).all()).results;
   for (const sp of sps) stmts.push(db.prepare('INSERT INTO sponsors (id, tournament_id, name, url, image, sort, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(uid(), nid, sp.name, sp.url, sp.image, sp.sort, sp.active, now(), now()));
   await batchAll(db, stmts);
-  return json({ ok: true, id: nid });
+  return json({ ok: true, id: nid, categories: cats.length, teams: teamCount, matches: matchCount });
 }, 'admin');
 
 // ---------- 管理者: テンプレート ----------
