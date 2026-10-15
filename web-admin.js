@@ -13,7 +13,7 @@ const CATEGORY_NAMES = ['U7', 'U8', 'U9', 'U10', 'U11', 'U12'];
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
 const RANK_LABEL = { top3: '1〜3位を決める（3位決定戦あり）', top3_shared: '1〜3位を決める（3位は2チーム）', all: '全順位を決める（順位決定戦）' };
 
-const PLAN_LABEL = { top: '上位チームだけでトーナメント', all: '全チームで1つのトーナメント', split: '上位トーナメントと下位トーナメント', byrank: '同じ順位どうしでトーナメント', custom: '自由に設定する' };
+const PLAN_LABEL = { top: '上位チームだけでトーナメント', all: '全チームで1つのトーナメント', split: '上位トーナメントと下位トーナメント', split3: '上位・中位・下位トーナメント', byrank: '同じ順位どうしでトーナメント', custom: '自由に設定する' };
 
 // 管理画面での見積もり（実際の組み分け前でも、チーム数と組数から人数を推定する）
 function estimateGroupSizes(f, cat) {
@@ -32,6 +32,10 @@ function expandPlanPreview(plan, maxRank) {
   const k = Math.max(1, Math.min(maxRank, Number(plan.k) || 2));
   if (plan.type === 'all') return [{ name: '決勝トーナメント', from: 1, to: maxRank }];
   if (plan.type === 'split') return [{ name: '上位トーナメント', from: 1, to: k }, { name: '下位トーナメント', from: k + 1, to: maxRank }].filter((b) => b.from <= b.to);
+  if (plan.type === 'split3') {
+    const m = Math.max(1, Math.min(maxRank, Number(plan.m) || k));
+    return [{ name: '上位トーナメント', from: 1, to: k }, { name: '中位トーナメント', from: k + 1, to: Math.min(maxRank, k + m) }, { name: '下位トーナメント', from: k + m + 1, to: maxRank }].filter((b) => b.from <= b.to);
+  }
   if (plan.type === 'byrank') return Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
   if (plan.type === 'custom') return (plan.brackets || []).map((b) => ({ ...b, from: Number(b.from) || 1, to: Math.min(Number(b.to) || 1, maxRank) })).filter((b) => b.from <= b.to);
   return [{ name: '決勝トーナメント', from: 1, to: k }];
@@ -49,9 +53,11 @@ function knockoutPlanPanel(f, cat, redraw) {
     const range = b.from === b.to ? `各組${b.from}位` : `各組${b.from}〜${b.to}位`;
     const mode = b.mode || plan.mode;
     const first = offset + 1;
+    // 3位決定戦ありなら4位まで、3位が2チームなら3位まで、全順位なら全員
     const decided = n < 2 ? null
       : mode === 'all' ? (n === 2 ? `${first}・${first + 1}位` : `${first}〜${offset + n}位`)
-        : n >= 4 ? `${first}〜${first + 2}位` : `${first}・${first + 1}位`;
+        : n >= 4 ? (mode === 'top3' ? `${first}〜${first + 3}位` : `${first}〜${first + 2}位`)
+          : n === 3 ? `${first}〜${first + 2}位` : `${first}・${first + 1}位`;
     offset += n;
     return { name: b.name, range, n, decided, warn: n < 2 ? '2チーム未満のため作られません' : null };
   });
@@ -80,8 +86,10 @@ function knockoutPlanPanel(f, cat, redraw) {
         if (type === 'custom' && !(plan.brackets || []).length) plan.brackets = expandPlanPreview(plan, maxRank).map((b) => ({ ...b, mode: plan.mode }));
         set({ type });
       } }, Object.entries(PLAN_LABEL).map(([v, l]) => h('option', { value: v, selected: plan.type === v }, l)))),
-      plan.type === 'top' || plan.type === 'split' ? h('label', { class: 'field' }, h('span', null, plan.type === 'top' ? '各組から進む数' : '上位に進む数（各組）'),
+      plan.type === 'top' || plan.type === 'split' || plan.type === 'split3' ? h('label', { class: 'field' }, h('span', null, plan.type === 'top' ? '各組から進む数' : '上位に進む数（各組）'),
         h('input', { type: 'number', min: 1, max: 16, value: plan.k, inputmode: 'numeric', oninput: (e) => { plan.k = Number(e.target.value); }, onchange: redraw })) : null,
+      plan.type === 'split3' ? h('label', { class: 'field' }, h('span', null, '中位に進む数（各組）'),
+        h('input', { type: 'number', min: 1, max: 16, value: plan.m || plan.k, inputmode: 'numeric', oninput: (e) => { plan.m = Number(e.target.value); }, onchange: redraw })) : null,
       plan.type !== 'custom' ? h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => set({ mode: e.target.value }) },
         Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: plan.mode === v }, l)))) : null),
     custom,

@@ -105,6 +105,7 @@ export function normalizeConfig(c) {
   }
   out.knockoutPlan = { type: 'top', k: 2, mode: 'top3', brackets: [], ...out.knockoutPlan };
   out.knockoutPlan.k = Math.max(1, Math.min(16, Number(out.knockoutPlan.k) || 2));
+  out.knockoutPlan.m = Math.max(1, Math.min(16, Number(out.knockoutPlan.m) || out.knockoutPlan.k)); // 上位・中位・下位のときの中位の数
   if (!Array.isArray(out.tiebreak) || !out.tiebreak.length) out.tiebreak = [...DEFAULT_TIEBREAK];
   out.tiebreak = out.tiebreak.filter((k) => k in TIEBREAK_KEYS);
   return out;

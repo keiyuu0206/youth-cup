@@ -176,10 +176,12 @@ export function standingsView(cat, ctx) {
   const tm = teamMap(cat);
   const plan = cat.config.knockoutPlan || { type: 'top', k: cat.config.advance };
   const lk = cat.config.format === 'league_knockout';
-  const advance = lk && (plan.type === 'top' || plan.type === 'split') ? plan.k : 0;
+  const advance = lk && (plan.type === 'top' || plan.type === 'split' || plan.type === 'split3') ? plan.k : 0;
+  const mid = plan.m || plan.k;
   const note = !lk ? null
     : plan.type === 'top' ? `上位${plan.k}チームが決勝トーナメントへ`
       : plan.type === 'split' ? `${plan.k}位までが上位トーナメント、それより下は下位トーナメントへ`
+        : plan.type === 'split3' ? `${plan.k}位までが上位、${mid === 1 ? `${plan.k + 1}位` : `${plan.k + 1}〜${plan.k + mid}位`}が中位、それより下は下位トーナメントへ`
         : plan.type === 'all' ? '全チームが決勝トーナメントへ'
           : plan.type === 'byrank' ? '同じ順位のチームどうしでトーナメント' : null;
   return h('div', null, groups.map((g) => {

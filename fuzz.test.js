@@ -15,7 +15,7 @@ function runOne(seed) {
   const n = 2 + Math.floor(r() * 39);
   const format = pick(['league', 'knockout', 'league_knockout', 'league_knockout']);
   const groups = format === 'knockout' ? 1 : Math.max(1, Math.min(Math.floor(n / 2), 1 + Math.floor(r() * 10)));
-  const plan = { type: pick(['top', 'all', 'split', 'byrank']), k: 1 + Math.floor(r() * 3), mode: pick(['top3', 'top3_shared', 'all']) };
+  const plan = { type: pick(['top', 'all', 'split', 'split3', 'byrank']), k: 1 + Math.floor(r() * 3), m: 1 + Math.floor(r() * 2), mode: pick(['top3', 'top3_shared', 'all']) };
   const days = 1 + Math.floor(r() * 3);
   const cfg = normalizeConfig({
     format, groups, courts: 1 + Math.floor(r() * 6), rankMode: pick(['top3', 'top3_shared', 'all']), knockoutPlan: plan,

@@ -175,7 +175,7 @@ class Builder {
 }
 
 export const MODE_LABEL = { top3: '1〜3位を決める（3位決定戦あり）', top3_shared: '1〜3位を決める（3位は2チーム）', all: '全順位を決める（順位決定戦）' };
-export const PLAN_LABEL = { top: '上位チームだけでトーナメント', all: '全チームで1つのトーナメント', split: '上位トーナメントと下位トーナメント', byrank: '同じ順位どうしでトーナメント', custom: '自由に設定する' };
+export const PLAN_LABEL = { top: '上位チームだけでトーナメント', all: '全チームで1つのトーナメント', split: '上位トーナメントと下位トーナメント', split3: '上位・中位・下位トーナメント', byrank: '同じ順位どうしでトーナメント', custom: '自由に設定する' };
 
 /**
  * 決勝トーナメントの構成を、実際の組の人数に合わせて展開する
@@ -187,6 +187,11 @@ export function expandPlan(plan, maxRank) {
   let list;
   if (plan.type === 'all') list = [{ name: '決勝トーナメント', from: 1, to: maxRank }];
   else if (plan.type === 'split') list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '下位トーナメント', from: k + 1, to: maxRank }];
+  else if (plan.type === 'split3') {
+    // 各組 1〜k位 が上位、k+1〜k+m位 が中位、それより下が下位
+    const m = Math.max(1, Math.min(maxRank, Number(plan.m) || k));
+    list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '中位トーナメント', from: k + 1, to: k + m }, { name: '下位トーナメント', from: k + m + 1, to: maxRank }];
+  }
   else if (plan.type === 'byrank') list = Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
   else if (plan.type === 'custom') list = (plan.brackets || []).map((b, i) => ({ name: b.name || `トーナメント${i + 1}`, from: Number(b.from) || 1, to: Number(b.to) || 1, mode: b.mode }));
   else list = [{ name: '決勝トーナメント', from: 1, to: k }];

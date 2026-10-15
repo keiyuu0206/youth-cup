@@ -385,3 +385,27 @@ test('抽選: 3位どうしが並んでいても、1位・2位の進出先は先
   const filled = ev.updates.filter((u) => u.home_team_id && u.away_team_id);
   assert.equal(filled.length, 2); // 準決勝2試合はA組1・2位を含めて決まる
 });
+
+// ---- 上位・中位・下位トーナメント ----
+test('上位・中位・下位: 4組×6チーム（上位2・中位2）で、順位が1〜24位まで通しで決まる', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'split3', k: 2, m: 2, mode: 'all' }), { format: 'league_knockout', groupSizes: { A: 6, B: 6, C: 6, D: 6 } }));
+  assert.equal(r.error, undefined);
+  const names = [...new Set(r.matches.map((m) => m.bracket))];
+  assert.deepEqual([...names].sort(), ['上位トーナメント', '中位トーナメント', '下位トーナメント'].sort());
+  assert.deepEqual(placesOf(r.matches), seq(24));
+  // 中位は各組3〜4位、クロス方式（A組3位 対 B組4位）
+  const mid = firstRound(r.matches.filter((m) => m.bracket === '中位トーナメント'));
+  assert.ok(mid.every((m) => [3, 4].includes(m.home_ref.r) && [3, 4].includes(m.away_ref.r)));
+  assert.ok(mid.some((m) => m.home_ref.g === 'A' && m.home_ref.r === 3 && m.away_ref.g === 'B' && m.away_ref.r === 4));
+  // 中位の優勝は9位、下位の優勝は17位
+  assert.equal(r.matches.find((m) => m.label === '中位トーナメント 決勝').place_w, 9);
+  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 決勝').place_w, 17);
+});
+
+test('上位・中位・下位: 中位の数を省略すると上位と同じ数になり、余った順位は下位へ', () => {
+  const r = norm(buildKnockout(lkCfg({ type: 'split3', k: 1, mode: 'top3' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
+  const by = (n) => firstRound(r.matches.filter((m) => m.bracket === n)).flatMap((m) => [m.home_ref.r, m.away_ref.r]);
+  assert.ok(by('上位トーナメント').every((x) => x === 1));
+  assert.ok(by('中位トーナメント').every((x) => x === 2));
+  assert.ok(by('下位トーナメント').every((x) => x === 3 || x === 4));
+});

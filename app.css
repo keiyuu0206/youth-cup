@@ -580,7 +580,7 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .pd-cell { padding: 0.8mm 1.4mm 1mm; }
 .pd-cell .lb { display: flex; justify-content: space-between; gap: 1mm; font-size: 6.8pt; color: #555; margin-bottom: 0.3mm; }
 .pd-cell .tr { display: flex; align-items: center; gap: 1.2mm; min-height: 5.2mm; }
-.pd-cell .tr .n { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 8.5pt; line-height: 1.2; }
+.pd-cell .tr .n { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 8.5pt; line-height: 1.25; }
 .pd-cell .tr .n.ph { color: #666; font-size: 7.5pt; }
 .pd-cell .tr .s { flex: none; width: 7.5mm; text-align: center; font-weight: 800; font-variant-numeric: tabular-nums; font-size: 9pt; }
 .pd-cell .tr .s small { font-size: 6.5pt; font-weight: 600; }
@@ -597,9 +597,9 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .pd-list td.b, .pd-star td.b { font-weight: 800; }
 .pd-list td.res { font-weight: 800; font-variant-numeric: tabular-nums; }
 .pd-star-wrap { break-inside: avoid; }
-.pd-star th.tn-h { font-size: 7pt; line-height: 1.2; overflow-wrap: anywhere; }
+.pd-star th.tn-h { font-size: 7pt; line-height: 1.2; }
 .pd-star td { text-align: center; font-size: 8.3pt; font-variant-numeric: tabular-nums; height: 7mm; }
-.pd-star td.tn { text-align: left; font-weight: 700; font-size: 8.3pt; overflow-wrap: anywhere; }
+.pd-star td.tn { text-align: left; font-weight: 700; font-size: 8.3pt; }
 .pd-star td.diag { background: repeating-linear-gradient(135deg, #d8ddd9 0 0.6mm, #fff 0.6mm 2mm); }
 .pd-star .mk { font-weight: 800; margin-right: 0.8mm; }
 .pd-bracket .section-title { margin: 2mm 0 1.5mm; }
@@ -607,7 +607,7 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .pd-bracket .section-title .ico { width: 4mm; height: 4mm; }
 .pd .scroll-hint { display: none; }
 .pd .tree-scroll { overflow: visible; margin: 0; padding: 0; }
-.pd-fit { width: 100%; break-inside: avoid; }
+.pd-zoom { width: 100%; break-inside: avoid; }
 .pd .bm { box-shadow: none; border: 0.25mm solid #9aa59f; border-radius: 1.2mm; }
 .pd .node.final { box-shadow: none; border: 0.5mm solid #0f7b4a; }
 .pd .tree { --conn: #8f9a93; }
@@ -621,15 +621,43 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .pd .podium .p .r { width: 7mm; height: 7mm; font-size: 7pt; }
 /* PDFのチームロゴ（ロゴのあるチームだけ。頭文字の丸は出さない） */
 .pd .crest:not(img) { display: none; }
+/* チーム名は1行。枠の幅 ÷ 文字数で文字の大きさを決める（印刷時にブラウザが計算するので画面とのずれが無い） */
+.pd .pd-fit { container-type: inline-size; display: block; min-width: 0; overflow: hidden; --base: 8.5pt; }
+.pd .pd-fit > .t { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: max(6pt, min(var(--base), calc(100cqi / var(--L)))); line-height: 1.3; }
+.pd-group .pd-fit, .pd-star .pd-fit, .pd-list .pd-fit { --base: 8.3pt; }
+.pd-star th.tn-h .pd-fit { --base: 7.2pt; }
+.pd-star th.tn-h .pd-fit > .t { font-weight: 800; }
+.pd-star td.tn .pd-fit { --base: 8.5pt; }
+.pd-no { flex: none; display: inline-grid; place-items: center; width: 3.8mm; height: 3.8mm; border-radius: 50%; background: #0f7b4a; color: #fff;
+  font-size: 6.5pt; font-weight: 800; line-height: 1; }
+.pd-star th.tn-h.only-no .pd-no { width: 5mm; height: 5mm; font-size: 8pt; }
+.pd-hd { display: flex; align-items: center; justify-content: center; gap: 1mm; margin-bottom: 0.6mm; }
+.pd-star th.tn-h .pd-hd .pd-logo { display: inline-block; margin: 0; width: 4.2mm; height: 4.2mm; }
+.pd-named { display: flex; width: 100%; }
+.pd-named .pd-fit { flex: 1; }
+.pd-named.r .pd-fit > .t { text-align: right; }
+.pd-cell .tr .n.pd-fit { flex: 1; overflow-wrap: normal; }
+.pd-star td.tn, .pd-star th.tn-h { overflow: hidden; }
+.pd-group .pd-named { width: 100%; }
+/* 組合せ表：時刻ごとに交互の色、境目に太めの線 */
+.pd-grid tbody tr.pd-slot > td { border-top: 0.5mm solid #5f7f6c; }
+.pd-grid tbody tr.pd-slot.band > td:not(.pd-empty) { background: #f1f7f3; }
+.pd-grid tbody tr.pd-slot > td.pd-time { background: #e4f2ea; font-size: 10.5pt; }
+.pd-grid tbody tr.pd-slot.band > td.pd-time { background: #cfe6d8; }
+/* 一覧表：同じ時刻をひとまとまりに */
+.pd-list tbody tr.tfirst > td { border-top: 0.5mm solid #5f7f6c; }
+.pd-list tbody tr.band > td { background: #f1f7f3; }
+.pd-list tbody tr > td.pd-time { background: #e4f2ea; }
+.pd-list tbody tr.band > td.pd-time { background: #cfe6d8; }
 .pd:not(.pd-logos) .crest, .pd:not(.pd-logos) .pd-logo { display: none; }
 .pd img.crest { width: 4.5mm !important; height: 4.5mm !important; box-shadow: none; border-radius: 0; background: transparent; }
 .pd-logo { width: 4.2mm; height: 4.2mm; object-fit: contain; flex: none; vertical-align: -0.8mm; }
 .pd-named { display: inline-flex; align-items: center; gap: 1.2mm; min-width: 0; }
 .pd-named.r { justify-content: flex-end; width: 100%; }
-.pd-named span { min-width: 0; overflow-wrap: anywhere; }
+.pd-named span { min-width: 0; }
 .pd-group .pd-named { display: flex; }
 .pd-cell .tr .pd-logo { width: 4mm; height: 4mm; }
-.pd-star th.tn-h .pd-logo { display: block; margin: 0 auto 0.6mm; width: 5mm; height: 5mm; }
 .pd .podium .p img.crest { width: 5mm !important; height: 5mm !important; }
 .pd .tree-others h3 { font-size: 8.5pt; }
 .pd .bm .bl { white-space: normal; flex-wrap: wrap; }

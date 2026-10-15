@@ -97,7 +97,7 @@ function printDocument(t, cats, opts) {
 
   // トーナメント表を用紙の幅に収める（測るために一時的に画面外で表示する）
   Object.assign(root.style, { display: 'block', position: 'absolute', left: '-10000px', top: '0', width: '188mm' });
-  for (const el of root.querySelectorAll('.pd-fit')) {
+  for (const el of root.querySelectorAll('.pd-zoom')) {
     el.style.zoom = '';
     const inner = el.firstElementChild;
     const need = inner ? inner.scrollWidth : el.scrollWidth;
@@ -135,13 +135,41 @@ function categoryBlock(t, catIn, opts, first) {
     !cat.matches.length && (s.schedule || s.league || s.bracket) ? h('p', { class: 'pd-note' }, '日程はまだ作成されていません。') : null);
 }
 
+// チーム名を1行に収める部品。文字の幅（全角=1、半角=約0.6）を数えておき、
+// 印刷時に枠の幅 ÷ 文字数 で文字の大きさが決まるようにする（最小 6pt、それでも入らなければ「…」）
+function textEm(text) {
+  let n = 0;
+  for (const ch of String(text)) {
+    const c = ch.codePointAt(0);
+    if (ch === ' ') n += 0.32;
+    else if (/[A-Z]/.test(ch)) n += 0.74; // 英大文字は幅が広い
+    else if (/[a-z0-9]/.test(ch)) n += 0.6;
+    else if (c <= 0xff || (c >= 0xff61 && c <= 0xff9f)) n += 0.5; // 記号・半角カナ
+    else n += 1; // 全角
+  }
+  return Math.max(1, n * 1.06 + 0.4); // 太字の分の余裕
+}
+// 用紙上で使える幅（mm）に、6.5pt以上で入る表記を選ぶ：正式名称 → 略称 → 括弧書きを省いた名前 → 一番短いもの
+const MM_PER_EM = 6.5 * 0.3528;
+const stripParen = (x) => String(x || '').replace(/[（(][^（）()]*[)）]\s*$/, '').trim();
+function pickName(team, fallback, availMm) {
+  if (!team) return fallback;
+  const cands = [...new Set([team.name, team.short_name, stripParen(team.name), stripParen(team.short_name)].filter(Boolean))];
+  return cands.find((v) => textEm(v) * MM_PER_EM <= availMm) || cands.reduce((a, b) => (textEm(b) < textEm(a) ? b : a));
+}
+
+const fit = (text, cls = '') => h('span', { class: `pd-fit ${cls}`.trim(), style: `--L:${textEm(text).toFixed(2)}` }, h('span', { class: 't' }, text));
+
 // ロゴがあるチームだけ小さな画像を返す（無ければ何も出さない）
 const logo = (team) => (team && team.logo ? h('img', { class: 'pd-logo', src: team.logo, alt: '' }) : null);
-const named = (team, text) => [logo(team), h('span', null, text)];
+const named = (team, text) => [logo(team), fit(text)];
 
 function groupsSection(cat, groups) {
+  // 組分けは正式名称の確認用。一番長い名前が 7pt 以上で1行に入る列数にする
+  const longest = Math.max(...cat.teams.map((x) => textEm(x.name)));
+  const cols = Math.max(1, Math.min(4, groups.length, Math.floor(188 / (longest * 7 * 0.3528 + 11))));
   return h('div', { class: 'pd-sec' }, h('h2', null, '組分け'),
-    h('div', { class: 'pd-groups', style: { gridTemplateColumns: `repeat(${Math.min(4, groups.length)}, 1fr)` } }, groups.map((g) => h('div', { class: 'pd-group' },
+    h('div', { class: 'pd-groups', style: { gridTemplateColumns: `repeat(${cols}, 1fr)` } }, groups.map((g) => h('div', { class: 'pd-group' },
       h('strong', null, `${g}組`),
       cat.teams.filter((x) => x.group_label === g).map((x) => h('div', { class: 'pd-named' }, named(x, x.name)))))));
 }
@@ -155,12 +183,14 @@ function scoreCells(m, side, blank) {
 
 function matchCell(cat, m, cache, opts, rowTime) {
   const blank = opts.blank;
+  // 1マスでチーム名に使える幅 = (188 - 時刻13) / コート数 - 余白・得点欄・ロゴ
+  const availMm = (188 - 13) / cat.config.courts - 11.5 - (opts.logos && cat.teams.some((x) => x.logo) ? 5.2 : 0);
   const w = !blank && m.status === 'confirmed' ? winnerSide(m) : null;
   const line = (side) => {
     const info = sideInfo(m, side, cat, cache);
     return h('div', { class: `tr${w ? (w === side ? ' w' : ' l') : ''}` },
       logo(info.team),
-      h('span', { class: `n${info.placeholder ? ' ph' : ''}` }, info.text), scoreCells(m, side, blank));
+      info.placeholder ? h('span', { class: 'n ph' }, info.text) : fit(pickName(info.team, info.text, availMm), 'n'), scoreCells(m, side, blank));
   };
   return h('td', { class: `pd-cell${blank ? ' pd-blank' : ''}` },
     h('div', { class: 'lb' }, h('span', null, m.label), m.start_min !== rowTime ? h('span', null, toHHMM(m.start_min)) : (m.forfeit && !blank ? h('span', null, '不戦勝') : null)),
@@ -182,13 +212,15 @@ function scheduleSection(t, cat, opts) {
     const slots = [...new Set(ms.map((m) => m.slot))].sort((a, b) => a - b);
     const rows = [];
     let prevSession = null;
+    let band = 0;
     for (const sl of slots) {
       const inSlot = ms.filter((m) => m.slot === sl);
+      band++;
       const session = inSlot[0].session;
       if (prevSession === 'am' && session === 'pm') rows.push(h('tr', { class: 'pd-lunch' }, h('td', { colspan: cfg.courts + 1 }, '昼休憩')));
       prevSession = session;
       const rowTime = Math.min(...inSlot.map((m) => m.start_min));
-      rows.push(h('tr', null, h('td', { class: 'pd-time' }, toHHMM(rowTime)),
+      rows.push(h('tr', { class: `pd-slot${band % 2 === 0 ? ' band' : ''}` }, h('td', { class: 'pd-time' }, toHHMM(rowTime)),
         Array.from({ length: cfg.courts }, (_, c) => {
           const m = inSlot.find((x) => x.court === c);
           return m ? matchCell(cat, m, cache, opts, rowTime) : h('td', { class: 'pd-empty' }, '');
@@ -201,19 +233,24 @@ function scheduleSection(t, cat, opts) {
   };
 
   // コートが多いときは1試合1行の一覧にする
+  let listBand = 0;
   const listTable = (ms) => h('table', { class: 'pd-t pd-list' },
     h('colgroup', null, ['8mm', '13mm', '16mm', '26mm', null, '18mm', null].map((w) => h('col', { style: w ? { width: w } : null }))),
     h('thead', null, h('tr', null, ['No', '時刻', 'コート', '試合', 'チーム', '結果', 'チーム'].map((x) => h('th', null, x)))),
     h('tbody', null, ms.map((m, i) => {
+      const first = i === 0 || ms[i - 1].start_min !== m.start_min;
+      const listAvail = (188 - 81) / 2 - 3 - (opts.logos && cat.teams.some((x) => x.logo) ? 5.2 : 0);
+      const nm = (side) => { const info = sideInfo(m, side, cat, cache); return named(info.team, info.placeholder ? info.text : pickName(info.team, info.text, listAvail)); };
+      if (first) listBand++;
       const w = !opts.blank && m.status === 'confirmed' ? winnerSide(m) : null;
       const sc = !opts.blank && m.status === 'confirmed' && m.home_score != null
         ? `${m.home_score} - ${m.away_score}${m.home_pk != null ? `（PK ${m.home_pk}-${m.away_pk}）` : ''}` : '';
-      return h('tr', null,
-        h('td', { class: 'c' }, i + 1), h('td', { class: 'pd-time' }, toHHMM(m.start_min)), h('td', { class: 'c' }, courtName(cfg, m.court)),
+      return h('tr', { class: `${first ? 'tfirst' : ''}${listBand % 2 === 0 ? ' band' : ''}` },
+        h('td', { class: 'c' }, i + 1), h('td', { class: 'pd-time' }, first ? toHHMM(m.start_min) : ''), h('td', { class: 'c' }, courtName(cfg, m.court)),
         h('td', { class: 'sm' }, m.label),
-        h('td', { class: `r${w === 'home' ? ' b' : ''}` }, h('span', { class: 'pd-named r' }, named(sideInfo(m, 'home', cat, cache).team, sideInfo(m, 'home', cat, cache).text))),
+        h('td', { class: `r${w === 'home' ? ' b' : ''}` }, h('span', { class: 'pd-named r' }, nm('home'))),
         h('td', { class: `c res${opts.blank ? ' pd-blank-res' : ''}` }, sc),
-        h('td', { class: w === 'away' ? 'b' : '' }, h('span', { class: 'pd-named' }, named(sideInfo(m, 'away', cat, cache).team, sideInfo(m, 'away', cat, cache).text))));
+        h('td', { class: w === 'away' ? 'b' : '' }, h('span', { class: 'pd-named' }, nm('away'))));
     })));
 
   const table = cfg.courts <= 4 ? gridTable : listTable;
@@ -243,14 +280,24 @@ function leagueSection(cat, groups, opts) {
       };
       const n = order.length;
       const show = !opts.blank;
+      // 左端の列幅を、その組で一番長いチーム名が 7.5pt で1行に入る幅にする（32〜72mm）
+      const anyLogo = opts.logos && order.some((x) => x.logo);
+      const nameMm = Math.min(72, Math.max(32, Math.ceil(Math.max(...order.map((x) => textEm(x.name))) * 7.5 * 0.3528 + 7 + (anyLogo ? 5.5 : 0))));
+      const no = (i) => h('span', { class: 'pd-no' }, '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'[i] || String(i + 1));
       return h('div', { class: 'pd-star-wrap' },
         h('h3', null, `${g}組${st && st.complete && show ? '' : show ? '（途中経過）' : ''}`),
         h('table', { class: 'pd-t pd-star' },
-          h('colgroup', null, h('col', { style: { width: n > 6 ? '30mm' : '36mm' } }), order.map(() => h('col')), ['10mm', '10mm', '10mm', '10mm'].map((w) => h('col', { style: { width: w } }))),
-          h('thead', null, h('tr', null, h('th', null, ''), order.map((x) => h('th', { class: 'tn-h' }, logo(x), h('div', null, x.short_name || x.name))), ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
-          h('tbody', null, order.map((a) => {
+          h('colgroup', null, h('col', { style: { width: `${nameMm}mm` } }), order.map(() => h('col')), ['10mm', '10mm', '10mm', '10mm'].map((w) => h('col', { style: { width: w } }))),
+          h('thead', null, h('tr', null, h('th', null, ''), order.map((x, i) => {
+            // 横の見出し：名前が 6pt でも入らないときは番号（とロゴ）だけ。縦の列の番号と対応する
+            const avail = (188 - nameMm - 40) / n - 3;
+            const label = pickName(x, x.name, avail);
+            const fits = textEm(label) * 6 * 0.3528 <= avail;
+            return h('th', { class: `tn-h${fits ? '' : ' only-no'}` }, h('div', { class: 'pd-hd' }, no(i), logo(x)), fits ? fit(label) : null);
+          }), ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
+          h('tbody', null, order.map((a, i) => {
             const r = rowOf[a.id];
-            return h('tr', null, h('td', { class: 'tn' }, h('span', { class: 'pd-named' }, named(a, a.name))), order.map((b) => cell(a, b)),
+            return h('tr', null, h('td', { class: 'tn' }, h('span', { class: 'pd-named' }, no(i), named(a, a.name))), order.map((b) => cell(a, b)),
               h('td', { class: 'b' }, show && r ? r.pts : ''), h('td', null, show && r ? (r.gd > 0 ? `+${r.gd}` : r.gd) : ''), h('td', null, show && r ? r.gf : ''),
               h('td', { class: 'b' }, show && r && r.p ? `${r.rank}${r.tied ? '=' : ''}` : ''));
           }))));
@@ -262,7 +309,7 @@ function bracketSection(t, cat) {
   const view = bracketView(cat, { tournament: t, myTeam: null });
   // 図ごとに幅を合わせて縮小できるよう包む
   for (const sc of view.querySelectorAll('.tree-scroll')) {
-    const wrap = h('div', { class: 'pd-fit' });
+    const wrap = h('div', { class: 'pd-zoom' });
     sc.replaceWith(wrap);
     wrap.append(sc);
   }
