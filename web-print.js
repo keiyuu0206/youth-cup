@@ -1,10 +1,10 @@
 // 組合せ・結果を A4 縦で出力する（ブラウザの印刷から「PDFとして保存」）
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, winnerSide, bracketView, TIEBREAK_LABEL } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength } from './web-views.js';
 
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
 
-function periodText(t) {
+export function periodText(t) {
   if (t.end_date && t.end_date > t.date) return `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d+年/, '')}`;
   return formatDate(t.date);
 }
@@ -18,6 +18,8 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     day: 'all',
     sponsors: true,
     logos: true,
+    mode: 'normal',
+    post: { blocks: true, brackets: true, timeline: true },
   };
   const sponsors = tournament.sponsors || [];
   const hasLogos = categories.some((c) => c.teams.some((x) => x.logo));
@@ -29,25 +31,34 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     const maxDays = Math.max(...cats.map((c) => dayTotal(c.config)));
     const check = (key, label, show = true) => (show ? h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: st.sections[key], onchange: (e) => { st.sections[key] = e.target.checked; } }), label) : null);
+    const pcheck = (key, label, show = true) => (show ? h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: st.post[key], onchange: (e) => { st.post[key] = e.target.checked; } }), label) : null);
     mount(content,
       h('div', { class: 'stack' },
+        h('div', { class: 'chips', style: { paddingTop: 0 } }, [['normal', '資料（A4縦）'], ['posting', '掲示用（大きく1枚ずつ）']].map(([k, l]) =>
+          h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.mode === k), onclick: () => { st.mode = k; draw(); } }, l))),
         categories.length > 1 ? h('label', { class: 'field' }, h('span', null, 'カテゴリ'), h('select', { onchange: (e) => { st.cat = e.target.value; draw(); } },
           categories.map((c) => h('option', { value: c.id, selected: st.cat === c.id }, c.name)),
           h('option', { value: 'all', selected: st.cat === 'all' }, 'すべてのカテゴリ'))) : null,
-        h('div', null,
+        st.mode === 'normal' ? h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力する内容'),
           check('groups', '組分け', hasLeague),
           check('schedule', '組合せ・日程'),
           check('league', '星取表・順位', hasLeague),
-          check('bracket', 'トーナメント表', hasKo)),
+          check('bracket', 'トーナメント表', hasKo)) : h('div', null,
+          h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '掲示する内容'),
+          pcheck('blocks', 'リーグ戦（1ブロック1枚・A4縦）', hasLeague),
+          pcheck('brackets', 'トーナメント（上位・中位・下位などを1つずつ1枚・A4横）', hasKo),
+          pcheck('timeline', '時間別の試合一覧（1日1枚・A4横）'),
+          h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '各用紙に収まるよう自動で縮小します。縦と横が混ざるときは、PCのChrome・Edgeで出力してください（iPhoneでは種類ごとに出力すると確実です）。')),
         maxDays > 1 ? h('label', { class: 'field' }, h('span', null, '組合せ・日程の日'), h('select', { onchange: (e) => { st.day = e.target.value; } },
           h('option', { value: 'all', selected: st.day === 'all' }, 'すべての日'),
           Array.from({ length: maxDays }, (_, d) => h('option', { value: String(d), selected: st.day === String(d) }, `${d + 1}日目のみ`)))) : null,
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
           'スコア欄を空欄にする（記入用・貼り出し用）'),
-        hasLogos ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.logos, onchange: (e) => { st.logos = e.target.checked; } }),
+        hasLogos && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.logos, onchange: (e) => { st.logos = e.target.checked; } }),
           'チームのロゴを表示する') : null,
-        sponsors.length ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
+        sponsors.length && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
           `協賛スポンサーを表示する（${sponsors.length}件）`) : null,
         h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
   };
@@ -58,7 +69,7 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     actions: [
       { label: 'キャンセル', kind: 'btn-ghost' },
       { label: 'PDFを作成', kind: 'btn-primary', onClick: () => {
-        if (!Object.values(st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
+        if (!Object.values(st.mode === 'posting' ? st.post : st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
         const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
         setTimeout(() => printDocument(tournament, cats, st), 50);
       } },
@@ -68,12 +79,57 @@ export function openPrintDialog(tournament, categories, currentCatId) {
 
 // ---------- 文書の組み立て ----------
 
-function printDocument(t, cats, opts) {
+function printRoot() {
   let root = document.getElementById('print-root');
   if (!root) {
     root = h('div', { id: 'print-root' });
     document.body.append(root);
   }
+  return root;
+}
+
+// 組み立てた文書を印刷する（用紙に合わせた縮小 → 画像の読み込み待ち → 印刷画面）
+export function runPrint(doc, fileTitle, pageCss = '', onAfter = null) {
+  const root = printRoot();
+  mount(root, doc);
+  let pageStyle = document.getElementById('print-page-style');
+  if (!pageStyle) { pageStyle = h('style', { id: 'print-page-style' }); document.head.append(pageStyle); }
+  pageStyle.textContent = pageCss;
+  Object.assign(root.style, { display: 'block', position: 'absolute', left: '-10000px', top: '0', width: '300mm' });
+  // 1枚ものの用紙（掲示用・駐車券）は、用紙の枠に収まるよう全体を縮小する
+  for (const sheet of root.querySelectorAll('.ps-sheet')) {
+    const inner = sheet.firstElementChild;
+    inner.style.zoom = '';
+    inner.style.width = '';
+    // 掲示用は余白があれば拡大して用紙いっぱいに（最大1.8倍）。収まらなければ縮小。
+    // 拡大・縮小後にちょうど用紙の幅になるよう、元の幅を逆算して何度か合わせる
+    const W = sheet.clientWidth - 2;
+    const H = sheet.clientHeight - 2;
+    const maxZ = sheet.classList.contains('grow') ? 1.8 : 1;
+    let z = 1;
+    for (let i = 0; i < 5; i++) {
+      inner.style.width = `${W / z}px`;
+      const nz = Math.max(0.3, Math.min(maxZ, W / Math.max(1, inner.scrollWidth), H / Math.max(1, inner.scrollHeight)));
+      if (Math.abs(nz - z) < 0.005) { z = nz; break; }
+      z = nz;
+    }
+    inner.style.width = `${W / z}px`;
+    if (inner.scrollHeight * z > H) z = Math.max(0.3, H / inner.scrollHeight);
+    inner.style.zoom = String(z);
+  }
+  root.removeAttribute('style');
+  const title = document.title;
+  document.title = fileTitle;
+  document.body.classList.add('printing');
+  window.addEventListener('afterprint', () => { document.title = title; if (onAfter) setTimeout(onAfter, 300); }, { once: true });
+  const imgs = [...root.querySelectorAll('img')].filter((img) => !img.complete);
+  const loaded = Promise.all(imgs.map((img) => new Promise((ok) => { img.onload = ok; img.onerror = ok; })));
+  Promise.race([loaded, new Promise((ok) => setTimeout(ok, 4000))]).then(() => setTimeout(() => window.print(), 120));
+}
+
+function printDocument(t, cats, opts) {
+  if (opts.mode === 'posting') return printPosting(t, cats, opts);
+  const root = printRoot();
   const now = new Date();
   const stamp = `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()} ${toHHMM(now.getHours() * 60 + now.getMinutes())}`;
   const doc = h('div', { class: `pd${opts.logos ? ' pd-logos' : ''}` },
@@ -158,7 +214,7 @@ function pickName(team, fallback, availMm) {
   return cands.find((v) => textEm(v) * MM_PER_EM <= availMm) || cands.reduce((a, b) => (textEm(b) < textEm(a) ? b : a));
 }
 
-const fit = (text, cls = '') => h('span', { class: `pd-fit ${cls}`.trim(), style: `--L:${textEm(text).toFixed(2)}` }, h('span', { class: 't' }, text));
+export const fit = (text, cls = '') => h('span', { class: `pd-fit ${cls}`.trim(), style: `--L:${textEm(text).toFixed(2)}` }, h('span', { class: 't' }, text));
 
 // ロゴがあるチームだけ小さな画像を返す（無ければ何も出さない）
 const logo = (team) => (team && team.logo ? h('img', { class: 'pd-logo', src: team.logo, alt: '' }) : null);
@@ -184,7 +240,7 @@ function scoreCells(m, side, blank) {
 function matchCell(cat, m, cache, opts, rowTime) {
   const blank = opts.blank;
   // 1マスでチーム名に使える幅 = (188 - 時刻13) / コート数 - 余白・得点欄・ロゴ
-  const availMm = (188 - 13) / cat.config.courts - 11.5 - (opts.logos && cat.teams.some((x) => x.logo) ? 5.2 : 0);
+  const availMm = ((opts.pageW || 188) - 13) / cat.config.courts - 11.5 - (opts.logos && cat.teams.some((x) => x.logo) ? 5.2 : 0);
   const w = !blank && m.status === 'confirmed' ? winnerSide(m) : null;
   const line = (side) => {
     const info = sideInfo(m, side, cat, cache);
@@ -202,7 +258,7 @@ function scheduleSection(t, cat, opts) {
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
   const days = dayTotal(cfg);
   const dayFilter = opts.day === 'all' ? null : Number(opts.day);
-  const list = cat.matches.filter((m) => dayFilter == null || dayOf(cfg, m.slot) === dayFilter)
+  const list = cat.matches.filter((m) => (dayFilter == null || dayOf(cfg, m.slot) === dayFilter) && (!opts.session || m.session === opts.session))
     .sort((a, b) => absMin(cfg, a) - absMin(cfg, b) || a.court - b.court);
   if (!list.length) return h('div', { class: 'pd-sec' }, h('h2', null, '組合せ・日程'), h('p', { class: 'pd-note' }, '該当する試合はありません。'));
   const byDay = {};
@@ -253,56 +309,69 @@ function scheduleSection(t, cat, opts) {
         h('td', { class: w === 'away' ? 'b' : '' }, h('span', { class: 'pd-named' }, nm('away'))));
     })));
 
-  const table = cfg.courts <= 4 ? gridTable : listTable;
+  const table = cfg.courts <= (opts.gridMax || 4) ? gridTable : listTable;
   return h('div', { class: 'pd-sec' }, h('h2', null, '組合せ・日程'),
     Object.keys(byDay).sort((a, b) => a - b).map((d) => h('div', { class: 'pd-day' },
       days > 1 ? h('h3', null, dayLabel(cat, Number(d), t)) : null,
       table(byDay[d]))));
 }
 
-function leagueSection(cat, groups, opts) {
-  const tm = teamMap(cat);
+// 星取表（名前だけ。横の見出しは入る範囲の表記を選ぶ）
+function starTable(cat, g, opts, pageW = 188, basePt = 8.5) {
   const league = cat.matches.filter((m) => m.stage === 'league');
+  const st = (cat.standings || {})[g];
+  const rows = st ? st.rows : [];
+  const order = cat.teams.filter((x) => x.group_label === g);
+  const rowOf = Object.fromEntries(rows.map((r) => [r.teamId, r]));
+  const show = !opts.blank;
+  const cell = (a, b) => {
+    if (a.id === b.id) return h('td', { class: 'diag' });
+    const m = league.find((x) => (x.home_team_id === a.id && x.away_team_id === b.id) || (x.home_team_id === b.id && x.away_team_id === a.id));
+    if (!m || !show || m.status !== 'confirmed' || m.home_score == null) return h('td', { class: 'pd-blank-res' });
+    const mine = m.home_team_id === a.id ? m.home_score : m.away_score;
+    const opp = m.home_team_id === a.id ? m.away_score : m.home_score;
+    return h('td', null, h('span', { class: 'mk' }, mine > opp ? '○' : mine < opp ? '●' : '△'), `${mine}-${opp}`);
+  };
+  const n = Math.max(1, order.length);
+  const sumW = 40 * (basePt / 8.5);
+  // 左端の列幅：一番長いチーム名が入る幅（用紙の4割まで）
+  const nameMm = Math.min(pageW * 0.3, Math.max(30, Math.ceil(Math.max(...order.map((x) => textEm(x.name)), 4) * basePt * 0.3528 + 6)));
+  const avail = (pageW - nameMm - sumW) / n - 3;
+  // 横の見出しは入る範囲で名称を入れる（略称・括弧なしを優先し、それでも長ければ入る文字数まで。「…」は付けない）
+  const headPt = Math.max(6.5, basePt * 0.82);
+  const headLabel = (x) => {
+    const label = pickName(x, x.name, avail);
+    const maxEm = avail / (headPt * 0.3528);
+    if (textEm(label) <= maxEm) return label;
+    let out = '';
+    for (const ch of label) { if (textEm(out + ch) > maxEm) break; out += ch; }
+    return out || [...label][0];
+  };
+  return h('table', { class: 'pd-t pd-star' },
+    h('colgroup', null, h('col', { style: { width: `${nameMm}mm` } }), order.map(() => h('col')), [0, 1, 2, 3].map(() => h('col', { style: { width: `${sumW / 4}mm` } }))),
+    h('thead', null, h('tr', null, h('th', null, ''),
+      order.map((x) => h('th', { class: 'tn-h', title: x.name }, fit(headLabel(x), 'clip'))),
+      ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
+    h('tbody', null, order.map((a) => {
+      const r = rowOf[a.id];
+      return h('tr', null, h('td', { class: 'tn' }, fit(a.name)), order.map((b) => cell(a, b)),
+        h('td', { class: 'b' }, show && r ? r.pts : ''), h('td', null, show && r ? (r.gd > 0 ? `+${r.gd}` : r.gd) : ''), h('td', null, show && r ? r.gf : ''),
+        h('td', { class: 'b' }, show && r && r.p ? `${r.rank}${r.tied ? '=' : ''}` : ''));
+    })));
+}
+
+const starNote = (cat) => `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。勝点が並んだときは ${(cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`;
+
+function leagueSection(cat, groups, opts) {
   return h('div', { class: 'pd-sec' }, h('h2', null, '星取表・順位'),
     groups.map((g) => {
       const st = (cat.standings || {})[g];
-      const rows = st ? st.rows : [];
-      const order = cat.teams.filter((x) => x.group_label === g);
-      const rowOf = Object.fromEntries(rows.map((r) => [r.teamId, r]));
-      const cell = (a, b) => {
-        if (a.id === b.id) return h('td', { class: 'diag' });
-        const m = league.find((x) => (x.home_team_id === a.id && x.away_team_id === b.id) || (x.home_team_id === b.id && x.away_team_id === a.id));
-        if (!m || opts.blank || m.status !== 'confirmed' || m.home_score == null) return h('td', { class: 'pd-blank-res' });
-        const mine = m.home_team_id === a.id ? m.home_score : m.away_score;
-        const opp = m.home_team_id === a.id ? m.away_score : m.home_score;
-        const mark = mine > opp ? '○' : mine < opp ? '●' : '△';
-        return h('td', null, h('span', { class: 'mk' }, mark), `${mine}-${opp}`);
-      };
-      const n = order.length;
       const show = !opts.blank;
-      // 左端の列幅を、その組で一番長いチーム名が 7.5pt で1行に入る幅にする（32〜72mm）
-      const anyLogo = opts.logos && order.some((x) => x.logo);
-      const nameMm = Math.min(72, Math.max(32, Math.ceil(Math.max(...order.map((x) => textEm(x.name))) * 7.5 * 0.3528 + 7 + (anyLogo ? 5.5 : 0))));
-      const no = (i) => h('span', { class: 'pd-no' }, '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳'[i] || String(i + 1));
       return h('div', { class: 'pd-star-wrap' },
         h('h3', null, `${g}組${st && st.complete && show ? '' : show ? '（途中経過）' : ''}`),
-        h('table', { class: 'pd-t pd-star' },
-          h('colgroup', null, h('col', { style: { width: `${nameMm}mm` } }), order.map(() => h('col')), ['10mm', '10mm', '10mm', '10mm'].map((w) => h('col', { style: { width: w } }))),
-          h('thead', null, h('tr', null, h('th', null, ''), order.map((x, i) => {
-            // 横の見出し：名前が 6pt でも入らないときは番号（とロゴ）だけ。縦の列の番号と対応する
-            const avail = (188 - nameMm - 40) / n - 3;
-            const label = pickName(x, x.name, avail);
-            const fits = textEm(label) * 6 * 0.3528 <= avail;
-            return h('th', { class: `tn-h${fits ? '' : ' only-no'}` }, h('div', { class: 'pd-hd' }, no(i), logo(x)), fits ? fit(label) : null);
-          }), ['勝点', '得失', '総得', '順位'].map((x) => h('th', null, x)))),
-          h('tbody', null, order.map((a, i) => {
-            const r = rowOf[a.id];
-            return h('tr', null, h('td', { class: 'tn' }, h('span', { class: 'pd-named' }, no(i), named(a, a.name))), order.map((b) => cell(a, b)),
-              h('td', { class: 'b' }, show && r ? r.pts : ''), h('td', null, show && r ? (r.gd > 0 ? `+${r.gd}` : r.gd) : ''), h('td', null, show && r ? r.gf : ''),
-              h('td', { class: 'b' }, show && r && r.p ? `${r.rank}${r.tied ? '=' : ''}` : ''));
-          }))));
+        starTable(cat, g, opts));
     }),
-    h('p', { class: 'pd-note' }, `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。勝点が並んだときは ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`));
+    h('p', { class: 'pd-note' }, starNote(cat)));
 }
 
 function bracketSection(t, cat) {
@@ -314,4 +383,123 @@ function bracketSection(t, cat) {
     wrap.append(sc);
   }
   return h('div', { class: 'pd-sec pd-bracket' }, h('h2', null, 'トーナメント表'), view);
+}
+
+
+// ======================================================================
+// 掲示用（大きな文字で1枚ずつ）
+// ======================================================================
+
+const sheet = (orient, ...kids) => h('section', { class: `ps-sheet ps-${orient}` }, h('div', { class: 'ps-inner' }, kids));
+const growSheet = (orient, ...kids) => { const el = sheet(orient, ...kids); el.classList.add('grow'); return el; };
+const sheetHead = (t, cat, title, sub) => h('header', { class: 'ps-head' },
+  t.logo ? h('img', { src: t.logo, alt: '' }) : null,
+  h('div', { class: 'ps-head-t' }, h('div', { class: 'ps-tname' }, t.name), h('div', { class: 'ps-tsub' }, [cat.name, periodText(t), t.venue].filter(Boolean).join('　'))),
+  h('div', { class: 'ps-title' }, title, sub ? h('small', null, sub) : null));
+
+const PAGE_PORT = '@page { size: A4 portrait; margin: 8mm; }';
+const PAGE_LAND = '@page { size: A4 landscape; margin: 8mm; }';
+
+function printPosting(t, cats, opts) {
+  const sheets = [];
+  for (const catIn of cats) {
+    const cat = opts.blank ? { ...catIn, finalRanking: [], matches: catIn.matches.map((m) => ({ ...m, status: 'none', home_score: null, away_score: null, home_pk: null, away_pk: null })) } : catIn;
+    const cfg = cat.config;
+    const cache = { teams: teamMap(cat), codes: codeMap(cat) };
+    const groups = [...new Set(cat.teams.map((x) => x.group_label).filter(Boolean))].sort();
+    // リーグ戦：1ブロック1枚（星取表＋そのブロックの試合）
+    if (opts.post.blocks && cfg.format !== 'knockout') {
+      for (const g of groups) {
+        const ms = cat.matches.filter((m) => m.stage === 'league' && m.group_label === g).sort((a, b) => absMin(cfg, a) - absMin(cfg, b));
+        const multi = dayTotal(cfg) > 1;
+        sheets.push(growSheet('port',
+          sheetHead(t, cat, `${g}組`, 'リーグ戦'),
+          h('div', { class: 'ps-star' }, starTable(cat, g, opts, 194, 11)),
+          h('p', { class: 'pd-note' }, starNote(cat)),
+          h('h3', { class: 'ps-sub' }, '対戦スケジュール'),
+          h('table', { class: 'pd-t ps-matches' },
+            h('colgroup', null, h('col', { style: { width: multi ? '30mm' : '18mm' } }), h('col', { style: { width: '20mm' } }), h('col'), h('col', { style: { width: '24mm' } }), h('col')),
+            h('thead', null, h('tr', null, ['時刻', 'コート', 'チーム', '結果', 'チーム'].map((x) => h('th', null, x)))),
+            h('tbody', null, ms.map((m, i) => {
+              const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
+              const w = done ? winnerSide(m) : null;
+              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return fit(pickName(info.team, info.text, 60)); };
+              return h('tr', { class: i % 2 ? 'band' : '' },
+                h('td', { class: 'pd-time' }, `${multi ? `${dayOf(cfg, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)}`), h('td', { class: 'c' }, courtName(cfg, m.court)),
+                h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')),
+                h('td', { class: `c res${done ? '' : ' blank'}` }, done ? `${m.home_score} - ${m.away_score}` : '　 - 　'),
+                h('td', { class: w === 'away' ? 'b' : '' }, nm('away')));
+            })))));
+      }
+    }
+    // トーナメント：上位・中位・下位などを1つずつ1枚に（横向き）
+    if (opts.post.brackets && cfg.format !== 'league' && cat.matches.some((m) => m.stage === 'knockout')) {
+      for (const name of bracketNames(cat)) {
+        sheets.push(growSheet('land', sheetHead(t, cat, name || 'トーナメント表', cfg.format === 'knockout' ? 'トーナメント' : '決勝トーナメント'),
+          h('div', { class: 'ps-bracket' }, bracketView(cat, { tournament: t, myTeam: null, only: name }))));
+      }
+    }
+    // 時間別の試合一覧：1日1枚（横向き）
+    if (opts.post.timeline && cat.matches.length) {
+      const days = dayTotal(cfg);
+      for (let d = 0; d < days; d++) {
+        if (opts.day !== 'all' && Number(opts.day) !== d) continue;
+        const dayMs = cat.matches.filter((m) => dayOf(cfg, m.slot) === d);
+        if (!dayMs.length) continue;
+        // 時間帯が多い日は、読める大きさを保つため午前・午後の2枚に分ける
+        const slots = new Set(dayMs.map((m) => m.slot)).size;
+        const sessions = [...new Set(dayMs.map((m) => m.session))];
+        const parts = slots > 9 && sessions.length > 1 ? [['am', '午前'], ['pm', '午後']] : [[null, '']];
+        for (const [session, label] of parts) {
+          const sec = scheduleSection(t, cat, { ...opts, day: String(d), session, pageW: 281, gridMax: 8, logos: false });
+          sec.querySelectorAll('h2, h3').forEach((x) => x.remove());
+          const when = days > 1 ? dayLabel(cat, d, t) : formatDate(dayDate(cat, 0, t));
+          sheets.push(growSheet('land', sheetHead(t, cat, `試合スケジュール${label ? `（${label}）` : ''}`, when), h('div', { class: 'ps-time' }, sec)));
+        }
+      }
+    }
+  }
+  if (!sheets.length) return toast('出力できる内容がありません', true);
+  // ブラウザは1回の印刷で縦と横の用紙を正しく混在できないため、向きごとに分けて印刷する
+  const port = sheets.filter((x) => x.classList.contains('ps-port'));
+  const land = sheets.filter((x) => x.classList.contains('ps-land'));
+  const go = (list, css, suffix, after) => {
+    list.forEach((x) => x.classList.remove('last'));
+    list[list.length - 1].classList.add('last');
+    runPrint(h('div', { class: 'pd ps' }, list), `${t.name}_掲示用${suffix}`, css, after);
+  };
+  if (port.length && land.length) {
+    go(port, PAGE_PORT, '_縦', () => modal({
+      title: '続けて横向きの用紙を出力',
+      content: h('p', null, `リーグ戦（縦向き ${port.length}枚）を出力しました。続けて、トーナメント・時間別の試合一覧（横向き ${land.length}枚）を出力します。`),
+      actions: [{ label: 'あとで', kind: 'btn-ghost' }, { label: '横向きを出力', kind: 'btn-primary', onClick: () => { setTimeout(() => go(land, PAGE_LAND, '_横'), 50); } }],
+    }));
+  } else if (port.length) go(port, PAGE_PORT, '');
+  else go(land, PAGE_LAND, '');
+}
+
+// ======================================================================
+// 駐車券（A4横）
+// ======================================================================
+
+export function printParking(t, cat, team) {
+  const p = t.parking || {};
+  const n = Math.max(1, Math.min(10, Number(p.perTeam) || 1));
+  const valid = p.valid || periodText(t);
+  const sheets = Array.from({ length: n }, (_, i) => sheet('land', h('div', { class: 'pk' },
+    h('div', { class: 'pk-band' },
+      t.logo ? h('img', { src: t.logo, alt: '' }) : null,
+      h('div', null, h('div', { class: 'pk-tname' }, t.name), h('div', { class: 'pk-tsub' }, [valid, t.venue].filter(Boolean).join('　'))),
+      n > 1 ? h('div', { class: 'pk-no' }, `No.${i + 1} / ${n}`) : null),
+    h('div', { class: 'pk-main' },
+      h('div', { class: 'pk-title' }, p.title || '駐車証'),
+      h('div', { class: 'pk-team' }, fit(team.name, 'pk-team-fit')),
+      h('div', { class: 'pk-cat' }, `${cat.name}　参加チーム`)),
+    h('div', { class: 'pk-foot' },
+      p.place ? h('div', { class: 'pk-place' }, h('span', null, '駐車場所'), h('strong', null, p.place)) : null,
+      h('div', { class: 'pk-valid' }, h('span', null, '有効期間'), h('strong', null, valid)),
+      p.note ? h('p', { class: 'pk-note' }, p.note) : null,
+      h('p', { class: 'pk-hint' }, 'この駐車証は、車外から見えるようにダッシュボードの上に置いてください。')))));
+  sheets[sheets.length - 1].classList.add('last');
+  runPrint(h('div', { class: 'pd ps' }, sheets), `${t.name}_駐車証_${team.name}`, PAGE_LAND);
 }

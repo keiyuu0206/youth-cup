@@ -217,6 +217,18 @@ export function finalRankingView(cat, ctx) {
       h('span', { class: 'r' }, `${r.rank}位`), crest(tm[r.teamId], 32), h('strong', null, tm[r.teamId] ? tm[r.teamId].name : '-')))));
 }
 
+export function bracketNames(cat) {
+  const ko = cat.matches.filter((m) => m.stage === 'knockout');
+  const seen = [];
+  const top = {};
+  for (const m of ko) {
+    const n = m.group_label || '';
+    if (!seen.includes(n)) seen.push(n);
+    top[n] = Math.min(top[n] ?? Infinity, m.place_w ?? m.place_l ?? Infinity);
+  }
+  return seen.sort((a, b) => top[a] - top[b]);
+}
+
 export function bracketView(cat, ctx) {
   const ko = cat.matches.filter((m) => m.stage === 'knockout');
   if (!ko.length) return h('p', { class: 'empty' }, 'トーナメントはありません');
@@ -232,6 +244,8 @@ export function bracketView(cat, ctx) {
   // 上位のトーナメントから順に表示する
   const topRank = (sec) => Math.min(...sec.list.map((m) => m.place_w ?? m.place_l ?? Infinity));
   sections.sort((a, b) => topRank(a) - topRank(b));
+  // 掲示用印刷などで、1つのトーナメントだけを描く
+  if (ctx.only !== undefined) sections.splice(0, sections.length, ...sections.filter((x) => x.name === ctx.only));
   const strip = (label, name) => (name ? label.split(`${name} `).join('') : label);
   // 1試合分のカード
   const card = (m, sec, isFinal) => {
@@ -283,7 +297,7 @@ export function bracketView(cat, ctx) {
         h('div', { class: 'tree-scroll' }, h('div', { class: 'tree-root' }, node(r)))))) : null);
   };
 
-  const ranking = finalRankingView(cat, ctx);
+  const ranking = ctx.only !== undefined ? null : finalRankingView(cat, ctx);
   if (ranking) { ranking.id = 'bk-rank'; ranking.classList.add('bk-target'); }
   const secEls = sections.map((sec, si) => h('section', { class: 'bk-target', id: `bk-${si}` },
     h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表')),

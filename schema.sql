@@ -5,6 +5,7 @@ CREATE TABLE tournaments (
   name TEXT NOT NULL,
   date TEXT,                          -- 開始日 YYYY-MM-DD
   end_date TEXT,                      -- 終了日（1日開催なら空）
+  settings TEXT,                      -- 要項・駐車券などの設定（JSON）
   venue TEXT,
   logo TEXT,                          -- data URL（小さな画像のみ）
   show_logo INTEGER NOT NULL DEFAULT 1,
@@ -117,3 +118,15 @@ CREATE TABLE sponsor_clicks (
   count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (sponsor_id, day)
 );
+
+-- 添付画像（要項の施設案内など。owner は大会ID か preset:プリセットID）
+CREATE TABLE assets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, image TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX idx_assets_owner ON assets(owner);
+
+-- 忘れ物
+CREATE TABLE lost_items (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, image TEXT, note TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX idx_lost_tournament ON lost_items(tournament_id);
+
+-- プリセット（要項など）
+CREATE TABLE presets (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);

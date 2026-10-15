@@ -11,6 +11,7 @@ import WEB_VIEWER from './web-viewer.js';
 import WEB_RELATIVE from './web-relative.js';
 import WEB_ADMIN from './web-admin.js';
 import WEB_PRINT from './web-print.js';
+import WEB_OUTLINE from './web-outline.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
@@ -63,7 +64,21 @@ async function ensureSchema(db) {
     try { await db.prepare('ALTER TABLE tournaments ADD COLUMN end_date TEXT').run(); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
+  if (!cols.includes('settings')) {
+    try { await db.prepare('ALTER TABLE tournaments ADD COLUMN settings TEXT').run(); }
+    catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+  }
   const tables = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).results.map((r) => r.name);
+  if (!tables.includes('assets') || !tables.includes('lost_items') || !tables.includes('presets')) {
+    await db.batch([
+      db.prepare('CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, image TEXT NOT NULL, created_at TEXT NOT NULL)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_assets_owner ON assets(owner)'),
+      db.prepare(`CREATE TABLE IF NOT EXISTS lost_items (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, image TEXT, note TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_lost_tournament ON lost_items(tournament_id)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS presets (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)'),
+    ]);
+  }
   if (!tables.includes('sponsors') || !tables.includes('sponsor_clicks')) {
     await db.batch([
       db.prepare(`CREATE TABLE IF NOT EXISTS sponsors (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
@@ -222,6 +237,8 @@ async function sponsorRedirect(req, db, id) {
 // /img/s/:id … バナー画像、/img/t/:id … 大会ロゴ、/img/team/:id … チームロゴ（ページのデータとは別に配信し、長くキャッシュする）
 async function sponsorImage(db, id, kind = 's') {
   const q = kind === 's' ? 'SELECT image FROM sponsors WHERE id = ?'
+    : kind === 'l' ? 'SELECT image FROM lost_items WHERE id = ?'
+    : kind === 'a' ? 'SELECT image FROM assets WHERE id = ?'
     : kind === 't' ? 'SELECT logo AS image FROM tournaments WHERE id = ? AND show_logo = 1 AND status != \'draft\''
       : 'SELECT t.logo AS image FROM teams t JOIN categories c ON c.id = t.category_id JOIN tournaments x ON x.id = c.tournament_id WHERE t.id = ? AND x.show_logo = 1 AND x.status != \'draft\'';
   const sp = await db.prepare(q).bind(id).first();
@@ -235,6 +252,34 @@ async function sponsorImage(db, id, kind = 's') {
   return new Response(bytes, { headers: { 'Content-Type': m[1], 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff',
     'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } });
 }
+
+// ---------- 大会の設定（要項・駐車券）と忘れ物 ----------
+
+const readSettings = (t) => { try { return JSON.parse(t.settings || '{}') || {}; } catch { return {}; } };
+async function listLost(db, tid, all = false) {
+  const rows = (await db.prepare(`SELECT id, note, status, created_at, updated_at, image IS NOT NULL AS has_image FROM lost_items WHERE tournament_id = ?${all ? '' : " AND status = 'open'"} ORDER BY created_at DESC`).bind(tid).all()).results;
+  return rows.map((r) => ({ id: r.id, note: r.note, status: r.status, created_at: r.created_at, img: r.has_image ? `/img/l/${r.id}?v=${encodeURIComponent(r.updated_at)}` : null }));
+}
+function publicParking(settings) {
+  const p = settings.parking || {};
+  if (!p.enabled) return null;
+  return { title: p.title || '駐車証', place: p.place || '', note: p.note || '', perTeam: Math.max(1, Math.min(10, Number(p.perTeam) || 1)), valid: p.valid || '' };
+}
+
+// 画像（要項の添付・プリセット用）をコピーする。旧ID → 新ID の対応を返す
+async function copyAssets(db, ids, owner) {
+  const map = {};
+  for (const id of [...new Set(ids)].filter(Boolean)) {
+    const a = await db.prepare('SELECT image FROM assets WHERE id = ?').bind(id).first();
+    if (!a) continue;
+    const nid = uid();
+    await db.prepare('INSERT INTO assets (id, owner, image, created_at) VALUES (?, ?, ?, ?)').bind(nid, owner, a.image, now()).run();
+    map[id] = nid;
+  }
+  return map;
+}
+const outlineImageIds = (o) => ((o && o.sections) || []).flatMap((x) => (x.images || []).map((i) => i.id));
+const remapOutline = (o, map) => ({ ...o, sections: ((o && o.sections) || []).map((x) => ({ ...x, images: (x.images || []).filter((i) => map[i.id]).map((i) => ({ ...i, id: map[i.id] })) })) });
 
 // ---------- 公開用の整形 ----------
 
@@ -275,8 +320,9 @@ function stripConfig(cfg) {
 async function publicPayload(db, t, level) {
   const cats = await loadFull(db, t);
   const sponsors = publicSponsors(await listSponsors(db, t.id));
+  const settings = readSettings(t);
   return {
-    tournament: { ...publicTournament(t), sponsors },
+    tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings) },
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
@@ -300,6 +346,7 @@ const STATIC = {
   '/web-relative.js': [WEB_RELATIVE, JS],
   '/web-admin.js': [WEB_ADMIN, JS],
   '/web-print.js': [WEB_PRINT, JS],
+  '/web-outline.js': [WEB_OUTLINE, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -346,7 +393,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const go = url.pathname.match(/^\/go\/([\w-]+)$/);
-    const img = url.pathname.match(/^\/img\/(s|t|team)\/([\w-]+)$/);
+    const img = url.pathname.match(/^\/img\/(s|t|team|l|a)\/([\w-]+)$/);
     if (go || img) {
       try {
         await ensureSchema(env.DB);
@@ -439,7 +486,9 @@ route('GET', '/api/admin/tournaments/:id', async ({ db, params, url }) => {
     return { ...c, warnings: scheduleWarnings(c.config, c.matches, (id) => names[id] || '未定'), matchLength: len };
   });
   const sponsors = await listSponsors(db, t.id, true);
-  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors) }, categories: out, sponsors });
+  const settings = readSettings(t);
+  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors), settings, parking: publicParking(settings) },
+    categories: out, sponsors, lost: await listLost(db, t.id, true) });
 }, 'admin');
 
 const STATUSES = ['draft', 'published', 'live', 'finished'];
@@ -457,8 +506,13 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
   };
   if (!STATUSES.includes(next.status)) fail(400, '大会の状態が正しくありません');
   next.end_date = checkRange(next.date, b.end_date !== undefined ? b.end_date || null : t.end_date);
-  await db.prepare('UPDATE tournaments SET name = ?, date = ?, end_date = ?, venue = ?, logo = ?, show_logo = ?, status = ? WHERE id = ?')
-    .bind(next.name, next.date, next.end_date, next.venue, next.logo, next.show_logo, next.status, t.id).run();
+  let settings = readSettings(t);
+  if (b.settings && typeof b.settings === 'object') {
+    settings = { ...settings, ...b.settings };
+    if (JSON.stringify(settings).length > 300_000) fail(400, '要項の文章が長すぎます');
+  }
+  await db.prepare('UPDATE tournaments SET name = ?, date = ?, end_date = ?, venue = ?, logo = ?, show_logo = ?, status = ?, settings = ? WHERE id = ?')
+    .bind(next.name, next.date, next.end_date, next.venue, next.logo, next.show_logo, next.status, JSON.stringify(settings), t.id).run();
   const oldDates = tournamentDates(t);
   const newDates = tournamentDates({ date: next.date, end_date: next.end_date });
   if (JSON.stringify(oldDates) !== JSON.stringify(newDates)) {
@@ -498,6 +552,8 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params }) => {
   }
   stmts.push(db.prepare('DELETE FROM sponsor_clicks WHERE sponsor_id IN (SELECT id FROM sponsors WHERE tournament_id = ?)').bind(t.id));
   stmts.push(db.prepare('DELETE FROM sponsors WHERE tournament_id = ?').bind(t.id));
+  stmts.push(db.prepare('DELETE FROM lost_items WHERE tournament_id = ?').bind(t.id));
+  stmts.push(db.prepare('DELETE FROM assets WHERE owner = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM categories WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM tournaments WHERE id = ?').bind(t.id));
   await batchAll(db, stmts);
@@ -843,6 +899,153 @@ route('POST', '/api/admin/tournaments/:id/sponsors/order', async ({ req, db, par
 route('GET', '/api/admin/sponsors/:sid/clicks', async ({ db, params }) => {
   const r = await db.prepare('SELECT day, count FROM sponsor_clicks WHERE sponsor_id = ? ORDER BY day DESC LIMIT 60').bind(params.sid).all();
   return json({ days: r.results });
+}, 'admin');
+
+// ---------- 管理者: 添付画像（要項の施設案内など） ----------
+
+route('POST', '/api/admin/assets', async ({ req, db }) => {
+  const b = await body(req);
+  const owner = String(b.owner || '');
+  if (owner.startsWith('preset:')) {
+    if (!(await db.prepare('SELECT id FROM presets WHERE id = ?').bind(owner.slice(7)).first())) fail(404, 'プリセットが見つかりません');
+  } else await getTournament(db, owner);
+  const id = uid();
+  await db.prepare('INSERT INTO assets (id, owner, image, created_at) VALUES (?, ?, ?, ?)').bind(id, owner, checkBanner(b.image), now()).run();
+  return json({ id, url: `/img/a/${id}` });
+}, 'admin');
+
+route('DELETE', '/api/admin/assets/:aid', async ({ db, params }) => {
+  await db.prepare('DELETE FROM assets WHERE id = ?').bind(params.aid).run();
+  return json({ ok: true });
+}, 'admin');
+
+// ---------- 管理者: 忘れ物 ----------
+
+route('POST', '/api/admin/tournaments/:id/lost', async ({ req, db, params }) => {
+  const t = await getTournament(db, params.id);
+  const b = await body(req);
+  const note = clip(b.note, 400);
+  if (!note) fail(400, '忘れ物の内容を入力してください');
+  await db.prepare('INSERT INTO lost_items (id, tournament_id, image, note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(uid(), t.id, b.image ? checkBanner(b.image) : null, note, 'open', now(), now()).run();
+  await bump(db, t.id);
+  return json({ ok: true });
+}, 'admin');
+
+route('PATCH', '/api/admin/lost/:lid', async ({ req, db, params }) => {
+  const it = await db.prepare('SELECT * FROM lost_items WHERE id = ?').bind(params.lid).first();
+  if (!it) fail(404, '見つかりません');
+  const b = await body(req);
+  await db.prepare('UPDATE lost_items SET note = ?, image = ?, status = ?, updated_at = ? WHERE id = ?').bind(
+    b.note !== undefined ? clip(b.note, 400) || it.note : it.note,
+    b.image === null ? null : b.image ? checkBanner(b.image) : it.image,
+    b.status === 'returned' || b.status === 'open' ? b.status : it.status,
+    now(), it.id).run();
+  await bump(db, it.tournament_id);
+  return json({ ok: true });
+}, 'admin');
+
+route('DELETE', '/api/admin/lost/:lid', async ({ db, params }) => {
+  const it = await db.prepare('SELECT tournament_id FROM lost_items WHERE id = ?').bind(params.lid).first();
+  if (!it) fail(404, '見つかりません');
+  await db.prepare('DELETE FROM lost_items WHERE id = ?').bind(params.lid).run();
+  await bump(db, it.tournament_id);
+  return json({ ok: true });
+}, 'admin');
+
+// ---------- 管理者: プリセット（要項など） ----------
+
+route('GET', '/api/admin/presets', async ({ db, url }) => {
+  const kind = url.searchParams.get('kind') || 'outline';
+  const r = await db.prepare('SELECT * FROM presets WHERE kind = ? ORDER BY updated_at DESC').bind(kind).all();
+  return json({ presets: r.results.map((x) => ({ ...x, data: JSON.parse(x.data) })) });
+}, 'admin');
+
+route('POST', '/api/admin/presets', async ({ req, db }) => {
+  const b = await body(req);
+  const name = clip(b.name, 60);
+  if (!name) fail(400, 'プリセット名を入力してください');
+  const id = uid();
+  // 添付画像はプリセット用にコピーしておく（元の大会を消しても残るように）
+  const map = await copyAssets(db, outlineImageIds(b.data), `preset:${id}`);
+  const data = remapOutline(b.data || {}, map);
+  if (JSON.stringify(data).length > 300_000) fail(400, '内容が長すぎます');
+  await db.prepare('INSERT INTO presets (id, kind, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(id, String(b.kind || 'outline'), name, JSON.stringify(data), now(), now()).run();
+  return json({ ok: true, id });
+}, 'admin');
+
+route('PATCH', '/api/admin/presets/:pid', async ({ req, db, params }) => {
+  const p = await db.prepare('SELECT * FROM presets WHERE id = ?').bind(params.pid).first();
+  if (!p) fail(404, 'プリセットが見つかりません');
+  const b = await body(req);
+  const data = b.data !== undefined ? JSON.stringify(b.data) : p.data;
+  if (data.length > 300_000) fail(400, '内容が長すぎます');
+  await db.prepare('UPDATE presets SET name = ?, data = ?, updated_at = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : p.name, data, now(), p.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+route('DELETE', '/api/admin/presets/:pid', async ({ db, params }) => {
+  await db.batch([
+    db.prepare('DELETE FROM assets WHERE owner = ?').bind(`preset:${params.pid}`),
+    db.prepare('DELETE FROM presets WHERE id = ?').bind(params.pid),
+  ]);
+  return json({ ok: true });
+}, 'admin');
+
+// プリセットの要項を大会に読み込む（添付画像は大会用にコピー）
+route('POST', '/api/admin/tournaments/:id/apply-preset', async ({ req, db, params }) => {
+  const t = await getTournament(db, params.id);
+  const b = await body(req);
+  const p = await db.prepare('SELECT * FROM presets WHERE id = ?').bind(b.presetId).first();
+  if (!p) fail(404, 'プリセットが見つかりません');
+  const data = JSON.parse(p.data);
+  const map = await copyAssets(db, outlineImageIds(data), t.id);
+  const settings = { ...readSettings(t), outline: remapOutline(data, map) };
+  await db.prepare('UPDATE tournaments SET settings = ? WHERE id = ?').bind(JSON.stringify(settings), t.id).run();
+  await bump(db, t.id);
+  return json({ ok: true, outline: settings.outline });
+}, 'admin');
+
+// 形式テンプレートの名前変更・上書き
+route('PATCH', '/api/admin/templates/:id', async ({ req, db, params }) => {
+  const tp = await db.prepare('SELECT * FROM templates WHERE id = ?').bind(params.id).first();
+  if (!tp) fail(404, 'テンプレートが見つかりません');
+  const b = await body(req);
+  const cfg = b.config ? JSON.stringify(Object.fromEntries(TEMPLATE_KEYS.filter((k) => k in b.config).map((k) => [k, b.config[k]]))) : tp.config;
+  await db.prepare('UPDATE templates SET name = ?, config = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : tp.name, cfg, tp.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+// 大会をコピーして新しい大会を作る（カテゴリの設定・要項・駐車券・スポンサー。チームは任意）
+route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params }) => {
+  const t = await getTournament(db, params.id);
+  const b = await body(req);
+  const name = clip(b.name, 80) || `${t.name}（コピー）`;
+  const end = checkRange(b.date || null, b.end_date || null);
+  const nid = uid();
+  const settings = readSettings(t);
+  const map = await copyAssets(db, outlineImageIds(settings.outline), nid);
+  if (settings.outline) settings.outline = remapOutline(settings.outline, map);
+  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(settings), now(), now()).run();
+  const dates = tournamentDates({ date: b.date, end_date: end });
+  const stmts = [];
+  const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ?').bind(t.id).all()).results;
+  for (const c of cats) {
+    const cfg = normalizeConfig(JSON.parse(c.config));
+    const ncfg = { ...cfg, lottery: {}, dayBreakSlots: [], grouping: { fixed: {}, separate: [] }, dayDates: dates.slice(0, Math.max(1, cfg.dayCount)) };
+    const cid = uid();
+    stmts.push(db.prepare('INSERT INTO categories (id, tournament_id, name, sort, config, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(cid, nid, c.name, c.sort, JSON.stringify(normalizeConfig(ncfg)), now()));
+    if (b.withTeams) {
+      const teams = (await db.prepare('SELECT * FROM teams WHERE category_id = ?').bind(c.id).all()).results;
+      for (const x of teams) stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(uid(), cid, x.name, x.short_name, x.club, x.logo, x.sort));
+    }
+  }
+  const sps = (await db.prepare('SELECT * FROM sponsors WHERE tournament_id = ?').bind(t.id).all()).results;
+  for (const sp of sps) stmts.push(db.prepare('INSERT INTO sponsors (id, tournament_id, name, url, image, sort, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(uid(), nid, sp.name, sp.url, sp.image, sp.sort, sp.active, now(), now()));
+  await batchAll(db, stmts);
+  return json({ ok: true, id: nid });
 }, 'admin');
 
 // ---------- 管理者: テンプレート ----------

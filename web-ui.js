@@ -177,6 +177,9 @@ const ICONS = {
   share: '<path d="M12 15V3.5M7.5 8L12 3.5 16.5 8"/><path d="M5 12.5v6a2.5 2.5 0 0 0 2.5 2.5h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   chevron: '<path d="M9.5 6l6 6-6 6"/>',
+  bag: '<path d="M5.5 8h13l-1 12.5h-11z"/><path d="M9 8V6.5a3 3 0 0 1 6 0V8"/>',
+  car: '<path d="M5 16.5h14v-4l-2-5H7l-2 5z"/><circle cx="8" cy="16.5" r="1.6"/><circle cx="16" cy="16.5" r="1.6"/><path d="M5 12.5h14"/>',
+  bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
   ball: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5l3.8 2.8-1.5 4.4H9.7l-1.5-4.4z"/><path d="M12 3v4.5M20.6 9.6l-4.8.7M17.3 19.4l-3-4.7M6.7 19.4l3-4.7M3.4 9.6l4.8.7"/>',
 };
 

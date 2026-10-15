@@ -1,5 +1,5 @@
 import { api } from './web-api.js';
-import { openPrintDialog } from './web-print.js';
+import { openPrintDialog, printParking } from './web-print.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
@@ -65,7 +65,8 @@ export async function viewer(root, slug) {
       h('div', { class: 'hero-meta' },
         t.date ? h('span', null, icon('calendar'), dateRange(t, data.categories)) : null,
         t.venue ? h('span', null, icon('pin'), t.venue) : null,
-        statePill)));
+        statePill,
+        (t.lost || []).length ? h('button', { class: 'state-pill lost-pill', type: 'button', onclick: () => openLost(t) }, icon('bag'), `忘れ物 ${t.lost.length}件`) : null)));
 
     if (!cat) {
       mount(root, hero, h('div', { class: 'wrap' }, h('p', { class: 'empty' }, '試合日程はまだ公開されていません')));
@@ -87,11 +88,16 @@ export async function viewer(root, slug) {
 
     const body = h('main');
     const sponsors = t.sponsors || [];
-    const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, sponsorTop(sponsors), body,
+    const content = h('div', { class: `wrap${st.tab === 'bracket' ? ' wrap-bracket' : ''}` }, seg, lostBar(t), sponsorTop(sponsors), body,
       sponsorAll(sponsors),
       h('div', { class: 'share-row' },
         h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像'),
-        h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, icon('list'), 'PDFで保存')),
+        h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, icon('list'), 'PDFで保存'),
+        t.parking ? h('button', { class: 'btn', type: 'button', onclick: () => {
+          const team = ctx.cache.teams[ctx.myTeam];
+          if (team) return printParking(t, cat, team);
+          openTeamPicker(cat, null, (tid) => { if (!tid) return; store.set(myKey(), tid); render(); printParking(t, cat, cat.teams.find((x) => x.id === tid)); });
+        } }, icon('car'), '駐車券を出力') : null),
       h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })));
 
     const pickTeam = () => openTeamPicker(cat, ctx.myTeam, (id) => {
@@ -189,6 +195,33 @@ function dateRange(t, categories) {
   const list = [...dates].filter(Boolean).sort();
   if (list.length <= 1) return formatDate(t.date);
   return `${formatDate(list[0])} 〜 ${formatDate(list[list.length - 1]).replace(/^\d+年/, '')}`;
+}
+
+// ---------- 忘れ物 ----------
+// お知らせの帯（申し送り事項が右から左へ流れる）。押すと写真付きの一覧
+function lostBar(t) {
+  const list = t.lost || [];
+  if (!list.length) return null;
+  const text = list.map((x) => x.note.replace(/\s+/g, ' ')).join('　／　');
+  return h('button', { class: 'lost-bar', type: 'button', onclick: () => openLost(t), 'aria-label': `忘れ物のお知らせ ${list.length}件。押すと詳しく見られます` },
+    h('span', { class: 'lost-bar-label' }, icon('bell'), '忘れ物'),
+    h('span', { class: 'lost-bar-track' }, h('span', { class: 'lost-bar-text' }, `${text}　　　${text}`)),
+    h('span', { class: 'lost-bar-more' }, '見る'));
+}
+
+function openLost(t) {
+  const list = t.lost || [];
+  const fmt = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  sheet({
+    title: `忘れ物のお知らせ（${list.length}件）`,
+    content: [
+      h('div', { class: 'lost-list' }, list.map((it) => h('article', { class: 'lost-item' },
+        it.img ? h('img', { src: it.img, alt: '忘れ物の写真', loading: 'lazy' }) : null,
+        h('p', null, it.note),
+        h('div', { class: 'muted small' }, `${fmt(it.created_at)} 掲載`)))),
+      h('p', { class: 'lost-foot' }, '心当たりのある方は、大会本部までお越しください。'),
+    ],
+  });
 }
 
 // ---------- スポンサー ----------

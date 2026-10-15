@@ -1,5 +1,6 @@
 import { api, ApiError } from './web-api.js';
-import { openPrintDialog } from './web-print.js';
+import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
+import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
@@ -389,7 +390,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), infoPanel(t), sponsorPanel()),
+          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), infoPanel(t), outlinePanel(t), lostPanel(), parkingPanel(t), sponsorPanel()),
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
@@ -467,6 +468,111 @@ async function tournamentView(root, id, navigate) {
           if (!(await confirmDialog('大会を削除します', `「${t.name}」のチーム・日程・結果がすべて消えます。元に戻せません。`, '削除する', true))) return;
           if (await run(() => api('DELETE', `/api/admin/tournaments/${id}`), '削除しました')) navigate('/admin');
         } }, 'この大会を削除')));
+  }
+
+  // ----- 大会要項・大会のコピー -----
+
+  function outlinePanel(t) {
+    const settings = t.settings || {};
+    const outline = settings.outline || defaultOutline(t);
+    return h('section', { class: 'panel' },
+      h('h2', { style: { marginBottom: '6px' } }, '大会要項'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, settings.outline ? `見出し${(settings.outline.sections || []).length}件を登録済み` : 'まだ作成していません（サンプルの項目から始められます）'),
+      h('div', { class: 'stack' },
+        h('button', { class: 'btn btn-block', type: 'button', onclick: () => openOutlineEditor({ t, categories: data.categories, outline, target: { kind: 'tournament', id },
+          onSave: async (o) => { const r = await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { outline: o } })); if (r) await reload(); return !!r; } }) }, '要項を作成・編集'),
+        h('button', { class: 'btn btn-block', type: 'button', onclick: () => openOutlineDialog(data.tournament, data.categories, outline) }, '要項をPDFで出力'),
+        h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openPresetList({ t, categories: data.categories, onApply: () => reload() }) }, '要項のプリセットを管理'),
+        h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => copyTournament(t) }, 'この大会をコピーして新しい大会を作る')));
+  }
+
+  function copyTournament(t) {
+    const f = { name: `${t.name}（コピー）`, date: todayStr(), end_date: todayStr(), withTeams: false };
+    modal({
+      title: '大会をコピー',
+      content: h('div', { class: 'stack' },
+        h('p', { class: 'muted small', style: { margin: 0 } }, 'カテゴリの設定（試合時間・形式・判定順など）、大会要項、駐車券、スポンサーをコピーします。日程と結果はコピーしません。'),
+        h('label', { class: 'field' }, h('span', null, '新しい大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+        h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, '開始日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
+          h('label', { class: 'field' }, h('span', null, '終了日'), h('input', { type: 'date', value: f.end_date, oninput: (e) => { f.end_date = e.target.value; } }))),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: (e) => { f.withTeams = e.target.checked; } }), '参加チームもコピーする')),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: 'コピーして作成', kind: 'btn-primary', onClick: async () => {
+        const r = await run(() => api('POST', `/api/admin/tournaments/${id}/copy`, f), 'コピーしました');
+        if (!r) return true;
+        navigate(`/admin/t/${r.id}`);
+      } }],
+    });
+  }
+
+  // ----- 忘れ物 -----
+
+  function lostPanel() {
+    const list = data.lost || [];
+    const open = list.filter((x) => x.status === 'open').length;
+    return h('section', { class: 'panel' },
+      h('div', { class: 'panel-head' }, h('h2', null, '忘れ物'), open ? h('span', { class: 'tag alert' }, `告知中 ${open}`) : null, h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editLost(null) }, '＋ 登録')),
+      list.length ? h('div', { class: 'lost-admin' }, list.map((it) => h('div', { class: `lost-a${it.status === 'open' ? '' : ' done'}` },
+        it.img ? h('img', { src: it.img, alt: '' }) : h('div', { class: 'lost-noimg' }, icon('bag')),
+        h('div', { class: 'lost-a-body' },
+          h('div', { class: 'lost-a-note' }, it.note),
+          h('div', { class: 'row', style: { gap: '4px' } },
+            h('span', { class: `tag ${it.status === 'open' ? 'alert' : 'done'}` }, it.status === 'open' ? '告知中' : '返却済み'),
+            h('span', { class: 'spacer' }),
+            h('button', { class: 'link-btn', type: 'button', onclick: async () => {
+              if (await run(() => api('PATCH', `/api/admin/lost/${it.id}`, { status: it.status === 'open' ? 'returned' : 'open' }), it.status === 'open' ? '返却済みにしました' : '告知に戻しました')) await reload();
+            } }, it.status === 'open' ? '返却済みにする' : '告知に戻す'),
+            h('button', { class: 'link-btn', type: 'button', onclick: () => editLost(it) }, '編集')))))) :
+        h('p', { class: 'muted small', style: { margin: 0 } }, '登録すると、閲覧ページに忘れ物のお知らせが表示されます。'));
+  }
+
+  function editLost(it) {
+    const f = { note: it ? it.note : '', image: undefined };
+    const prev = h('div', { class: 'sp-preview' });
+    const drawPrev = () => mount(prev, f.image ? h('img', { src: f.image, alt: '' }) : it && it.img && f.image !== null ? h('img', { src: it.img, alt: '' }) : h('span', { class: 'muted small' }, '写真は任意です'));
+    drawPrev();
+    modal({
+      title: it ? '忘れ物を編集' : '忘れ物を登録',
+      content: h('div', { class: 'stack' },
+        h('div', null, h('span', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '写真'), prev,
+          h('div', { class: 'row' },
+            h('input', { type: 'file', accept: 'image/*', 'aria-label': '忘れ物の写真', onchange: async (e) => { const v = await run(() => resizeBanner(e.target.files[0], 1200, 1200)); if (v) { f.image = v; drawPrev(); } } }),
+            it && it.img ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.image = null; drawPrev(); } }, '写真を外す') : null)),
+        h('label', { class: 'field' }, h('span', null, '申し送り事項'), (() => { const a = h('textarea', { rows: 4, placeholder: '例：Bコート横のベンチに黒いすね当て（片方）。本部でお預かりしています。', oninput: (e) => { f.note = e.target.value; } }); a.value = f.note; return a; })()),
+        it ? h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
+          if (!(await confirmDialog('この忘れ物を削除します', '閲覧ページからも消えます。', '削除する', true))) return;
+          document.querySelector('.modal-back')?.remove();
+          if (await run(() => api('DELETE', `/api/admin/lost/${it.id}`), '削除しました')) await reload();
+        } }, 'この忘れ物を削除') : null),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: it ? '保存' : '登録して告知', kind: 'btn-primary', onClick: async () => {
+        const body = { note: f.note };
+        if (f.image !== undefined) body.image = f.image;
+        const r = it ? await run(() => api('PATCH', `/api/admin/lost/${it.id}`, body), '保存しました')
+          : await run(() => api('POST', `/api/admin/tournaments/${id}/lost`, body), '登録しました。閲覧ページに表示されます');
+        if (!r) return true;
+        await reload();
+      } }],
+    });
+  }
+
+  // ----- 駐車券 -----
+
+  function parkingPanel(t) {
+    const p = { enabled: false, title: '駐車証', place: '', valid: '', perTeam: 1, note: '', ...((t.settings || {}).parking || {}) };
+    const firstCat = data.categories.find((c) => c.teams.length);
+    return h('details', { class: 'panel', open: p.enabled ? true : null },
+      h('summary', { style: { cursor: 'pointer', fontWeight: 700 } }, '駐車券', p.enabled ? h('span', { class: 'tag done', style: { marginLeft: '8px' } }, '発行中') : null),
+      h('div', { class: 'stack', style: { marginTop: '10px' } },
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: p.enabled, onchange: (e) => { p.enabled = e.target.checked; } }), '駐車券を発行する（保護者が自チームの駐車券をPDFで出せます）'),
+        h('label', { class: 'field' }, h('span', null, '表題'), h('input', { type: 'text', value: p.title, oninput: (e) => { p.title = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', null, '駐車場所'), h('input', { type: 'text', value: p.place, placeholder: '例：グラウンド横 第2駐車場', oninput: (e) => { p.place = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', null, '有効期間（空欄なら開催期間）'), h('input', { type: 'text', value: p.valid, placeholder: printPeriod(t), oninput: (e) => { p.valid = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', null, '1チームあたりの枚数'), h('input', { type: 'number', min: 1, max: 10, value: p.perTeam, oninput: (e) => { p.perTeam = Number(e.target.value); } })),
+        h('label', { class: 'field' }, h('span', null, '注意書き'), (() => { const a = h('textarea', { rows: 3, placeholder: '例：各チーム2台までとなります。その他の車は一般駐車場（有料）をご利用ください。', oninput: (e) => { p.note = e.target.value; } }); a.value = p.note; return a; })()),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: async () => { if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { parking: p } }), '保存しました')) await reload(); } }, '保存'),
+          firstCat ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => printParking({ ...data.tournament, parking: p }, firstCat, firstCat.teams[0]) }, '見本をPDFで確認') : null)));
   }
 
   // ----- スポンサー -----
@@ -688,7 +794,7 @@ async function tournamentView(root, id, navigate) {
         } }, '設定を保存'),
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => saveTemplate(f) }, 'テンプレートとして保存'),
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => applyTemplate(f, draw) }, 'テンプレートを読み込む'),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => applyTemplate(f, draw) }, 'テンプレートの読み込み・編集'),
         h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: async () => {
           if (!(await confirmDialog(`${cat.name}を削除します`, 'このカテゴリのチーム・日程・結果がすべて消えます。', '削除する', true))) return;
           if (await run(() => api('DELETE', `/api/admin/categories/${cat.id}`), '削除しました')) { st.catId = null; await reload(); }
@@ -717,6 +823,16 @@ async function tournamentView(root, id, navigate) {
       h('div', null, h('strong', null, x.name), h('div', { class: 'muted small' }, `${FORMAT_LABEL[x.config.format] || ''}　${(x.config.periods || 2) === 1 ? `1本${x.config.halfMinutes}分` : (x.config.periods || 2) === 2 ? `前後半${x.config.halfMinutes}分` : `${x.config.halfMinutes}分×3ピリオド`}`)),
       h('span', { class: 'spacer' }),
       h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => { Object.assign(f, JSON.parse(JSON.stringify(x.config))); dlg.close(); redraw(); toast('読み込みました。「設定を保存」で反映されます'); } }, '読み込む'),
+      h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+        if (!(await confirmDialog(`「${x.name}」を上書きします`, '今この画面で設定している内容で、テンプレートを置き換えます。', '上書きする'))) return;
+        if (await run(() => api('PATCH', `/api/admin/templates/${x.id}`, { config: f }), '上書きしました')) { templates = null; dlg.close(); }
+      } }, '今の設定で上書き'),
+      h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => {
+        const nm = h('input', { type: 'text', value: x.name });
+        modal({ title: '名前を変更', content: h('label', { class: 'field' }, h('span', null, 'テンプレート名'), nm), actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '保存', kind: 'btn-primary', onClick: async () => {
+          if (await run(() => api('PATCH', `/api/admin/templates/${x.id}`, { name: nm.value }), '変更しました')) { templates = null; dlg.close(); }
+        } }] });
+      } }, '名前変更'),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
         if (await run(() => api('DELETE', `/api/admin/templates/${x.id}`), '削除しました')) { templates = null; dlg.close(); }
       } }, '削除'))));
