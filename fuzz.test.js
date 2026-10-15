@@ -23,7 +23,7 @@ function runOne(seed) {
     minRestSlots: pick([0, 1, 2]), lunchEnabled: r() < 0.7, lunchStart: 600 + Math.floor(r() * 180), lunchMinutes: 30 + Math.floor(r() * 30),
     koTiming: { enabled: r() < 0.4, periods: pick([1, 2]), halfMinutes: 10 + Math.floor(r() * 10), halftimeMinutes: 5 },
     dayDates: ['2026-11-01', '2026-11-02', '2026-11-03'].slice(0, days),
-    tiebreak: r() < 0.3 ? ['points', 'h2h', 'gd', 'gf', 'lottery'] : r() < 0.15 ? ['points', 'gd', 'gf'] : undefined,
+    tiebreak: pick([undefined, ['points', 'h2h', 'gd', 'gf', 'lottery'], ['points', 'gd', 'gf'], ['points', 'gd', 'gf', 'h2h', 'janken'], ['points', 'gd', 'janken', 'lottery'], ['points', 'h2h']]),
   });
   const teams = Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, name: `T${i + 1}`, club: r() < 0.2 ? `C${i % 3}` : '' }));
   let ts = teams;

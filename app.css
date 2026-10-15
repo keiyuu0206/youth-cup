@@ -804,3 +804,29 @@ table.pd-t { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .ol-sponsors div { display: flex; flex-wrap: wrap; gap: 3mm; }
 .ol-sponsors img { height: 9mm; max-width: 40mm; object-fit: contain; }
 .ol-foot { margin-top: 6mm; text-align: right; font-size: 7.5pt; color: #888; }
+
+/* 判定順の設定 */
+.tb-row { padding: 4px 0; border-bottom: 1px solid var(--line); gap: 6px; }
+.tb-manual { margin-top: 12px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-2); }
+
+/* 管理者の表示・アカウント管理 */
+.me-chip { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.15; font-size: 0.78rem; font-weight: 800; color: #fff; margin-right: 4px; }
+.me-chip small { font-weight: 600; opacity: 0.85; font-size: 0.7rem; }
+@media (max-width: 640px) { .me-chip { display: none; } }
+.tag.owner { background: var(--surface-2); color: var(--ink-2); }
+.acc-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 20px; }
+.acc-summary > div { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 14px 16px; display: grid; gap: 2px; }
+.acc-summary span { font-size: 0.78rem; color: var(--ink-2); font-weight: 700; }
+.acc-summary strong { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.acc-list { display: grid; gap: 12px; }
+.acc-card { background: var(--surface); border-radius: var(--r-lg); box-shadow: var(--shadow); padding: 14px 16px; }
+.acc-card.off { opacity: 0.6; }
+.acc-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; justify-content: space-between; }
+.acc-region { font-size: 1.05rem; font-weight: 800; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.acc-name { font-size: 0.88rem; margin-top: 2px; }
+.acc-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin-top: 12px; }
+.acc-stat { background: var(--surface-2); border-radius: 10px; padding: 8px 10px; display: grid; gap: 2px; }
+.acc-stat span { font-size: 0.72rem; color: var(--ink-2); font-weight: 700; }
+.acc-stat strong { font-size: 1.3rem; color: var(--turf); font-variant-numeric: tabular-nums; }
+.acc-stat b { font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+pre.issued { white-space: pre-wrap; background: var(--surface-2); padding: 12px; border-radius: 10px; font-family: var(--font); font-size: 0.88rem; margin: 0; }

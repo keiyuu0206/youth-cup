@@ -135,6 +135,7 @@ export function autoSection(key, t, cats) {
         if (order.length) {
           lines.push('勝ち点が同じ場合は以下の優先順位で順位を決定する。');
           lines.push(order.map((k, i) => `${circled(i)}${k === 'h2h' ? '当該チームの勝敗' : TIEBREAK_LABEL[k]}`).join(' '));
+          if (!order.some((k) => k === 'lottery' || k === 'janken')) lines.push('上記で決まらない場合は本部で決定する。');
         }
       }
       if (cfg.format !== 'league') lines.push('●トーナメントで同点の場合はPK戦で勝敗を決定する。');

@@ -43,7 +43,8 @@ export function computeStandings(teamIds, allMatches, criteria, lottery = []) {
     if (ids.length <= 1) return [ids];
     if (ci >= criteria.length) return byDraw(ids);
     const c = criteria[ci];
-    if (c === 'lottery') return byDraw(ids);
+    // 抽選・代表者じゃんけんは、本部が入力した結果の順番で決める
+    if (c === 'lottery' || c === 'janken') return byDraw(ids);
     let key;
     if (c === 'h2h') {
       const sub = table(ids, confirmed.filter((m) => ids.includes(m.home_team_id) && ids.includes(m.away_team_id)));

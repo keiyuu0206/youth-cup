@@ -409,3 +409,19 @@ test('上位・中位・下位: 中位の数を省略すると上位と同じ数
   assert.ok(by('中位トーナメント').every((x) => x === 2));
   assert.ok(by('下位トーナメント').every((x) => x === 3 || x === 4));
 });
+
+// ---- 代表者じゃんけん ----
+test('じゃんけん: 判定順に入れると、並んだときに本部が入力した順で決まる', () => {
+  const m = (h, a, hs, as) => ({ home_team_id: h, away_team_id: a, home_score: hs, away_score: as, status: 'confirmed', stage: 'league' });
+  const ms = [m('A', 'B', 0, 0)];
+  const tb = ['points', 'gd', 'gf', 'h2h', 'janken'];
+  assert.equal(computeStandings(['A', 'B'], ms, tb).needsLottery, true);
+  const s2 = computeStandings(['A', 'B'], ms, tb, ['B', 'A']);
+  assert.equal(s2.rows[0].teamId, 'B');
+  assert.equal(s2.rows[0].lottery, true);
+});
+
+test('判定順: 抽選・じゃんけんを入れない設定も保存でき、知らない項目は除かれる', () => {
+  assert.deepEqual(normalizeConfig({ tiebreak: ['points', 'gd', 'gf'] }).tiebreak, ['points', 'gd', 'gf']);
+  assert.deepEqual(normalizeConfig({ tiebreak: ['points', 'janken', 'xxx'] }).tiebreak, ['points', 'janken']);
+});

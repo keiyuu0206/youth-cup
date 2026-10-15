@@ -32,6 +32,7 @@ export const TIEBREAK_KEYS = {
   gd: '得失点差',
   gf: '総得点',
   h2h: '当該チーム間の対戦成績',
+  janken: '代表者によるじゃんけん',
   lottery: '抽選',
 };
 

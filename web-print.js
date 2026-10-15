@@ -360,7 +360,10 @@ function starTable(cat, g, opts, pageW = 188, basePt = 8.5) {
     })));
 }
 
-const starNote = (cat) => `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。勝点が並んだときは ${(cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`;
+const starNote = (cat) => {
+  const order = (cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]);
+  return `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。${order.length ? `勝点が並んだときは ${order.join('、')} の順で決めます。` : ''}`;
+};
 
 function leagueSection(cat, groups, opts) {
   return h('div', { class: 'pd-sec' }, h('h2', null, '星取表・順位'),

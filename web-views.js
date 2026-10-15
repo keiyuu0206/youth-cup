@@ -38,7 +38,12 @@ export function todayIndex(cat, tournament) {
 export const teamMap = (cat) => Object.fromEntries(cat.teams.map((t) => [t.id, t]));
 export const codeMap = (cat) => Object.fromEntries(cat.matches.filter((m) => m.code).map((m) => [m.code, m]));
 
-export const TIEBREAK_LABEL = { points: '勝点', gd: '得失点差', gf: '総得点', h2h: '当該チーム間の対戦成績', lottery: '抽選' };
+export const TIEBREAK_LABEL = { points: '勝点', gd: '得失点差', gf: '総得点', h2h: '当該チーム間の対戦成績', janken: '代表者によるじゃんけん', lottery: '抽選' };
+// 本部で決める方法の呼び名（判定順で最初に出てくるもの。どちらも無ければ「本部で決定」）
+export function manualLabel(cfg) {
+  const first = (cfg.tiebreak || []).find((k) => k === 'janken' || k === 'lottery');
+  return first === 'janken' ? 'じゃんけん' : first === 'lottery' ? '抽選' : '本部で決定';
+}
 
 export function refText(ref, byCode) {
   if (!ref) return '未定';
@@ -187,7 +192,7 @@ export function standingsView(cat, ctx) {
   return h('div', null, groups.map((g) => {
     const st = cat.standings[g];
     const badge = st.complete
-      ? (st.needsLottery ? h('span', { class: 'st-badge alert' }, '抽選待ち') : h('span', { class: 'st-badge ok' }, '確定'))
+      ? (st.needsLottery ? h('span', { class: 'st-badge alert' }, `${manualLabel(cat.config)}待ち`) : h('span', { class: 'st-badge ok' }, '確定'))
       : h('span', { class: 'st-badge' }, '途中経過');
     return h('section', { class: 'st-card' },
       h('div', { class: 'st-head' }, h('h2', null, `${g}組`), badge),
@@ -199,13 +204,17 @@ export function standingsView(cat, ctx) {
         h('tbody', null, st.rows.map((r) => h('tr', { class: `${r.teamId === ctx.myTeam ? 'mine' : ''} ${r.rank <= advance ? 'advance' : ''}` },
           h('td', { class: 'rank' }, h('span', { class: 'rank-no' }, r.rank)),
           h('td', { class: 'team' }, h('div', { class: 'st-team' }, crest(tm[r.teamId], 22), h('span', null, tm[r.teamId] ? (tm[r.teamId].short_name || tm[r.teamId].name) : '-'),
-            r.tied && st.complete ? h('span', { class: 'tie-mark' }, '抽選待ち') : null,
-            r.lottery ? h('span', { class: 'tie-mark' }, '抽選') : null)),
+            r.tied && st.complete ? h('span', { class: 'tie-mark' }, `${manualLabel(cat.config)}待ち`) : null,
+            r.lottery ? h('span', { class: 'tie-mark' }, manualLabel(cat.config)) : null)),
           h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
           h('td', { class: 'opt' }, r.gf), h('td', { class: 'opt' }, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
           h('td', { class: 'pts' }, r.pts)))))),
       note ? h('div', { class: 'st-note' }, h('span', null, advance ? h('i') : null, note)) : null);
-  }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, `勝点が並んだときは ${(cat.config.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).join('、')} の順で決めます。`));
+  }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, (() => {
+    const order = (cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]);
+    const manual = (cat.config.tiebreak || []).some((k) => k === 'janken' || k === 'lottery');
+    return `勝点が並んだときは ${order.length ? order.join('、') : '本部の決定'} の順で決めます。${manual ? '' : 'それでも決まらないときは本部で決めます。'}`;
+  })()));
 }
 
 export function finalRankingView(cat, ctx) {

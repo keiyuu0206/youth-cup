@@ -43,16 +43,44 @@ export function cookie(name, value, maxAge) {
 const ADMIN_TTL = 60 * 60 * 24 * 7; // 7日
 const REL_TTL = 60 * 60 * 24 * 3; // 3日
 
-export async function issueAdmin(env) {
+// 管理者のログイン状態：管理者ID と「パスワード変更の版」を含める（変更・停止で古いログインを無効にする）
+export async function issueAdmin(env, uid, ver = 0) {
   const exp = Math.floor(Date.now() / 1000) + ADMIN_TTL;
-  return cookie('adm', await sign(env.SESSION_SECRET, `admin|${exp}`), ADMIN_TTL);
+  return cookie('adm', await sign(env.SESSION_SECRET, `admin|${uid}|${ver}|${exp}`), ADMIN_TTL);
 }
 
-export async function isAdmin(req, env) {
+export async function readAdmin(req, env) {
   const p = await verify(env.SESSION_SECRET, getCookie(req, 'adm'));
-  if (!p) return false;
-  const [kind, exp] = p.split('|');
-  return kind === 'admin' && Number(exp) > Date.now() / 1000;
+  if (!p) return null;
+  const [kind, uid, ver, exp] = p.split('|');
+  if (kind !== 'admin' || !uid || !exp || Number(exp) <= Date.now() / 1000) return null;
+  return { uid, ver: Number(ver) };
+}
+
+// ---------- パスワード（PBKDF2-SHA256。元に戻せない形で保存する） ----------
+const ITER = 100000; // Workers で使える上限
+const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function pbkdf2(password, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  return crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, key, 256);
+}
+
+export async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const bits = await pbkdf2(password, salt, ITER);
+  return { hash: b64(bits), salt: b64(salt), iterations: ITER };
+}
+
+export async function verifyPassword(password, rec) {
+  // 存在しない管理者IDでも同じだけ時間をかけ、IDの有無を推測されにくくする
+  const salt = rec ? unb64(rec.pass_salt) : new Uint8Array(16);
+  const bits = b64(await pbkdf2(password, salt, rec ? rec.iterations : ITER));
+  if (!rec) return false;
+  let diff = bits.length ^ rec.pass_hash.length;
+  for (let i = 0; i < Math.min(bits.length, rec.pass_hash.length); i++) diff |= bits.charCodeAt(i) ^ rec.pass_hash.charCodeAt(i);
+  return diff === 0;
 }
 
 // 関係者セッション: PINを再発行すると pin_version が変わり、既存のセッションは無効になる

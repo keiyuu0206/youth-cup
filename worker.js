@@ -16,7 +16,7 @@ import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
 import { evaluateCategory } from './standings.js';
-import { issueAdmin, isAdmin, issueRelative, isRelative, rateLimit, clearRateLimit, safeEqual, cookie } from './auth.js';
+import { issueAdmin, readAdmin, hashPassword, verifyPassword, issueRelative, isRelative, rateLimit, clearRateLimit, safeEqual, cookie } from './auth.js';
 
 // ---------- 共通 ----------
 
@@ -64,11 +64,22 @@ async function ensureSchema(db) {
     try { await db.prepare('ALTER TABLE tournaments ADD COLUMN end_date TEXT').run(); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
+  if (!cols.includes('owner_id')) {
+    try { await db.prepare('ALTER TABLE tournaments ADD COLUMN owner_id TEXT').run(); }
+    catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+  }
   if (!cols.includes('settings')) {
     try { await db.prepare('ALTER TABLE tournaments ADD COLUMN settings TEXT').run(); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
   const tables = (await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).results.map((r) => r.name);
+  if (!tables.includes('users')) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, login_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, region TEXT, role TEXT NOT NULL DEFAULT 'region',
+        pass_hash TEXT NOT NULL, pass_salt TEXT NOT NULL, iterations INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, session_ver INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_login_at TEXT)`),
+    ]);
+  }
   if (!tables.includes('assets') || !tables.includes('lost_items') || !tables.includes('presets')) {
     await db.batch([
       db.prepare('CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, image TEXT NOT NULL, created_at TEXT NOT NULL)'),
@@ -86,6 +97,13 @@ async function ensureSchema(db) {
       db.prepare('CREATE INDEX IF NOT EXISTS idx_sponsors_tournament ON sponsors(tournament_id)'),
       db.prepare('CREATE TABLE IF NOT EXISTS sponsor_clicks (sponsor_id TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (sponsor_id, day))'),
     ]);
+  }
+  for (const tb of ['templates', 'presets']) {
+    const c2 = (await db.prepare(`PRAGMA table_info(${tb})`).all()).results.map((c) => c.name);
+    if (c2.length && !c2.includes('owner_id')) {
+      try { await db.prepare(`ALTER TABLE ${tb} ADD COLUMN owner_id TEXT`).run(); }
+      catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+    }
   }
   schemaChecked = true;
 }
@@ -123,15 +141,35 @@ async function batchAll(db, stmts, size = 100) {
   for (let i = 0; i < stmts.length; i += size) await db.batch(stmts.slice(i, i + size));
 }
 
+// ---------- 管理者（全体管理者・地域管理者） ----------
+// 全体管理者は環境変数のパスワードでログインする（ID は ADMIN_ID、既定は admin）
+const ROOT = { id: 'root', role: 'super', name: '全体管理者', region: '', login_id: 'admin' };
+async function currentUser(req, env, db) {
+  const a = await readAdmin(req, env);
+  if (!a) return null;
+  if (a.uid === 'root') return { ...ROOT, login_id: env.ADMIN_ID || 'admin' };
+  const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(a.uid).first();
+  if (!u || !u.active || u.session_ver !== a.ver) return null;
+  return { id: u.id, role: u.role, name: u.name, region: u.region || '', login_id: u.login_id };
+}
+const isSuper = (user) => user && user.role === 'super';
+// 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
+const canAccess = (user, t) => !user || isSuper(user) || (t.owner_id && t.owner_id === user.id);
+const mustSuper = (user) => { if (!isSuper(user)) fail(403, '全体管理者だけが使える機能です'); };
+// テンプレート・プリセット：自分のもの＋共通（全体管理者が作ったもの）を使える。変更は作成者と全体管理者だけ
+const ownerOf = (user) => (isSuper(user) ? 'root' : user.id); // 全体管理者が作ったものは「共通」
+const sharedOwner = (o) => !o || o === 'root';
+const canEditOwned = (user, owner) => isSuper(user) || owner === user.id;
+
 // ---------- 読み込み ----------
 
 function parseMatch(r) {
   return { ...r, home_ref: r.home_ref ? JSON.parse(r.home_ref) : null, away_ref: r.away_ref ? JSON.parse(r.away_ref) : null };
 }
 
-async function getTournament(db, id) {
+async function getTournament(db, id, user) {
   const t = await db.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first();
-  if (!t) fail(404, '大会が見つかりません');
+  if (!t || !canAccess(user, t)) fail(404, '大会が見つかりません');
   return t;
 }
 
@@ -148,9 +186,10 @@ async function getTournamentHead(db, slug) {
   return t;
 }
 
-async function getCategory(db, id) {
+async function getCategory(db, id, user) {
   const c = await db.prepare('SELECT * FROM categories WHERE id = ?').bind(id).first();
   if (!c) fail(404, 'カテゴリが見つかりません');
+  if (user) await getTournament(db, c.tournament_id, user);
   c.config = normalizeConfig(JSON.parse(c.config));
   return c;
 }
@@ -416,8 +455,12 @@ export default {
         const m = url.pathname.match(r.re);
         if (!m) continue;
         const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-        if (r.auth === 'admin' && !(await isAdmin(req, env))) fail(401, 'ログインしてください');
-        return await r.handler({ req, env, db: env.DB, url, params });
+        let user = null;
+        if (r.auth === 'admin') {
+          user = await currentUser(req, env, env.DB);
+          if (!user) fail(401, 'ログインしてください');
+        }
+        return await r.handler({ req, env, db: env.DB, url, params, user });
       }
       fail(404, 'APIが見つかりません');
     } catch (e) {
@@ -432,23 +475,135 @@ export default {
 
 route('POST', '/api/admin/login', async ({ req, env, db }) => {
   const ip = req.headers.get('CF-Connecting-IP') || 'local';
-  const rl = await rateLimit(db, `admin:${ip}`, 10);
-  if (!rl.ok) fail(429, `試行回数が上限に達しました。${Math.ceil(rl.retryAfter / 60)}分後にもう一度お試しください`);
-  const { password } = await body(req);
-  if (!(await safeEqual(env.SESSION_SECRET, String(password || ''), env.ADMIN_PASSWORD))) fail(401, 'パスワードが違います');
+  const b = await body(req);
+  const loginId = clip(b.login_id || (env.ADMIN_ID || 'admin'), 60).toLowerCase();
+  // 通信元ごと・IDごとに試行回数を制限する
+  for (const key of [`admin:${ip}`, `adminid:${loginId}`]) {
+    const rl = await rateLimit(db, key, 10);
+    if (!rl.ok) fail(429, `試行回数が上限に達しました。${Math.ceil(rl.retryAfter / 60)}分後にもう一度お試しください`);
+  }
+  const password = String(b.password || '');
+  const ng = () => fail(401, 'IDまたはパスワードが違います');
+  let cookieValue;
+  if (loginId === (env.ADMIN_ID || 'admin').toLowerCase()) {
+    if (!(await safeEqual(env.SESSION_SECRET, password, env.ADMIN_PASSWORD))) ng();
+    cookieValue = await issueAdmin(env, 'root', 0);
+  } else {
+    const u = await db.prepare('SELECT * FROM users WHERE login_id = ?').bind(loginId).first();
+    const ok = await verifyPassword(password, u);
+    if (!ok || !u.active) ng();
+    await db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now(), u.id).run();
+    cookieValue = await issueAdmin(env, u.id, u.session_ver);
+  }
   await clearRateLimit(db, `admin:${ip}`);
-  return json({ ok: true }, 200, { 'Set-Cookie': await issueAdmin(env) });
+  await clearRateLimit(db, `adminid:${loginId}`);
+  return json({ ok: true }, 200, { 'Set-Cookie': cookieValue });
 });
 
 route('POST', '/api/admin/logout', async () => json({ ok: true }, 200, { 'Set-Cookie': cookie('adm', '', 0) }));
 
-route('GET', '/api/admin/me', async ({ req, env }) => json({ admin: await isAdmin(req, env) }));
+route('GET', '/api/admin/me', async ({ req, env, db }) => {
+  const user = await currentUser(req, env, db);
+  return json({ admin: !!user, user });
+});
+
+// 自分のパスワードを変更（地域管理者）
+route('POST', '/api/admin/password', async ({ req, env, db, user }) => {
+  if (user.id === 'root') fail(400, '全体管理者のパスワードは Cloudflare の設定（ADMIN_PASSWORD）で変更してください');
+  const b = await body(req);
+  const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
+  if (!(await verifyPassword(String(b.current || ''), u))) fail(400, '今のパスワードが違います');
+  const next = checkPassword(b.next);
+  const h = await hashPassword(next);
+  await db.prepare('UPDATE users SET pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = session_ver + 1, updated_at = ? WHERE id = ?')
+    .bind(h.hash, h.salt, h.iterations, now(), u.id).run();
+  // 変更後もこの端末ではログインしたままにする（ほかの端末は無効になる）
+  return json({ ok: true }, 200, { 'Set-Cookie': await issueAdmin(env, u.id, u.session_ver + 1) });
+}, 'admin');
+
+// ---------- 全体管理者: 地域管理者のアカウントと利用状況 ----------
+
+function checkPassword(v) {
+  const p = String(v || '');
+  if (p.length < 10) fail(400, 'パスワードは10文字以上にしてください');
+  if (p.length > 200) fail(400, 'パスワードが長すぎます');
+  return p;
+}
+function checkLoginId(v) {
+  const id = String(v || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(id)) fail(400, 'ログインIDは半角の英小文字・数字・記号（. _ -）で3〜40文字にしてください');
+  return id;
+}
+
+route('GET', '/api/admin/users', async ({ db, user }) => {
+  mustSuper(user);
+  const year = String(new Date(Date.now() + 9 * 3600 * 1000).getUTCFullYear());
+  const stats = `
+    (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@) AS total,
+    (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@ AND substr(t.date, 1, 4) = ?) AS this_year,
+    (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@ AND t.status = 'finished') AS finished,
+    (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@ AND t.status IN ('published', 'live')) AS active_now,
+    (SELECT MAX(t.date) FROM tournaments t WHERE t.owner_id = @OWNER@) AS last_date,
+    (SELECT COUNT(*) FROM teams tm JOIN categories c ON c.id = tm.category_id JOIN tournaments t ON t.id = c.tournament_id WHERE t.owner_id = @OWNER@) AS teams`;
+  const r = await db.prepare(`SELECT u.id, u.login_id, u.name, u.region, u.role, u.active, u.created_at, u.last_login_at, ${stats.replaceAll('@OWNER@', 'u.id')} FROM users u ORDER BY u.region, u.name`)
+    .bind(year).all();
+  // 全体管理者（既存の大会を含む）
+  const rootStats = await db.prepare(`SELECT ${stats.replaceAll('t.owner_id = @OWNER@', "(t.owner_id IS NULL OR t.owner_id = 'root')")}`).bind(year).first();
+  return json({ year, users: r.results, root: { ...ROOT, ...rootStats } });
+}, 'admin');
+
+route('POST', '/api/admin/users', async ({ req, env, db, user }) => {
+  mustSuper(user);
+  const b = await body(req);
+  const loginId = checkLoginId(b.login_id);
+  if (loginId === (env.ADMIN_ID || 'admin').toLowerCase()) fail(400, 'このログインIDは使えません');
+  if (await db.prepare('SELECT id FROM users WHERE login_id = ?').bind(loginId).first()) fail(409, 'このログインIDはすでに使われています');
+  const name = clip(b.name, 60);
+  if (!name) fail(400, '名前を入力してください');
+  const h = await hashPassword(checkPassword(b.password));
+  const role = b.role === 'super' ? 'super' : 'region';
+  const id = uid();
+  await db.prepare('INSERT INTO users (id, login_id, name, region, role, pass_hash, pass_salt, iterations, active, session_ver, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)')
+    .bind(id, loginId, name, clip(b.region, 40) || null, role, h.hash, h.salt, h.iterations, now(), now()).run();
+  return json({ ok: true, id });
+}, 'admin');
+
+route('PATCH', '/api/admin/users/:uid', async ({ req, db, params, user }) => {
+  mustSuper(user);
+  const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(params.uid).first();
+  if (!u) fail(404, '管理者が見つかりません');
+  const b = await body(req);
+  let hash = u.pass_hash, salt = u.pass_salt, iter = u.iterations, ver = u.session_ver;
+  if (b.password) {
+    const h = await hashPassword(checkPassword(b.password));
+    hash = h.hash; salt = h.salt; iter = h.iterations; ver += 1; // 再設定したら、その管理者の古いログインは無効
+  }
+  const active = b.active !== undefined ? (b.active ? 1 : 0) : u.active;
+  if (active !== u.active) ver += 1; // 停止したら、すぐにログアウトさせる
+  await db.prepare('UPDATE users SET name = ?, region = ?, role = ?, active = ?, pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = ?, updated_at = ? WHERE id = ?').bind(
+    b.name !== undefined ? clip(b.name, 60) || u.name : u.name,
+    b.region !== undefined ? clip(b.region, 40) || null : u.region,
+    b.role === 'super' || b.role === 'region' ? b.role : u.role,
+    active, hash, salt, iter, ver, now(), u.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+route('DELETE', '/api/admin/users/:uid', async ({ db, params, user }) => {
+  mustSuper(user);
+  const n = await db.prepare('SELECT COUNT(*) AS n FROM tournaments WHERE owner_id = ?').bind(params.uid).first();
+  if (n.n) fail(409, `この管理者の大会が${n.n}件あるため削除できません。利用を止める場合は「停止」にしてください`);
+  await db.prepare('DELETE FROM users WHERE id = ?').bind(params.uid).run();
+  return json({ ok: true });
+}, 'admin');
 
 // ---------- 管理者: 大会 ----------
 
-route('GET', '/api/admin/tournaments', async ({ db }) => {
+route('GET', '/api/admin/tournaments', async ({ db, user }) => {
   const [r, c] = await Promise.all([
-    db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo FROM tournaments ORDER BY date DESC, created_at DESC').all(),
+    isSuper(user)
+      ? db.prepare(`SELECT t.id, t.slug, t.name, t.date, t.end_date, t.venue, t.status, t.logo, t.show_logo, t.owner_id, u.name AS owner_name, u.region AS owner_region
+          FROM tournaments t LEFT JOIN users u ON u.id = t.owner_id ORDER BY t.date DESC, t.created_at DESC`).all()
+      : db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo, owner_id FROM tournaments WHERE owner_id = ? ORDER BY date DESC, created_at DESC').bind(user.id).all(),
     db.prepare(`SELECT c.id, c.tournament_id, c.name, c.config,
         (SELECT COUNT(*) FROM teams t WHERE t.category_id = c.id) AS team_count,
         (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id) AS match_count,
@@ -465,19 +620,19 @@ route('GET', '/api/admin/tournaments', async ({ db }) => {
   return json({ tournaments: r.results.map((t) => ({ ...t, logo: t.show_logo ? t.logo : null, categories: cats[t.id] || [] })) });
 }, 'admin');
 
-route('POST', '/api/admin/tournaments', async ({ req, db }) => {
+route('POST', '/api/admin/tournaments', async ({ req, db, user }) => {
   const b = await body(req);
   if (!b.name || !String(b.name).trim()) fail(400, '大会名を入力してください');
   b.name = clip(b.name, 80); b.venue = b.venue ? clip(b.venue, 80) : b.venue;
   const id = uid();
   const end = checkRange(b.date || null, b.end_date || null);
-  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, pin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, randomSlug(), String(b.name).trim(), b.date || null, end, b.venue || null, randomPin(), now(), now()).run();
+  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, pin, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, randomSlug(), String(b.name).trim(), b.date || null, end, b.venue || null, randomPin(), user.id === 'root' ? null : user.id, now(), now()).run();
   return json({ id });
 }, 'admin');
 
-route('GET', '/api/admin/tournaments/:id', async ({ db, params, url }) => {
-  const t = await getTournament(db, params.id);
+route('GET', '/api/admin/tournaments/:id', async ({ db, params, url, user }) => {
+  const t = await getTournament(db, params.id, user);
   if (url.searchParams.get('rev') === String(t.rev)) return json({ unchanged: true, rev: t.rev });
   const cats = await loadFull(db, t);
   const out = cats.map((c) => {
@@ -487,14 +642,14 @@ route('GET', '/api/admin/tournaments/:id', async ({ db, params, url }) => {
   });
   const sponsors = await listSponsors(db, t.id, true);
   const settings = readSettings(t);
-  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors), settings, parking: publicParking(settings) },
+  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors), settings, parking: publicParking(settings), owner_id: t.owner_id || null },
     categories: out, sponsors, lost: await listLost(db, t.id, true) });
 }, 'admin');
 
 const STATUSES = ['draft', 'published', 'live', 'finished'];
 
-route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const next = {
     name: b.name !== undefined ? clip(b.name, 80) || t.name : t.name,
@@ -534,15 +689,15 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('POST', '/api/admin/tournaments/:id/pin', async ({ db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/pin', async ({ db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const pin = randomPin();
   await db.prepare('UPDATE tournaments SET pin = ?, pin_version = pin_version + 1 WHERE id = ?').bind(pin, t.id).run();
   return json({ pin });
 }, 'admin');
 
-route('DELETE', '/api/admin/tournaments/:id', async ({ db, params }) => {
-  const t = await getTournament(db, params.id);
+route('DELETE', '/api/admin/tournaments/:id', async ({ db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const cats = (await db.prepare('SELECT id FROM categories WHERE tournament_id = ?').bind(t.id).all()).results;
   const stmts = [];
   for (const c of cats) {
@@ -565,8 +720,8 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params }) => {
 const editable = (t) => t.status === 'draft' || t.status === 'published';
 const mustBeEditable = (t) => { if (!editable(t)) fail(409, '開催中・終了した大会では組み合わせを変更できません。大会の状態を「準備中」に戻してください'); };
 
-route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const dates = tournamentDates(t);
   const given = b.config || {};
@@ -581,9 +736,9 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params 
 
 const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
 
-route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
-  const t = await getTournament(db, c.tournament_id);
+route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
   const b = await body(req);
   const cfg = normalizeConfig({ ...c.config, ...(b.config || {}) });
   if (cfg.courts < c.config.courts) {
@@ -605,8 +760,8 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params }) => {
   return json({ ok: true, retimed: timingChanged && editable(t) });
 }, 'admin');
 
-route('DELETE', '/api/admin/categories/:cid', async ({ db, params }) => {
-  const c = await getCategory(db, params.cid);
+route('DELETE', '/api/admin/categories/:cid', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
   await batchAll(db, [
     db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id),
     db.prepare('DELETE FROM teams WHERE category_id = ?').bind(c.id),
@@ -618,8 +773,8 @@ route('DELETE', '/api/admin/categories/:cid', async ({ db, params }) => {
 
 // ---------- 管理者: チーム ----------
 
-route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
+route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
   const b = await body(req);
   const list = Array.isArray(b.teams) ? b.teams : [b];
   const count = await db.prepare('SELECT COUNT(*) AS n FROM teams WHERE category_id = ?').bind(c.id).first();
@@ -638,9 +793,10 @@ route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params }) =>
   return json({ ok: true, added: stmts.length });
 }, 'admin');
 
-route('PATCH', '/api/admin/teams/:id', async ({ req, db, params }) => {
+route('PATCH', '/api/admin/teams/:id', async ({ req, db, params, user }) => {
   const team = await db.prepare('SELECT * FROM teams WHERE id = ?').bind(params.id).first();
   if (!team) fail(404, 'チームが見つかりません');
+  await getCategory(db, team.category_id, user);
   const b = await body(req);
   await db.prepare('UPDATE teams SET name = ?, short_name = ?, club = ?, logo = ? WHERE id = ?').bind(
     b.name !== undefined ? clip(b.name, 60) || team.name : team.name,
@@ -649,16 +805,16 @@ route('PATCH', '/api/admin/teams/:id', async ({ req, db, params }) => {
     b.logo !== undefined ? checkLogo(b.logo) : team.logo,
     team.id,
   ).run();
-  const c = await getCategory(db, team.category_id);
+  const c = await getCategory(db, team.category_id, user);
   await bump(db, c.tournament_id);
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/teams/:id', async ({ db, params }) => {
+route('DELETE', '/api/admin/teams/:id', async ({ db, params, user }) => {
   const team = await db.prepare('SELECT * FROM teams WHERE id = ?').bind(params.id).first();
   if (!team) fail(404, 'チームが見つかりません');
-  const c = await getCategory(db, team.category_id);
-  const t = await getTournament(db, c.tournament_id);
+  const c = await getCategory(db, team.category_id, user);
+  const t = await getTournament(db, c.tournament_id, user);
   const used = await db.prepare('SELECT COUNT(*) AS n FROM matches WHERE category_id = ? AND (home_team_id = ? OR away_team_id = ?)').bind(c.id, team.id, team.id).first();
   if (used.n && !editable(t)) fail(409, '試合が組まれているチームは開催中に削除できません');
   await db.prepare('DELETE FROM teams WHERE id = ?').bind(team.id).run();
@@ -669,8 +825,8 @@ route('DELETE', '/api/admin/teams/:id', async ({ db, params }) => {
 
 // ---------- 管理者: 組み分け・日程 ----------
 
-route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params }) => {
-  const c = await getCategory(db, params.cid);
+route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
   const { teams } = await loadCategoryData(db, c.id);
   if (c.config.format === 'knockout') {
     return json({ order: shuffle(teams.map((x) => x.id)), warnings: [] });
@@ -679,9 +835,9 @@ route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params }) => {
   return json(assignGroups(teams, { groups: c.config.groups, ...c.config.grouping }));
 }, 'admin');
 
-route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
-  const t = await getTournament(db, c.tournament_id);
+route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
   mustBeEditable(t);
   const b = await body(req);
   const { teams } = await loadCategoryData(db, c.id);
@@ -713,9 +869,9 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params })
 }, 'admin');
 
 // 試合を別の枠・コートへ移動（移動先に試合があれば入れ替え）
-route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
-  const t = await getTournament(db, c.tournament_id);
+route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
   mustBeEditable(t);
   const b = await body(req);
   const { matches } = await loadCategoryData(db, c.id);
@@ -734,9 +890,9 @@ route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params }) => 
 }, 'admin');
 
 // 当日の遅延調整（コート単位）
-route('POST', '/api/admin/categories/:cid/delay', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
-  const t = await getTournament(db, c.tournament_id);
+route('POST', '/api/admin/categories/:cid/delay', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
   if (t.status !== 'live') fail(409, '遅延調整は「開催中」の大会で使えます。準備中は開始時刻の設定から全体を調整してください');
   const b = await body(req);
   const minutes = Math.trunc(Number(b.minutes));
@@ -775,16 +931,16 @@ function requirePkIfNeeded(m, s) {
   }
 }
 
-async function getMatchCtx(db, id) {
+async function getMatchCtx(db, id, user) {
   const m = await db.prepare('SELECT * FROM matches WHERE id = ?').bind(id).first();
   if (!m) fail(404, '試合が見つかりません');
-  const c = await getCategory(db, m.category_id);
-  const t = await getTournament(db, c.tournament_id);
+  const c = await getCategory(db, m.category_id, user);
+  const t = await getTournament(db, c.tournament_id, user);
   return { m: parseMatch(m), c, t };
 }
 
-route('POST', '/api/admin/matches/:id/result', async ({ req, db, params }) => {
-  const { m, c, t } = await getMatchCtx(db, params.id);
+route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user }) => {
+  const { m, c, t } = await getMatchCtx(db, params.id, user);
   if (!m.home_team_id || !m.away_team_id) fail(409, '対戦チームが決まっていません');
   const b = await body(req);
   const s = validateScore(m, b, c.config);
@@ -800,8 +956,8 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
+route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
   const b = await body(req);
   const ids = Array.isArray(b.matchIds) ? b.matchIds : [];
   const { matches } = await loadCategoryData(db, c.id);
@@ -818,8 +974,8 @@ route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params }) 
 }, 'admin');
 
 // 確定を取り消して仮登録に戻す
-route('POST', '/api/admin/matches/:id/reopen', async ({ db, params }) => {
-  const { m, c, t } = await getMatchCtx(db, params.id);
+route('POST', '/api/admin/matches/:id/reopen', async ({ db, params, user }) => {
+  const { m, c, t } = await getMatchCtx(db, params.id, user);
   if (m.status !== 'confirmed') fail(409, 'この試合は確定していません');
   await db.prepare("UPDATE matches SET status = 'provisional', corrected = 1, version = version + 1 WHERE id = ?").bind(m.id).run();
   await syncKnockout(db, c);
@@ -827,8 +983,8 @@ route('POST', '/api/admin/matches/:id/reopen', async ({ db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('POST', '/api/admin/matches/:id/clear', async ({ db, params }) => {
-  const { m, c, t } = await getMatchCtx(db, params.id);
+route('POST', '/api/admin/matches/:id/clear', async ({ db, params, user }) => {
+  const { m, c, t } = await getMatchCtx(db, params.id, user);
   await db.prepare(`UPDATE matches SET home_score = NULL, away_score = NULL, home_pk = NULL, away_pk = NULL, forfeit = NULL,
     status = 'none', updated_by = NULL, updated_at = NULL, version = version + 1 WHERE id = ?`).bind(m.id).run();
   await syncKnockout(db, c);
@@ -836,8 +992,8 @@ route('POST', '/api/admin/matches/:id/clear', async ({ db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) => {
-  const c = await getCategory(db, params.cid);
+route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
   const b = await body(req);
   const cfg = { ...c.config, lottery: { ...c.config.lottery, [b.group]: Array.isArray(b.order) ? b.order : [] } };
   await db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(cfg), c.id).run();
@@ -848,8 +1004,8 @@ route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params }) 
 
 // ---------- 管理者: スポンサー ----------
 
-route('POST', '/api/admin/tournaments/:id/sponsors', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/sponsors', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const name = clip(b.name, 60);
   if (!name) fail(400, 'スポンサー名を入力してください');
@@ -861,9 +1017,10 @@ route('POST', '/api/admin/tournaments/:id/sponsors', async ({ req, db, params })
   return json({ ok: true });
 }, 'admin');
 
-route('PATCH', '/api/admin/sponsors/:sid', async ({ req, db, params }) => {
+route('PATCH', '/api/admin/sponsors/:sid', async ({ req, db, params, user }) => {
   const sp = await db.prepare('SELECT * FROM sponsors WHERE id = ?').bind(params.sid).first();
   if (!sp) fail(404, 'スポンサーが見つかりません');
+  await getTournament(db, sp.tournament_id, user);
   const b = await body(req);
   await db.prepare('UPDATE sponsors SET name = ?, url = ?, image = ?, active = ?, updated_at = ? WHERE id = ?').bind(
     b.name !== undefined ? clip(b.name, 60) || sp.name : sp.name,
@@ -875,9 +1032,10 @@ route('PATCH', '/api/admin/sponsors/:sid', async ({ req, db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/sponsors/:sid', async ({ db, params }) => {
+route('DELETE', '/api/admin/sponsors/:sid', async ({ db, params, user }) => {
   const sp = await db.prepare('SELECT * FROM sponsors WHERE id = ?').bind(params.sid).first();
   if (!sp) fail(404, 'スポンサーが見つかりません');
+  await getTournament(db, sp.tournament_id, user);
   await db.batch([
     db.prepare('DELETE FROM sponsor_clicks WHERE sponsor_id = ?').bind(sp.id),
     db.prepare('DELETE FROM sponsors WHERE id = ?').bind(sp.id),
@@ -886,8 +1044,8 @@ route('DELETE', '/api/admin/sponsors/:sid', async ({ db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('POST', '/api/admin/tournaments/:id/sponsors/order', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/sponsors/order', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const ids = Array.isArray(b.ids) ? b.ids : [];
   await batchAll(db, ids.map((id, i) => db.prepare('UPDATE sponsors SET sort = ? WHERE id = ? AND tournament_id = ?').bind(i, id, t.id)));
@@ -896,33 +1054,46 @@ route('POST', '/api/admin/tournaments/:id/sponsors/order', async ({ req, db, par
 }, 'admin');
 
 // 日ごとのクリック数
-route('GET', '/api/admin/sponsors/:sid/clicks', async ({ db, params }) => {
+route('GET', '/api/admin/sponsors/:sid/clicks', async ({ db, params, user }) => {
+  const sp = await db.prepare('SELECT tournament_id FROM sponsors WHERE id = ?').bind(params.sid).first();
+  if (!sp) fail(404, 'スポンサーが見つかりません');
+  await getTournament(db, sp.tournament_id, user);
   const r = await db.prepare('SELECT day, count FROM sponsor_clicks WHERE sponsor_id = ? ORDER BY day DESC LIMIT 60').bind(params.sid).all();
   return json({ days: r.results });
 }, 'admin');
 
+// 添付画像の持ち主（大会 or プリセット）を操作できるか
+async function checkAssetOwner(db, owner, user) {
+  if (String(owner).startsWith('preset:')) {
+    const p = await db.prepare('SELECT owner_id FROM presets WHERE id = ?').bind(String(owner).slice(7)).first();
+    if (!p) fail(404, 'プリセットが見つかりません');
+    if (!canEditOwned(user, p.owner_id)) fail(403, 'このプリセットは変更できません');
+  } else await getTournament(db, owner, user);
+}
+
 // ---------- 管理者: 添付画像（要項の施設案内など） ----------
 
-route('POST', '/api/admin/assets', async ({ req, db }) => {
+route('POST', '/api/admin/assets', async ({ req, db, user }) => {
   const b = await body(req);
   const owner = String(b.owner || '');
-  if (owner.startsWith('preset:')) {
-    if (!(await db.prepare('SELECT id FROM presets WHERE id = ?').bind(owner.slice(7)).first())) fail(404, 'プリセットが見つかりません');
-  } else await getTournament(db, owner);
+  await checkAssetOwner(db, owner, user);
   const id = uid();
   await db.prepare('INSERT INTO assets (id, owner, image, created_at) VALUES (?, ?, ?, ?)').bind(id, owner, checkBanner(b.image), now()).run();
   return json({ id, url: `/img/a/${id}` });
 }, 'admin');
 
-route('DELETE', '/api/admin/assets/:aid', async ({ db, params }) => {
+route('DELETE', '/api/admin/assets/:aid', async ({ db, params, user }) => {
+  const a = await db.prepare('SELECT owner FROM assets WHERE id = ?').bind(params.aid).first();
+  if (!a) return json({ ok: true });
+  await checkAssetOwner(db, a.owner, user);
   await db.prepare('DELETE FROM assets WHERE id = ?').bind(params.aid).run();
   return json({ ok: true });
 }, 'admin');
 
 // ---------- 管理者: 忘れ物 ----------
 
-route('POST', '/api/admin/tournaments/:id/lost', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/lost', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const note = clip(b.note, 400);
   if (!note) fail(400, '忘れ物の内容を入力してください');
@@ -932,9 +1103,10 @@ route('POST', '/api/admin/tournaments/:id/lost', async ({ req, db, params }) => 
   return json({ ok: true });
 }, 'admin');
 
-route('PATCH', '/api/admin/lost/:lid', async ({ req, db, params }) => {
+route('PATCH', '/api/admin/lost/:lid', async ({ req, db, params, user }) => {
   const it = await db.prepare('SELECT * FROM lost_items WHERE id = ?').bind(params.lid).first();
   if (!it) fail(404, '見つかりません');
+  await getTournament(db, it.tournament_id, user);
   const b = await body(req);
   await db.prepare('UPDATE lost_items SET note = ?, image = ?, status = ?, updated_at = ? WHERE id = ?').bind(
     b.note !== undefined ? clip(b.note, 400) || it.note : it.note,
@@ -945,9 +1117,10 @@ route('PATCH', '/api/admin/lost/:lid', async ({ req, db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/lost/:lid', async ({ db, params }) => {
+route('DELETE', '/api/admin/lost/:lid', async ({ db, params, user }) => {
   const it = await db.prepare('SELECT tournament_id FROM lost_items WHERE id = ?').bind(params.lid).first();
   if (!it) fail(404, '見つかりません');
+  await getTournament(db, it.tournament_id, user);
   await db.prepare('DELETE FROM lost_items WHERE id = ?').bind(params.lid).run();
   await bump(db, it.tournament_id);
   return json({ ok: true });
@@ -955,13 +1128,14 @@ route('DELETE', '/api/admin/lost/:lid', async ({ db, params }) => {
 
 // ---------- 管理者: プリセット（要項など） ----------
 
-route('GET', '/api/admin/presets', async ({ db, url }) => {
+route('GET', '/api/admin/presets', async ({ db, url, user }) => {
   const kind = url.searchParams.get('kind') || 'outline';
-  const r = await db.prepare('SELECT * FROM presets WHERE kind = ? ORDER BY updated_at DESC').bind(kind).all();
-  return json({ presets: r.results.map((x) => ({ ...x, data: JSON.parse(x.data) })) });
+  const r = isSuper(user) ? await db.prepare('SELECT * FROM presets WHERE kind = ? ORDER BY updated_at DESC').bind(kind).all()
+    : await db.prepare("SELECT * FROM presets WHERE kind = ? AND (owner_id = ? OR owner_id IS NULL OR owner_id = 'root') ORDER BY updated_at DESC").bind(kind, user.id).all();
+  return json({ presets: r.results.map((x) => ({ ...x, data: JSON.parse(x.data), shared: sharedOwner(x.owner_id), editable: canEditOwned(user, x.owner_id) })) });
 }, 'admin');
 
-route('POST', '/api/admin/presets', async ({ req, db }) => {
+route('POST', '/api/admin/presets', async ({ req, db, user }) => {
   const b = await body(req);
   const name = clip(b.name, 60);
   if (!name) fail(400, 'プリセット名を入力してください');
@@ -970,14 +1144,15 @@ route('POST', '/api/admin/presets', async ({ req, db }) => {
   const map = await copyAssets(db, outlineImageIds(b.data), `preset:${id}`);
   const data = remapOutline(b.data || {}, map);
   if (JSON.stringify(data).length > 300_000) fail(400, '内容が長すぎます');
-  await db.prepare('INSERT INTO presets (id, kind, name, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(id, String(b.kind || 'outline'), name, JSON.stringify(data), now(), now()).run();
+  await db.prepare('INSERT INTO presets (id, kind, name, data, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, String(b.kind || 'outline'), name, JSON.stringify(data), ownerOf(user), now(), now()).run();
   return json({ ok: true, id });
 }, 'admin');
 
-route('PATCH', '/api/admin/presets/:pid', async ({ req, db, params }) => {
+route('PATCH', '/api/admin/presets/:pid', async ({ req, db, params, user }) => {
   const p = await db.prepare('SELECT * FROM presets WHERE id = ?').bind(params.pid).first();
   if (!p) fail(404, 'プリセットが見つかりません');
+  if (!canEditOwned(user, p.owner_id)) fail(403, 'このプリセットは作成した管理者だけが変更できます');
   const b = await body(req);
   const data = b.data !== undefined ? JSON.stringify(b.data) : p.data;
   if (data.length > 300_000) fail(400, '内容が長すぎます');
@@ -985,7 +1160,10 @@ route('PATCH', '/api/admin/presets/:pid', async ({ req, db, params }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/presets/:pid', async ({ db, params }) => {
+route('DELETE', '/api/admin/presets/:pid', async ({ db, params, user }) => {
+  const p = await db.prepare('SELECT owner_id FROM presets WHERE id = ?').bind(params.pid).first();
+  if (!p) fail(404, 'プリセットが見つかりません');
+  if (!canEditOwned(user, p.owner_id)) fail(403, 'このプリセットは作成した管理者だけが削除できます');
   await db.batch([
     db.prepare('DELETE FROM assets WHERE owner = ?').bind(`preset:${params.pid}`),
     db.prepare('DELETE FROM presets WHERE id = ?').bind(params.pid),
@@ -994,11 +1172,11 @@ route('DELETE', '/api/admin/presets/:pid', async ({ db, params }) => {
 }, 'admin');
 
 // プリセットの要項を大会に読み込む（添付画像は大会用にコピー）
-route('POST', '/api/admin/tournaments/:id/apply-preset', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/apply-preset', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const p = await db.prepare('SELECT * FROM presets WHERE id = ?').bind(b.presetId).first();
-  if (!p) fail(404, 'プリセットが見つかりません');
+  if (!p || !(isSuper(user) || sharedOwner(p.owner_id) || p.owner_id === user.id)) fail(404, 'プリセットが見つかりません');
   const data = JSON.parse(p.data);
   const map = await copyAssets(db, outlineImageIds(data), t.id);
   const settings = { ...readSettings(t), outline: remapOutline(data, map) };
@@ -1008,9 +1186,10 @@ route('POST', '/api/admin/tournaments/:id/apply-preset', async ({ req, db, param
 }, 'admin');
 
 // 形式テンプレートの名前変更・上書き
-route('PATCH', '/api/admin/templates/:id', async ({ req, db, params }) => {
+route('PATCH', '/api/admin/templates/:id', async ({ req, db, params, user }) => {
   const tp = await db.prepare('SELECT * FROM templates WHERE id = ?').bind(params.id).first();
   if (!tp) fail(404, 'テンプレートが見つかりません');
+  if (!canEditOwned(user, tp.owner_id)) fail(403, 'このテンプレートは作成した管理者だけが変更できます');
   const b = await body(req);
   const cfg = b.config ? JSON.stringify(Object.fromEntries(TEMPLATE_KEYS.filter((k) => k in b.config).map((k) => [k, b.config[k]]))) : tp.config;
   await db.prepare('UPDATE templates SET name = ?, config = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : tp.name, cfg, tp.id).run();
@@ -1018,8 +1197,8 @@ route('PATCH', '/api/admin/templates/:id', async ({ req, db, params }) => {
 }, 'admin');
 
 // 大会をコピーして新しい大会を作る（カテゴリの設定・要項・駐車券・スポンサー。チームは任意）
-route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params }) => {
-  const t = await getTournament(db, params.id);
+route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const name = clip(b.name, 80) || `${t.name}（コピー）`;
   const end = checkRange(b.date || null, b.end_date || null);
@@ -1027,8 +1206,8 @@ route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params }) => 
   const settings = readSettings(t);
   const map = await copyAssets(db, outlineImageIds(settings.outline), nid);
   if (settings.outline) settings.outline = remapOutline(settings.outline, map);
-  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(settings), now(), now()).run();
+  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(settings), user.id === 'root' ? null : user.id, now(), now()).run();
   const dates = tournamentDates({ date: b.date, end_date: end });
   const stmts = [];
   const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ?').bind(t.id).all()).results;
@@ -1053,20 +1232,24 @@ route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params }) => 
 const TEMPLATE_KEYS = ['dayBreaks', 'koTiming', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',
   'startTime', 'courts', 'courtNames', 'format', 'groups', 'advance', 'rankMode', 'knockoutPlan', 'tiebreak', 'forfeitScore', 'showStandings', 'minRestSlots'];
 
-route('GET', '/api/admin/templates', async ({ db }) => {
-  const r = await db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all();
-  return json({ templates: r.results.map((x) => ({ ...x, config: JSON.parse(x.config) })) });
+route('GET', '/api/admin/templates', async ({ db, user }) => {
+  const r = isSuper(user) ? await db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all()
+    : await db.prepare("SELECT * FROM templates WHERE (owner_id = ? OR owner_id IS NULL OR owner_id = 'root') ORDER BY created_at DESC").bind(user.id).all();
+  return json({ templates: r.results.map((x) => ({ ...x, config: JSON.parse(x.config), shared: sharedOwner(x.owner_id), editable: canEditOwned(user, x.owner_id) })) });
 }, 'admin');
 
-route('POST', '/api/admin/templates', async ({ req, db }) => {
+route('POST', '/api/admin/templates', async ({ req, db, user }) => {
   const b = await body(req);
   if (!b.name) fail(400, 'テンプレート名を入力してください');
   const cfg = Object.fromEntries(TEMPLATE_KEYS.filter((k) => b.config && k in b.config).map((k) => [k, b.config[k]]));
-  await db.prepare('INSERT INTO templates (id, name, config, created_at) VALUES (?, ?, ?, ?)').bind(uid(), String(b.name), JSON.stringify(cfg), now()).run();
+  await db.prepare('INSERT INTO templates (id, name, config, owner_id, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), clip(b.name, 60), JSON.stringify(cfg), ownerOf(user), now()).run();
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/templates/:id', async ({ db, params }) => {
+route('DELETE', '/api/admin/templates/:id', async ({ db, params, user }) => {
+  const tp = await db.prepare('SELECT owner_id FROM templates WHERE id = ?').bind(params.id).first();
+  if (!tp) fail(404, 'テンプレートが見つかりません');
+  if (!canEditOwned(user, tp.owner_id)) fail(403, 'このテンプレートは作成した管理者だけが削除できます');
   await db.prepare('DELETE FROM templates WHERE id = ?').bind(params.id).run();
   return json({ ok: true });
 }, 'admin');
