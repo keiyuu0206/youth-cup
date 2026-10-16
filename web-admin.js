@@ -78,7 +78,13 @@ function knockoutPlanPanel(f, cat, redraw) {
       h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '名前'), h('input', { type: 'text', value: b.name || '', oninput: (e) => { b.name = e.target.value; } })),
       h('label', { class: 'field' }, h('span', null, '各組の何位から'), h('input', { type: 'number', min: 1, max: 16, value: b.from, oninput: (e) => { b.from = Number(e.target.value); }, onchange: redraw })),
       h('label', { class: 'field' }, h('span', null, '何位まで'), h('input', { type: 'number', min: 1, max: 16, value: b.to, oninput: (e) => { b.to = Number(e.target.value); }, onchange: redraw })),
-      h('label', { class: 'field' }, h('span', null, '形式'), h('select', { onchange: (e) => { b.format = e.target.value; redraw(); } },
+      h('label', { class: 'field' }, h('span', null, '形式'), h('select', { 'data-bracket-format': i, onchange: (e) => {
+        b.format = e.target.value;
+        // 名前の末尾が「トーナメント」「リーグ」なら、形式に合わせて変える（自分で付けた名前はそのまま）
+        if (b.format === 'league') b.name = String(b.name || '').replace(/トーナメント$/, 'リーグ');
+        else b.name = String(b.name || '').replace(/リーグ$/, 'トーナメント');
+        redraw();
+      } },
         [['knockout', 'トーナメント'], ['league', 'リーグ戦（総当たり）']].map(([v, l]) => h('option', { value: v, selected: (b.format || 'knockout') === v }, l)))),
       b.format === 'league' ? h('p', { class: 'muted small', style: { margin: 0, alignSelf: 'end' } }, '全チームの順位を決めます') : h('label', { class: 'field' }, h('span', null, '順位の決め方'), h('select', { onchange: (e) => { b.mode = e.target.value; redraw(); } },
         Object.entries(RANK_LABEL).map(([v, l]) => h('option', { value: v, selected: (b.mode || plan.mode) === v }, l)))),

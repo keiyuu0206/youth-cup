@@ -194,7 +194,8 @@ export function expandPlan(plan, maxRank) {
     list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '中位トーナメント', from: k + 1, to: k + m }, { name: '下位トーナメント', from: k + m + 1, to: maxRank }];
   }
   else if (plan.type === 'byrank') list = Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
-  else if (plan.type === 'custom') list = (plan.brackets || []).map((b, i) => ({ name: b.name || `トーナメント${i + 1}`, from: Number(b.from) || 1, to: Number(b.to) || 1, mode: b.mode }));
+  // 自由に設定：各段の名前・範囲・順位の決め方・形式（トーナメント／リーグ戦）をそのまま使う
+  else if (plan.type === 'custom') list = (plan.brackets || []).map((b, i) => ({ name: b.name || `トーナメント${i + 1}`, from: Number(b.from) || 1, to: Number(b.to) || 1, mode: b.mode, format: b.format }));
   else list = [{ name: '決勝トーナメント', from: 1, to: k }];
   // 段ごとに「トーナメント」か「リーグ戦」かを選べる（plan.formats[段の番号] = 'league'）。リーグ戦なら名前も「〜リーグ」に
   const formats = plan.formats || {};

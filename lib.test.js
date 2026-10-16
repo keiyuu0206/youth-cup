@@ -488,3 +488,17 @@ test('試合間隔: 2日目だけ間隔を変えると、2日目の時刻の間�
   assert.deepEqual(gap({ ...base, extraDays: [{ startTime: 510, intervalMinutes: 3 }] }), [35, 30]); // 2日目だけ間隔3分
   assert.equal(normalizeConfig({ ...base, extraDays: [{ intervalMinutes: '' }] }).extraDays[0].intervalMinutes, null);
 });
+
+test('自由に設定: 段の形式を「リーグ戦」にすると、その段は総当たりで作られる', () => {
+  const plan = { type: 'custom', mode: 'top3', brackets: [
+    { name: '上位トーナメント', from: 1, to: 2, format: 'knockout' },
+    { name: '中位トーナメント', from: 3, to: 4 },
+    { name: '下位リーグ', from: 5, to: 6, format: 'league' }] };
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 4, courts: 6, knockoutPlan: plan });
+  const ts = teams(24).map((t, i) => ({ ...t, group_label: 'ABCD'[i % 4] }));
+  const { matches } = generateCategory(cfg, ts);
+  const low = matches.filter((m) => m.group_label === '下位リーグ');
+  assert.equal(low.length, 28);
+  assert.ok(low.every((m) => /^R/.test(m.code) && /^下位リーグ 第\d節$/.test(m.label)));
+  assert.ok(matches.filter((m) => m.group_label === '中位トーナメント').every((m) => /^K/.test(m.code)));
+});
