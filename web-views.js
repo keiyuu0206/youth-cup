@@ -175,22 +175,68 @@ export function scheduleView(cat, ctx, filter = () => true) {
   return h('div', null, out);
 }
 
+// リーグ戦の段の試合（試合コードが R で始まる）
+export const isRankLeague = (m) => m && m.stage === 'knockout' && /^R\d/.test(m.code || '');
+
+// 組ごとの人数（組分け前は設定から見積もる）
+export function groupSizesOf(cat) {
+  const sizes = {};
+  for (const x of cat.teams) if (x.group_label) sizes[x.group_label] = (sizes[x.group_label] || 0) + 1;
+  if (Object.keys(sizes).length) return sizes;
+  const G = Math.max(1, cat.config.groups || 1);
+  const n = Math.max(cat.teams.length, G * 2);
+  return Object.fromEntries(Array.from({ length: G }, (_, i) => [String.fromCharCode(65 + i), Math.floor(n / G) + (i < n % G ? 1 : 0)]));
+}
+
+// 決勝の段の一覧（名前・各組の何位から何位まで・形式・チーム数）。サーバーの expandPlan と同じ考え方
+export function planBrackets(cat) {
+  const plan = cat.config.knockoutPlan || { type: 'top', k: 2 };
+  const sizes = groupSizesOf(cat);
+  const maxRank = Math.max(...Object.values(sizes));
+  const k = Math.max(1, Math.min(maxRank, Number(plan.k) || 2));
+  const m = Math.max(1, Math.min(maxRank, Number(plan.m) || k));
+  let list;
+  if (plan.type === 'all') list = [{ name: '決勝トーナメント', from: 1, to: maxRank }];
+  else if (plan.type === 'split') list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '下位トーナメント', from: k + 1, to: maxRank }];
+  else if (plan.type === 'split3') list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '中位トーナメント', from: k + 1, to: k + m }, { name: '下位トーナメント', from: k + m + 1, to: maxRank }];
+  else if (plan.type === 'byrank') list = Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
+  else if (plan.type === 'custom') list = (plan.brackets || []).map((b, i) => ({ name: b.name || `トーナメント${i + 1}`, from: Number(b.from) || 1, to: Number(b.to) || 1, format: b.format }));
+  else list = [{ name: '決勝トーナメント', from: 1, to: k }];
+  const formats = plan.formats || {};
+  return list.map((b, i) => {
+    const format = (plan.type === 'custom' ? b.format : formats[i]) === 'league' ? 'league' : 'knockout';
+    return { ...b, format, name: format === 'league' && plan.type !== 'custom' ? b.name.replace(/トーナメント$/, 'リーグ') : b.name };
+  }).filter((b) => b.from <= Math.min(b.to, maxRank)).map((b) => {
+    const to = Math.min(b.to, maxRank);
+    let n = 0;
+    for (let r = b.from; r <= to; r++) for (const v of Object.values(sizes)) if (v >= r) n++;
+    return { ...b, to, n };
+  });
+}
+
 export function standingsView(cat, ctx) {
-  const groups = Object.keys(cat.standings || {}).sort();
+  const all = cat.standings || {};
+  // 予選の組を先に、リーグ戦の段（下位リーグなど）を後に並べる。ctx.only で一部だけ表示
+  const groups = Object.keys(all).filter((g) => !ctx.only || ctx.only.includes(g))
+    .sort((a, b) => (all[a].placement ? 1 : 0) - (all[b].placement ? 1 : 0) || (all[a].offset || 0) - (all[b].offset || 0) || a.localeCompare(b));
   if (!groups.length) return h('p', { class: 'empty' }, '順位表はまだありません');
   const tm = teamMap(cat);
   const plan = cat.config.knockoutPlan || { type: 'top', k: cat.config.advance };
   const lk = cat.config.format === 'league_knockout';
   const advance = lk && (plan.type === 'top' || plan.type === 'split' || plan.type === 'split3') ? plan.k : 0;
   const mid = plan.m || plan.k;
+  void mid;
+  // 予選の後の進み先（段の形式に合わせて「下位リーグへ」などと表示）
+  const brs = lk ? planBrackets(cat) : [];
+  const rng = (b) => (b.from === b.to ? `${b.from}位` : `${b.from}〜${b.to}位`);
   const note = !lk ? null
     : plan.type === 'top' ? `上位${plan.k}チームが決勝トーナメントへ`
-      : plan.type === 'split' ? `${plan.k}位までが上位トーナメント、それより下は下位トーナメントへ`
-        : plan.type === 'split3' ? `${plan.k}位までが上位、${mid === 1 ? `${plan.k + 1}位` : `${plan.k + 1}〜${plan.k + mid}位`}が中位、それより下は下位トーナメントへ`
-        : plan.type === 'all' ? '全チームが決勝トーナメントへ'
-          : plan.type === 'byrank' ? '同じ順位のチームどうしでトーナメント' : null;
+      : plan.type === 'all' ? '全チームが決勝トーナメントへ'
+        : plan.type === 'byrank' && !brs.some((b) => b.format === 'league') ? '同じ順位のチームどうしでトーナメント'
+          : brs.map((b) => `${rng(b)}は${b.name}`).join('、') + 'へ';
   return h('div', null, groups.map((g) => {
     const st = cat.standings[g];
+    if (st.placement) return rankLeagueCard(cat, g, st, ctx, tm);
     const badge = st.complete
       ? (st.needsLottery ? h('span', { class: 'st-badge alert' }, `${manualLabel(cat.config)}待ち`) : h('span', { class: 'st-badge ok' }, '確定'))
       : h('span', { class: 'st-badge' }, '途中経過');
@@ -210,11 +256,40 @@ export function standingsView(cat, ctx) {
           h('td', { class: 'opt' }, r.gf), h('td', { class: 'opt' }, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
           h('td', { class: 'pts' }, r.pts)))))),
       note ? h('div', { class: 'st-note' }, h('span', null, advance ? h('i') : null, note)) : null);
-  }), h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, (() => {
+  }), ctx.noFoot ? null : h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, (() => {
     const order = (cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]);
     const manual = (cat.config.tiebreak || []).some((k) => k === 'janken' || k === 'lottery');
     return `勝点が並んだときは ${order.length ? order.join('、') : '本部の決定'} の順で決めます。${manual ? '' : 'それでも決まらないときは本部で決めます。'}`;
   })()));
+}
+
+// リーグ戦の段（下位リーグなど）の順位表
+function rankLeagueCard(cat, name, st, ctx, tm) {
+  const slots = (st.slots || []).join('・');
+  const badge = !st.rows.length ? h('span', { class: 'st-badge' }, '予選の結果待ち')
+    : st.complete ? (st.needsLottery ? h('span', { class: 'st-badge alert' }, `${manualLabel(cat.config)}待ち`) : h('span', { class: 'st-badge ok' }, '確定'))
+      : h('span', { class: 'st-badge' }, '途中経過');
+  if (!st.rows.length) {
+    return h('section', { class: 'st-card' }, h('div', { class: 'st-head' }, h('h2', null, name), badge),
+      h('p', { class: 'muted small', style: { margin: '0 4px 6px' } }, `${slots} による総当たりです。予選の順位が決まると、参加チームが表示されます。`));
+  }
+  return h('section', { class: 'st-card' },
+    h('div', { class: 'st-head' }, h('h2', null, name), badge),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'standings' },
+      h('thead', null, h('tr', null,
+        h('th', { scope: 'col' }, h('span', { class: 'sr-only' }, '順位')),
+        h('th', { scope: 'col', style: { textAlign: 'left' } }, 'チーム'),
+        ['試', '勝', '分', '敗', '得', '失', '差', '点'].map((x) => h('th', { scope: 'col', class: x === '得' || x === '失' ? 'opt' : null }, x)))),
+      h('tbody', null, st.rows.map((r) => h('tr', { class: r.teamId === ctx.myTeam ? 'mine' : '' },
+        // 全体の順位は順位の数字の下に小さく（横幅を取らない）
+        h('td', { class: 'rank' }, h('span', { class: 'rank-no' }, r.rank), st.complete && !r.tied ? h('span', { class: 'rank-all' }, `全体${(st.offset || 0) + r.rank}位`) : null),
+        h('td', { class: 'team' }, h('div', { class: 'st-team' }, crest(tm[r.teamId], 22), h('span', null, tm[r.teamId] ? (tm[r.teamId].short_name || tm[r.teamId].name) : '-'),
+          r.tied && st.complete ? h('span', { class: 'tie-mark' }, `${manualLabel(cat.config)}待ち`) : null,
+          r.lottery ? h('span', { class: 'tie-mark' }, manualLabel(cat.config)) : null)),
+        h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
+        h('td', { class: 'opt' }, r.gf), h('td', { class: 'opt' }, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
+        h('td', { class: 'pts' }, r.pts)))))),
+    h('div', { class: 'st-note' }, h('span', null, `${slots} による総当たり。この表の順位が全体の${(st.offset || 0) + 1}位〜${(st.offset || 0) + (st.slots || []).length}位になります`)));
 }
 
 export function finalRankingView(cat, ctx) {
@@ -227,7 +302,7 @@ export function finalRankingView(cat, ctx) {
 }
 
 export function bracketNames(cat) {
-  const ko = cat.matches.filter((m) => m.stage === 'knockout');
+  const ko = cat.matches.filter((m) => m.stage === 'knockout' && !isRankLeague(m));
   const seen = [];
   const top = {};
   for (const m of ko) {
@@ -239,8 +314,13 @@ export function bracketNames(cat) {
 }
 
 export function bracketView(cat, ctx) {
-  const ko = cat.matches.filter((m) => m.stage === 'knockout');
-  if (!ko.length) return h('p', { class: 'empty' }, 'トーナメントはありません');
+  const ko = cat.matches.filter((m) => m.stage === 'knockout' && !isRankLeague(m));
+  // リーグ戦の段（下位リーグなど）は、トーナメント表の後に順位表として載せる
+  const leagues = ctx.only !== undefined || ctx.noLeagues ? [] : Object.keys(cat.standings || {}).filter((g) => cat.standings[g].placement);
+  if (!ko.length) {
+    if (leagues.length) return h('div', null, finalRankingView(cat, ctx), h('div', { class: 'rank-leagues' }, standingsView(cat, { ...ctx, only: leagues })));
+    return h('p', { class: 'empty' }, 'トーナメントはありません');
+  }
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
   // 複数のトーナメント（上位・下位など）は分けて表示する
   const sections = [];
@@ -315,8 +395,12 @@ export function bracketView(cat, ctx) {
     ranking ? { id: 'bk-rank', label: '最終順位', subs: [] } : null,
     ...sections.map((sec, si) => ({ id: `bk-${si}`, label: sec.name || 'トーナメント表', subs: sec.subs.length > 1 ? sec.subs : [] })),
   ].filter(Boolean);
+  // 見出しは順位表のカードにあるので、ここでは付けない
+  const leagueEls = leagues.map((g, i) => h('section', { class: 'bk-target rank-league', id: `bk-l${i}` },
+    standingsView(cat, { ...ctx, only: [g], noFoot: true })));
+  leagues.forEach((g, i) => items.push({ id: `bk-l${i}`, label: g, subs: [] }));
   const needNav = ctx.jumpNav && (items.length > 1 || items.some((x) => x.subs.length));
-  return h('div', null, needNav ? bracketNav(items) : null, ranking, secEls);
+  return h('div', null, needNav ? bracketNav(items) : null, ranking, secEls, leagueEls);
 }
 
 // トーナメント表の上部に固定する移動ボタン（1段目: トーナメント、2段目: その中の順位決定戦）

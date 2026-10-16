@@ -1,7 +1,7 @@
 // 大会要項：項目の編集、プリセット、PDF出力
 import { api } from './web-api.js';
 import { h, mount, modal, toast, confirmDialog, run, formatDate, resizeBanner, icon } from './web-ui.js';
-import { dayTotal, dayDate, TIEBREAK_LABEL, matchLength, matchLengthFor } from './web-views.js';
+import { dayTotal, dayDate, TIEBREAK_LABEL, matchLength, matchLengthFor, planBrackets } from './web-views.js';
 import { openPreview, periodText, qrBlock, viewerUrl } from './web-print.js';
 
 // ---------- 初期値（サンプルの要項と同じ構成） ----------
@@ -54,25 +54,6 @@ function groupSizes(cat) {
   const n = Math.max(cat.teams.length, G * 2);
   return Object.fromEntries(Array.from({ length: G }, (_, i) => [String.fromCharCode(65 + i), Math.floor(n / G) + (i < n % G ? 1 : 0)]));
 }
-function brackets(cat) {
-  const plan = cat.config.knockoutPlan || { type: 'top', k: 2 };
-  const sizes = groupSizes(cat);
-  const maxRank = Math.max(...Object.values(sizes));
-  const k = Math.max(1, Math.min(maxRank, Number(plan.k) || 2));
-  const m = Math.max(1, Number(plan.m) || k);
-  let list;
-  if (plan.type === 'all') list = [{ name: '決勝トーナメント', from: 1, to: maxRank }];
-  else if (plan.type === 'split') list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '下位トーナメント', from: k + 1, to: maxRank }];
-  else if (plan.type === 'split3') list = [{ name: '上位トーナメント', from: 1, to: k }, { name: '中位トーナメント', from: k + 1, to: k + m }, { name: '下位トーナメント', from: k + m + 1, to: maxRank }];
-  else if (plan.type === 'byrank') list = Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
-  else if (plan.type === 'custom') list = (plan.brackets || []).map((b) => ({ name: b.name, from: Number(b.from), to: Number(b.to) }));
-  else list = [{ name: '決勝トーナメント', from: 1, to: k }];
-  return list.filter((b) => b.from <= Math.min(b.to, maxRank)).map((b) => {
-    let n = 0;
-    for (let r = b.from; r <= Math.min(b.to, maxRank); r++) for (const v of Object.values(sizes)) if (v >= r) n++;
-    return { ...b, to: Math.min(b.to, maxRank), n };
-  });
-}
 
 export function autoInfo(key, t, cats) {
   if (key === 'name') return t.name || '';
@@ -117,14 +98,15 @@ export function autoSection(key, t, cats) {
         const head = days > 1 ? `●${d + 1}日目${date ? ` ${md(date)}` : ''}：` : '●';
         const parts = [];
         if (perDay[d].has('league')) parts.push(`予選リーグ：${timeText(cfg)}`);
-        if (perDay[d].has('knockout')) parts.push(`${cfg.format === 'knockout' ? 'トーナメント' : '決勝トーナメント・順位トーナメント'}：${timeText(koTime)}`);
+        if (perDay[d].has('knockout')) parts.push(`${cfg.format === 'knockout' ? 'トーナメント' : planBrackets(cat).some((b) => b.format === 'league') ? '決勝トーナメント・順位決定戦' : '決勝トーナメント・順位トーナメント'}：${timeText(koTime)}`);
         if (parts.length) lines.push(head + parts.join(' ／ '));
         if (perDay[d].has('league') && G) lines.push(`　${Object.keys(sizes).sort().join('.')}の${G}ブロック${sz}チームのリーグ戦`);
       }
       if (hasLeague && hasKo) {
-        for (const b of brackets(cat)) {
+        for (const b of planBrackets(cat)) {
+          if (b.n < 2) continue;
           const range = b.from === b.to ? `${b.from}位` : `${b.from}〜${b.to}位`;
-          lines.push(`※${b.name}　予選${range}のチームが進出（全${b.n}チーム）`);
+          lines.push(b.format === 'league' ? `※${b.name}　予選${range}のチームによる総当たり（全${b.n}チーム）` : `※${b.name}　予選${range}のチームが進出（全${b.n}チーム）`);
         }
       } else if (cfg.format === 'knockout') lines.push(`※${cat.teams.length}チームによるトーナメント`);
     }

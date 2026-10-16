@@ -72,7 +72,8 @@ export function seedPositions(refs) {
 class Builder {
   constructor() { this.matches = []; this.n = 0; }
   add(m) {
-    const code = `K${++this.n}`;
+    // リーグ戦の段の試合は R、トーナメントは K で始まるコードにする
+    const code = `${m.league ? 'R' : 'K'}${++this.n}`;
     this.matches.push({ code, seq: this.n, ...m });
     return code;
   }
@@ -161,7 +162,7 @@ class Builder {
 
   finish() {
     const count = {};
-    for (const m of this.matches) count[m.label] = (count[m.label] || 0) + 1;
+    for (const m of this.matches) if (!m.league) count[m.label] = (count[m.label] || 0) + 1;
     const seen = {};
     for (const m of this.matches) {
       if (count[m.label] > 1) {
@@ -195,7 +196,34 @@ export function expandPlan(plan, maxRank) {
   else if (plan.type === 'byrank') list = Array.from({ length: maxRank }, (_, i) => ({ name: `${i + 1}位トーナメント`, from: i + 1, to: i + 1 }));
   else if (plan.type === 'custom') list = (plan.brackets || []).map((b, i) => ({ name: b.name || `トーナメント${i + 1}`, from: Number(b.from) || 1, to: Number(b.to) || 1, mode: b.mode }));
   else list = [{ name: '決勝トーナメント', from: 1, to: k }];
-  return list.filter((b) => b.from <= b.to && b.from <= maxRank).map((b) => ({ ...b, to: Math.min(b.to, maxRank), mode: b.mode || mode }));
+  // 段ごとに「トーナメント」か「リーグ戦」かを選べる（plan.formats[段の番号] = 'league'）。リーグ戦なら名前も「〜リーグ」に
+  const formats = plan.formats || {};
+  return list.map((b, i) => {
+    const format = (plan.type === 'custom' ? b.format || formats[i] : formats[i]) === 'league' ? 'league' : 'knockout';
+    const name = format === 'league' && plan.type !== 'custom' ? b.name.replace(/トーナメント$/, 'リーグ') : b.name;
+    return { ...b, name, format };
+  }).filter((b) => b.from <= b.to && b.from <= maxRank).map((b) => ({ ...b, to: Math.min(b.to, maxRank), mode: b.mode || mode }));
+}
+
+// リーグ戦の段の試合か（予選の後に、順位の枠どうしで総当たりをする）
+export const isRankLeague = (m) => m && m.stage === 'knockout' && /^R\d/.test(m.code || '');
+
+// 総当たりの組み合わせ（サークル方式。奇数なら1チームずつ休み）
+function roundRobinIdx(n) {
+  const t = Array.from({ length: n }, (_, i) => i);
+  if (t.length % 2) t.push(null);
+  const m = t.length;
+  const rounds = [];
+  for (let r = 0; r < m - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < m / 2; i++) {
+      const a = t[i], b = t[m - 1 - i];
+      if (a != null && b != null) pairs.push(r % 2 ? [b, a] : [a, b]);
+    }
+    rounds.push(pairs);
+    t.splice(1, 0, t.pop());
+  }
+  return rounds;
 }
 
 /**
@@ -235,6 +263,15 @@ export function buildKnockout(cfg, ctx) {
     const entrants = cross ? crossEntrants(G, k, br.from - 1) : seedPositions(refs);
     const prefix = multi ? br.name : '';
     const tag = multi ? br.name : null;
+    if (br.format === 'league') {
+      // リーグ戦の段：順位の枠どうしの総当たり。第n節を段（level）として日程に並べる
+      roundRobinIdx(N).forEach((pairs, r) => pairs.forEach(([i, j]) => {
+        b.add({ home: refs[i], away: refs[j], label: `${br.name} 第${r + 1}節`, level: r, base: offset + 1, bracket: br.name, league: true });
+      }));
+      offset += N;
+      built++;
+      continue;
+    }
     if (br.mode === 'all') b.placement(entrants, 1, 0, prefix, offset, tag);
     else b.single(entrants, br.mode, prefix, offset, tag);
     offset += N;

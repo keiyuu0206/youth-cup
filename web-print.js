@@ -1,7 +1,8 @@
 // 組合せ・結果を A4 縦で出力する（ブラウザの印刷から「PDFとして保存」）
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
 import { qrDataUrl } from './web-qr.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength } from './web-views.js';
+import { buildXlsx, downloadBlob } from './web-xlsx.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength, isRankLeague } from './web-views.js';
 
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
 
@@ -31,6 +32,7 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     mode: 'normal',
     qr: true,
     post: { blocks: true, brackets: true, timeline: true },
+    xl: { schedule: true, groups: true, standings: true, ranking: true, teams: true },
   };
   const sponsors = tournament.sponsors || [];
   const hasLogos = categories.some((c) => c.teams.some((x) => x.logo));
@@ -42,16 +44,22 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     const maxDays = Math.max(...cats.map((c) => dayTotal(c.config)));
     const check = (key, label, show = true) => (show ? h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: st.sections[key], onchange: (e) => { st.sections[key] = e.target.checked; } }), label) : null);
+    const btn = content.closest('.modal') && content.closest('.modal').querySelector('.btn-primary');
+    if (btn) btn.textContent = st.mode === 'xlsx' ? 'Excelを作成' : 'PDFを作成';
     const pcheck = (key, label, show = true) => (show ? h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: st.post[key], onchange: (e) => { st.post[key] = e.target.checked; } }), label) : null);
     mount(content,
       h('div', { class: 'stack' },
-        h('div', { class: 'chips', style: { paddingTop: 0 } }, [['normal', '資料（A4縦）'], ['posting', '掲示用（大きく1枚ずつ）']].map(([k, l]) =>
+        h('div', { class: 'chips', style: { paddingTop: 0 } }, [['normal', '資料（A4縦）'], ['posting', '掲示用（大きく1枚ずつ）'], ['xlsx', 'スプレッドシート（Excel）']].map(([k, l]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.mode === k), onclick: () => { st.mode = k; draw(); } }, l))),
         categories.length > 1 ? h('label', { class: 'field' }, h('span', null, 'カテゴリ'), h('select', { onchange: (e) => { st.cat = e.target.value; draw(); } },
           categories.map((c) => h('option', { value: c.id, selected: st.cat === c.id }, c.name)),
           h('option', { value: 'all', selected: st.cat === 'all' }, 'すべてのカテゴリ'))) : null,
-        st.mode === 'normal' ? h('div', null,
+        st.mode === 'xlsx' ? h('div', null,
+          h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力するシート'),
+          [['schedule', '日程・結果'], ['groups', '組分け'], ['standings', '順位表'], ['ranking', '最終順位'], ['teams', 'チーム一覧']].map(([k, l]) => h('label', { class: 'check' },
+            h('input', { type: 'checkbox', checked: st.xl[k], onchange: (e) => { st.xl[k] = e.target.checked; } }), l)),
+          h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, 'Excel形式（.xlsx）のファイルを保存します。Excel・Googleスプレッドシート・Numbersで開けます。')) : st.mode === 'normal' ? h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力する内容'),
           check('groups', '組分け', hasLeague),
           check('schedule', '組合せ・日程'),
@@ -62,27 +70,32 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           pcheck('brackets', 'トーナメント（上位・中位・下位などを1つずつ1枚・A4横）', hasKo),
           pcheck('timeline', '時間別の試合一覧（1日1枚・A4横）'),
           h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '各用紙に収まるよう自動で縮小します。縦と横が混ざるときは、PCのChrome・Edgeで出力してください（iPhoneでは種類ごとに出力すると確実です）。')),
-        maxDays > 1 ? h('label', { class: 'field' }, h('span', null, '組合せ・日程の日'), h('select', { onchange: (e) => { st.day = e.target.value; } },
+        maxDays > 1 && st.mode !== 'xlsx' ? h('label', { class: 'field' }, h('span', null, '組合せ・日程の日'), h('select', { onchange: (e) => { st.day = e.target.value; } },
           h('option', { value: 'all', selected: st.day === 'all' }, 'すべての日'),
           Array.from({ length: maxDays }, (_, d) => h('option', { value: String(d), selected: st.day === String(d) }, `${d + 1}日目のみ`)))) : null,
-        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
+        st.mode === 'xlsx' ? null : h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.blank, onchange: (e) => { st.blank = e.target.checked; } }),
           'スコア欄を空欄にする（記入用・貼り出し用）'),
-        tournament.slug ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.qr, onchange: (e) => { st.qr = e.target.checked; } }),
+        tournament.slug && st.mode !== 'xlsx' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.qr, onchange: (e) => { st.qr = e.target.checked; } }),
           '閲覧ページのQRコードを入れる') : null,
         hasLogos && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.logos, onchange: (e) => { st.logos = e.target.checked; } }),
           'チームのロゴを表示する') : null,
         sponsors.length && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
           `協賛スポンサーを表示する（${sponsors.length}件）`) : null,
-        h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
+        st.mode === 'xlsx' ? null : h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
   };
   draw();
   modal({
-    title: 'PDFで出力',
+    title: 'PDF・Excelで出力',
     content,
     actions: [
       { label: 'キャンセル', kind: 'btn-ghost' },
       { label: 'PDFを作成', kind: 'btn-primary', onClick: () => {
-        if (!Object.values(st.mode === 'posting' ? st.post : st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
+        if (!Object.values(st.mode === 'posting' ? st.post : st.mode === 'xlsx' ? st.xl : st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
+        if (st.mode === 'xlsx') {
+          const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
+          exportSpreadsheet(tournament, cats, st);
+          return;
+        }
         const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
         setTimeout(() => printDocument(tournament, cats, st), 50);
       } },
@@ -401,7 +414,8 @@ function categoryBlock(t, catIn, opts, first) {
     s.groups && cfg.format !== 'knockout' && groups.length ? groupsSection(cat, groups) : null,
     s.schedule ? scheduleSection(t, cat, opts) : null,
     s.league && cfg.format !== 'knockout' && groups.length ? leagueSection(cat, groups, opts) : null,
-    s.bracket && cfg.format !== 'league' && cat.matches.some((m) => m.stage === 'knockout') ? bracketSection(t, cat) : null,
+    s.bracket && cfg.format !== 'league' && cat.matches.some((m) => m.stage === 'knockout' && !isRankLeague(m)) ? bracketSection(t, cat) : null,
+    s.league && Object.values(cat.standings || {}).some((x) => x.placement) ? rankLeagueSection(cat, Object.keys(cat.standings).filter((g) => cat.standings[g].placement), opts) : null,
     !cat.matches.length && (s.schedule || s.league || s.bracket) ? h('p', { class: 'pd-note' }, '日程はまだ作成されていません。') : null);
 }
 
@@ -531,11 +545,31 @@ function scheduleSection(t, cat, opts) {
 }
 
 // 星取表（名前だけ。横の見出しは入る範囲の表記を選ぶ）
-function starTable(cat, g, opts, pageW = 188, basePt = 8.5) {
-  const league = cat.matches.filter((m) => m.stage === 'league');
+// リーグ戦の段の参加チーム（決まる前は「A組5位」などの枠の名前で表示する）
+function rankLeagueSource(cat, g) {
   const st = (cat.standings || {})[g];
+  const ms = cat.matches.filter((m) => isRankLeague(m) && m.group_label === g);
+  const tm = teamMap(cat);
+  const key = (r) => `${r.g}:${r.r}`;
+  const slots = [];
+  for (const m of ms) for (const [ref, tid] of [[m.home_ref, m.home_team_id], [m.away_ref, m.away_team_id]]) {
+    if (ref && !slots.some((x) => x.key === key(ref))) slots.push({ key: key(ref), ref, tid });
+    else if (ref && tid) slots.find((x) => x.key === key(ref)).tid = tid;
+  }
+  slots.sort((a, b) => a.ref.r - b.ref.r || a.ref.g.localeCompare(b.ref.g));
+  const order = slots.map((x) => (x.tid && tm[x.tid] ? tm[x.tid] : { id: `slot:${x.key}`, name: `${x.ref.g}組${x.ref.r}位` }));
+  // 試合のチームが未定のときは、枠の名前で対戦表を引けるようにする
+  const matches = ms.map((m) => ({ ...m,
+    home_team_id: m.home_team_id || (m.home_ref ? `slot:${key(m.home_ref)}` : null),
+    away_team_id: m.away_team_id || (m.away_ref ? `slot:${key(m.away_ref)}` : null) }));
+  return { order, matches, st };
+}
+
+function starTable(cat, g, opts, pageW = 188, basePt = 8.5, src = null) {
+  const league = src ? src.matches : cat.matches.filter((m) => m.stage === 'league');
+  const st = src ? src.st : (cat.standings || {})[g];
   const rows = st ? st.rows : [];
-  const order = cat.teams.filter((x) => x.group_label === g);
+  const order = src ? src.order : cat.teams.filter((x) => x.group_label === g);
   const rowOf = Object.fromEntries(rows.map((r) => [r.teamId, r]));
   const show = !opts.blank;
   const cell = (a, b) => {
@@ -579,6 +613,19 @@ const starNote = (cat) => {
   return `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。${order.length ? `勝点が並んだときは ${order.join('、')} の順で決めます。` : ''}`;
 };
 
+function rankLeagueSection(cat, names, opts) {
+  return h('div', { class: 'pd-sec' }, h('h2', null, names.length > 1 ? 'リーグ戦（順位決定）' : names[0]),
+    names.map((g) => {
+      const st = cat.standings[g];
+      const show = !opts.blank;
+      const src = rankLeagueSource(cat, g);
+      return h('div', { class: 'pd-star-wrap' },
+        h('h3', null, `${names.length > 1 ? g : ''}${st && st.complete && show ? '' : show ? '（途中経過）' : ''}　全体${(st.offset || 0) + 1}〜${(st.offset || 0) + src.order.length}位を決定`.trim()),
+        starTable(cat, g, opts, 188, 8.5, src));
+    }),
+    h('p', { class: 'pd-note' }, starNote(cat)));
+}
+
 function leagueSection(cat, groups, opts) {
   return h('div', { class: 'pd-sec' }, h('h2', null, '星取表・順位'),
     groups.map((g) => {
@@ -592,7 +639,7 @@ function leagueSection(cat, groups, opts) {
 }
 
 function bracketSection(t, cat) {
-  const view = bracketView(cat, { tournament: t, myTeam: null });
+  const view = bracketView(cat, { tournament: t, myTeam: null, noLeagues: true });
   // 図ごとに幅を合わせて縮小できるよう包む
   for (const sc of view.querySelectorAll('.tree-scroll')) {
     const wrap = h('div', { class: 'pd-zoom' });
@@ -635,6 +682,32 @@ function printPosting(t, cats, opts) {
         sheets.push(growSheet('port',
           sheetHead(t, cat, `${g}組`, 'リーグ戦'),
           h('div', { class: 'ps-star' }, starTable(cat, g, opts, 194, 11)),
+          h('p', { class: 'pd-note' }, starNote(cat)),
+          h('h3', { class: 'ps-sub' }, '対戦スケジュール'),
+          h('table', { class: 'pd-t ps-matches' },
+            h('colgroup', null, h('col', { style: { width: multi ? '30mm' : '18mm' } }), h('col', { style: { width: '20mm' } }), h('col'), h('col', { style: { width: '24mm' } }), h('col')),
+            h('thead', null, h('tr', null, ['時刻', 'コート', 'チーム', '結果', 'チーム'].map((x) => h('th', null, x)))),
+            h('tbody', null, ms.map((m, i) => {
+              const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
+              const w = done ? winnerSide(m) : null;
+              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return fit(pickName(info.team, info.text, 60)); };
+              return h('tr', { class: i % 2 ? 'band' : '' },
+                h('td', { class: 'pd-time' }, `${multi ? `${dayOf(cfg, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)}`), h('td', { class: 'c' }, courtName(cfg, m.court)),
+                h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')),
+                h('td', { class: `c res${done ? '' : ' blank'}` }, done ? `${m.home_score} - ${m.away_score}` : '　 - 　'),
+                h('td', { class: w === 'away' ? 'b' : '' }, nm('away')));
+            })))));
+      }
+    }
+    // リーグ戦の段（下位リーグなど）：1枚ずつ（星取表＋その段の対戦スケジュール）
+    if (opts.post.blocks) {
+      for (const g of Object.keys(cat.standings || {}).filter((x) => cat.standings[x].placement)) {
+        const src = rankLeagueSource(cat, g);
+        const ms = cat.matches.filter((m) => isRankLeague(m) && m.group_label === g).sort((a, b) => absMin(cfg, a) - absMin(cfg, b));
+        const multi = dayTotal(cfg) > 1;
+        sheets.push(growSheet('port',
+          sheetHead(t, cat, g, `全体${(cat.standings[g].offset || 0) + 1}〜${(cat.standings[g].offset || 0) + src.order.length}位`),
+          h('div', { class: 'ps-star' }, starTable(cat, g, opts, 194, 11, src)),
           h('p', { class: 'pd-note' }, starNote(cat)),
           h('h3', { class: 'ps-sub' }, '対戦スケジュール'),
           h('table', { class: 'pd-t ps-matches' },
@@ -722,4 +795,78 @@ export function printParking(t, cat, team) {
       h('p', { class: 'pk-hint' }, 'この駐車証は、車外から見えるようにダッシュボードの上に置いてください。')))));
   sheets[sheets.length - 1].classList.add('last');
   runPrint(h('div', { class: 'pd ps' }, sheets), `${t.name}_駐車証_${team.name}`, PAGE_LAND);
+}
+
+
+// ======================================================================
+// スプレッドシート（Excel）出力
+// ======================================================================
+
+const STATUS_TEXT = { none: '未実施', provisional: '仮登録', confirmed: '確定' };
+
+export function exportSpreadsheet(t, cats, opts) {
+  const sheets = [];
+  const multi = cats.length > 1;
+  const catCol = (cat) => (multi ? [cat.name] : []);
+  const catHead = multi ? ['カテゴリ'] : [];
+  if (opts.xl.schedule) {
+    const rows = [];
+    for (const cat of cats) {
+      const cfg = cat.config;
+      const cache = { teams: teamMap(cat), codes: codeMap(cat) };
+      const days = dayTotal(cfg);
+      for (const m of [...cat.matches].sort((a, b) => absMin(cfg, a) - absMin(cfg, b) || a.court - b.court)) {
+        const d = dayOf(cfg, m.slot);
+        const done = m.status === 'confirmed' && m.home_score != null;
+        const hasScore = m.home_score != null && m.status !== 'none';
+        const w = done ? winnerSide(m) : null;
+        const home = sideInfo(m, 'home', cat, cache).text;
+        const away = sideInfo(m, 'away', cat, cache).text;
+        rows.push([...catCol(cat), days > 1 ? `${d + 1}日目` : '1日目', dayDate(cat, d, t) || '', toHHMM(m.start_min), courtName(cfg, m.court), m.label,
+          { v: home, bold: w === 'home' }, hasScore ? m.home_score : null, hasScore ? m.away_score : null, { v: away, bold: w === 'away' },
+          m.home_pk != null && hasScore ? `${m.home_pk}-${m.away_pk}` : '', m.forfeit ? '不戦勝' : STATUS_TEXT[m.status] || '', w ? (w === 'home' ? home : away) : '']);
+      }
+    }
+    sheets.push({ name: '日程・結果', header: [...catHead, '日', '日付', '時刻', 'コート', '試合', 'チーム（左）', '得点', '得点', 'チーム（右）', 'PK', '状態', '勝ち'], rows });
+  }
+  if (opts.xl.groups) {
+    const rows = [];
+    for (const cat of cats) {
+      for (const x of [...cat.teams].filter((y) => y.group_label).sort((a, b) => a.group_label.localeCompare(b.group_label))) {
+        rows.push([...catCol(cat), `${x.group_label}組`, x.name, x.short_name || '', x.club || '']);
+      }
+    }
+    sheets.push({ name: '組分け', header: [...catHead, '組', 'チーム', '略称', 'クラブ'], rows });
+  }
+  if (opts.xl.standings) {
+    const rows = [];
+    for (const cat of cats) {
+      const tm = teamMap(cat);
+      const keys = Object.keys(cat.standings || {}).sort((a, b) => (cat.standings[a].placement ? 1 : 0) - (cat.standings[b].placement ? 1 : 0) || a.localeCompare(b));
+      for (const g of keys) {
+        const st = cat.standings[g];
+        for (const r of st.rows) {
+          const note = r.lottery ? '抽選・じゃんけん・本部決定' : r.tied && st.complete ? '順位決定待ち' : !st.complete ? '途中経過' : '';
+          rows.push([...catCol(cat), st.placement ? g : `${g}組`, r.rank, tm[r.teamId] ? tm[r.teamId].name : '', r.p, r.w, r.d, r.l, r.gf, r.ga, r.gd, r.pts,
+            st.placement && st.complete && !r.tied ? (st.offset || 0) + r.rank : null, note]);
+        }
+      }
+    }
+    sheets.push({ name: '順位表', header: [...catHead, '組・段', '順位', 'チーム', '試合', '勝', '分', '敗', '得点', '失点', '得失点差', '勝点', '全体順位', '備考'], rows });
+  }
+  if (opts.xl.ranking) {
+    const rows = [];
+    for (const cat of cats) {
+      const tm = teamMap(cat);
+      for (const r of cat.finalRanking || []) rows.push([...catCol(cat), r.rank, tm[r.teamId] ? tm[r.teamId].name : '']);
+    }
+    sheets.push({ name: '最終順位', header: [...catHead, '順位', 'チーム'], rows });
+  }
+  if (opts.xl.teams) {
+    const rows = [];
+    for (const cat of cats) for (const x of cat.teams) rows.push([...catCol(cat), x.name, x.short_name || '', x.group_label ? `${x.group_label}組` : '', x.club || '']);
+    sheets.push({ name: 'チーム一覧', header: [...catHead, 'チーム', '略称', '組', 'クラブ'], rows });
+  }
+  downloadBlob(buildXlsx(sheets), `${t.name}_${multi ? '全カテゴリ' : cats[0].name}.xlsx`);
+  toast('Excelファイルを保存しました');
 }

@@ -150,11 +150,16 @@ export function placeMatches(cfg, league, ko) {
   const leagueEnd = s;
   const usage = {};
   const slotOf = {};
-  for (const m of ko) {
+  // リーグ戦の段では「A組5位」などの順位の枠が同じチーム。続けて試合をしないよう枠ごとに最後の枠を覚えておく
+  const refLast = {};
+  const refKey = (ref) => (ref && ref.t === 'grp' ? `${ref.g}:${ref.r}` : null);
+  const koSorted = [...ko].sort((a, b) => (a.level ?? 0) - (b.level ?? 0));
+  for (const m of koSorted) {
     let earliest = leagueEnd;
     for (const ref of [m.home_ref, m.away_ref]) {
       if (!ref) continue;
       if (ref.t === 'grp' && groupLast[ref.g] != null) earliest = Math.max(earliest, groupLast[ref.g] + 1 + minRest);
+      if (ref.t === 'grp' && refLast[refKey(ref)] != null) earliest = Math.max(earliest, refLast[refKey(ref)] + 1 + minRest);
       if ((ref.t === 'win' || ref.t === 'lose') && slotOf[ref.m] != null) earliest = Math.max(earliest, slotOf[ref.m] + 1 + minRest);
     }
     let slot = earliest;
@@ -163,6 +168,7 @@ export function placeMatches(cfg, league, ko) {
     m.court = usage[slot] || 0;
     usage[slot] = (usage[slot] || 0) + 1;
     slotOf[m.code] = slot;
+    for (const ref of [m.home_ref, m.away_ref]) if (refKey(ref)) refLast[refKey(ref)] = slot;
   }
 
   // 使われなかった枠を詰める（トーナメント前の空き枠を1つまでに）

@@ -1,3 +1,4 @@
+import { expandPlan, isRankLeague } from './bracket.js';
 // 勝点: 勝3・分1・負0
 const POINTS = { win: 3, draw: 1, loss: 0 };
 const KEY = { points: 'pts', gd: 'gd', gf: 'gf' };
@@ -153,10 +154,40 @@ export function evaluateCategory(cfg, teams, matches) {
 
   const finalRanking = [];
   for (const m of ko) {
+    if (isRankLeague(m)) continue;
     const o = matchOutcome(m);
     if (!o || o.draw) continue;
     if (m.place_w) finalRanking.push({ rank: m.place_w, teamId: o.winner });
     if (m.place_l) finalRanking.push({ rank: m.place_l, teamId: o.loser });
+  }
+
+  // リーグ戦の段：参加チームが決まったら順位表を作り、全試合が終わって順位が決まれば通しの順位に入れる
+  const rankLeagues = [...new Set(ko.filter(isRankLeague).map((m) => m.group_label))];
+  if (rankLeagues.length) {
+    const sizes = {};
+    for (const t of teams) if (t.group_label) sizes[t.group_label] = (sizes[t.group_label] || 0) + 1;
+    const maxRank = Math.max(0, ...Object.values(sizes));
+    const offsets = {};
+    let off = 0;
+    for (const b of expandPlan(cfg.knockoutPlan || {}, maxRank)) {
+      offsets[b.name] = off;
+      for (let r = b.from; r <= b.to; r++) for (const v of Object.values(sizes)) if (v >= r) off++;
+    }
+    for (const name of rankLeagues) {
+      const ms = ko.filter((m) => isRankLeague(m) && m.group_label === name);
+      const ids = [...new Set(ms.flatMap((m) => [m.home_team_id, m.away_team_id]))];
+      const refs = ms.flatMap((m) => [m.home_ref, m.away_ref]).filter(Boolean);
+      const slots = new Set(refs.map((r) => `${r.g}:${r.r}`)).size;
+      const ready = ids.every(Boolean) && ids.length === slots;
+      const st = ready
+        ? computeStandings(ids, ms, cfg.tiebreak, (cfg.lottery || {})[name] || [])
+        : { rows: [], complete: false, hasTie: false, needsLottery: false };
+      const slotList = [...new Map(refs.map((r) => [`${r.g}:${r.r}`, r])).values()].sort((a, b) => a.r - b.r || a.g.localeCompare(b.g));
+      standings[name] = { ...st, placement: true, offset: offsets[name] || 0, slots: slotList.map((r) => `${r.g}組${r.r}位`) };
+      if (ready && st.complete && !st.hasTie) {
+        for (const row of st.rows) finalRanking.push({ rank: (offsets[name] || 0) + row.rank, teamId: row.teamId });
+      }
+    }
   }
   finalRanking.sort((a, b) => a.rank - b.rank);
 

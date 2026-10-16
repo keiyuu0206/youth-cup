@@ -425,3 +425,66 @@ test('判定順: 抽選・じゃんけんを入れない設定も保存でき、
   assert.deepEqual(normalizeConfig({ tiebreak: ['points', 'gd', 'gf'] }).tiebreak, ['points', 'gd', 'gf']);
   assert.deepEqual(normalizeConfig({ tiebreak: ['points', 'janken', 'xxx'] }).tiebreak, ['points', 'janken']);
 });
+
+// ---- 上位・中位はトーナメント、下位はリーグ戦 ----
+test('リーグ戦の段: 4組×6（上位2・中位2、下位はリーグ戦）で、重なり無く日程ができ、17〜24位がリーグ戦で決まる', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 4, courts: 6, knockoutPlan: { type: 'split3', k: 2, m: 2, mode: 'all', formats: { 2: 'league' } } });
+  const ts = teams(24).map((t, i) => ({ ...t, group_label: 'ABCD'[i % 4] }));
+  const { matches, warnings } = generateCategory(cfg, ts);
+  const lg = matches.filter((m) => /^R/.test(m.code || ''));
+  assert.equal(lg.length, 28); // 8チームの総当たり
+  assert.ok(lg.every((m) => m.group_label === '下位リーグ' && /^下位リーグ 第\d節$/.test(m.label)));
+  // 同じ順位の枠が同じ枠（時間）に2試合入らない
+  const bySlot = {};
+  for (const m of lg) for (const r of [m.home_ref, m.away_ref]) { const k = `${m.slot}-${r.g}${r.r}`; assert.ok(!bySlot[k], `同じ枠で重複 ${k}`); bySlot[k] = 1; }
+  const ms = matches.map((m, i) => ({ ...m, id: `m${i}`, status: 'none' }));
+  assert.equal(scheduleWarnings({ ...cfg }, ms).filter((w) => w.level === 'error').length, 0);
+  const num = (id) => Number(id.slice(1));
+  for (const m of ms.filter((x) => x.stage === 'league')) { const w = num(m.home_team_id) < num(m.away_team_id); Object.assign(m, { status: 'confirmed', home_score: w ? 2 : 0, away_score: w ? 0 : 2 }); }
+  for (let round = 0; round < 12; round++) {
+    const ev = evaluateCategory(cfg, ts, ms);
+    for (const u of ev.updates) Object.assign(ms.find((m) => m.id === u.id), u);
+    for (const m of ms.filter((x) => x.stage === 'knockout' && x.status === 'none' && x.home_team_id && x.away_team_id)) {
+      const w = num(m.home_team_id) < num(m.away_team_id); Object.assign(m, { status: 'confirmed', home_score: w ? 1 : 0, away_score: w ? 0 : 1 });
+    }
+  }
+  const ev = evaluateCategory(cfg, ts, ms);
+  assert.ok(ev.standings['下位リーグ'].placement && ev.standings['下位リーグ'].complete);
+  assert.deepEqual(ev.finalRanking.map((r) => r.rank), Array.from({ length: 24 }, (_, i) => i + 1));
+  assert.equal(new Set(ev.finalRanking.map((r) => r.teamId)).size, 24);
+});
+
+test('リーグ戦の段: 並んだら抽選・じゃんけん待ちになり、結果を入れると順位が決まる', () => {
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 2, courts: 2, tiebreak: ['points', 'gd', 'gf', 'janken'], knockoutPlan: { type: 'split', k: 1, mode: 'top3', formats: { 1: 'league' } } });
+  const ts = teams(6).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const { matches } = generateCategory(cfg, ts);
+  const ms = matches.map((m, i) => ({ ...m, id: `m${i}`, status: 'none' }));
+  const num = (id) => Number(id.slice(1));
+  for (const m of ms.filter((x) => x.stage === 'league')) { const w = num(m.home_team_id) < num(m.away_team_id); Object.assign(m, { status: 'confirmed', home_score: w ? 2 : 0, away_score: w ? 0 : 2 }); }
+  let ev = evaluateCategory(cfg, ts, ms);
+  for (const u of ev.updates) Object.assign(ms.find((m) => m.id === u.id), u);
+  for (const m of ms.filter((x) => /^R/.test(x.code || ''))) Object.assign(m, { status: 'confirmed', home_score: 1, away_score: 1 }); // 全部引き分け
+  ev = evaluateCategory(cfg, ts, ms);
+  const st = ev.standings['下位リーグ'];
+  assert.equal(st.needsLottery, true);
+  const order = st.rows.map((r) => r.teamId).reverse();
+  ev = evaluateCategory({ ...cfg, lottery: { 下位リーグ: order } }, ts, ms);
+  assert.equal(ev.standings['下位リーグ'].hasTie, false);
+  assert.equal(ev.finalRanking.find((r) => r.rank === 3).teamId, order[0]); // 下位リーグ1位 = 全体3位
+});
+
+// ---- 開催日ごとの試合間隔 ----
+test('試合間隔: 2日目だけ間隔を変えると、2日目の時刻の間隔が変わり、1日目は変わらない', () => {
+  const base = { format: 'league_knockout', groups: 2, courts: 2, halfMinutes: 12, halftimeMinutes: 3, intervalMinutes: 8, startTime: 540, lunchEnabled: false, minRestSlots: 0,
+    knockoutPlan: { type: 'top', k: 2, mode: 'top3' }, dayDates: ['2026-11-21', '2026-11-22'] };
+  const gap = (cfg) => {
+    const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+    const { matches, dayBreakSlots } = generateCategory(normalizeConfig(cfg), ts);
+    const day = (m) => dayBreakSlots.filter((b) => m.slot >= b).length;
+    const g = (d) => { const st = [...new Set(matches.filter((m) => day(m) === d).map((m) => m.start_min))].sort((a, b) => a - b); return st[1] - st[0]; };
+    return [g(0), g(1)];
+  };
+  assert.deepEqual(gap(base), [35, 35]); // 12+3+12 + 間隔8
+  assert.deepEqual(gap({ ...base, extraDays: [{ startTime: 510, intervalMinutes: 3 }] }), [35, 30]); // 2日目だけ間隔3分
+  assert.equal(normalizeConfig({ ...base, extraDays: [{ intervalMinutes: '' }] }).extraDays[0].intervalMinutes, null);
+});

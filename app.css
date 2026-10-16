@@ -903,3 +903,17 @@ pre.issued { white-space: pre-wrap; background: var(--surface-2); padding: 12px;
 .pv-btn.sub.on { background: #0f7b4a; border-color: #0f7b4a; }
 .pv-warn { font-size: 10px; color: #ffd60a; font-weight: 700; text-align: right; }
 @media (max-width: 760px) { .pv-scroll { padding-left: 4px; } .pv-wrap { transform-origin: top left; } }
+
+/* 決勝トーナメントの段ごとの形式（トーナメント／リーグ戦） */
+.pp-fmt { display: inline-flex; border: 1.5px solid var(--line); border-radius: 999px; overflow: hidden; margin-left: auto; }
+.pp-fmt button { font: inherit; font-size: 0.75rem; font-weight: 700; border: 0; background: var(--surface); color: var(--ink-2); padding: 3px 10px; cursor: pointer; }
+.pp-fmt button[aria-pressed="true"] { background: var(--turf); color: #fff; }
+
+.tie-mark.overall { background: var(--turf-soft); color: var(--turf); }
+
+/* 出力画面の切り替えボタンは折り返して全部表示 */
+.modal .chips { flex-wrap: wrap; overflow: visible; }
+.modal .chips .chip-btn { white-space: normal; text-align: left; }
+
+.rank-all { display: block; font-size: 0.6rem; font-weight: 700; color: var(--turf); white-space: nowrap; margin-top: 2px; }
+.rank-league { margin-top: 18px; }

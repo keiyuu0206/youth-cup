@@ -22,7 +22,12 @@ export const dayOf = (cfg, slot) => (cfg.dayBreakSlots || []).filter((b) => slot
 export function dayConfig(cfg, d) {
   if (!d) return cfg;
   const x = (cfg.extraDays || [])[d - 1];
-  return { ...cfg, startTime: x && x.startTime != null ? x.startTime : cfg.startTime };
+  // 2日目以降は、開始時刻と試合間隔を日ごとに変えられる（空欄なら1日目と同じ）
+  return {
+    ...cfg,
+    startTime: x && x.startTime != null ? x.startTime : cfg.startTime,
+    intervalMinutes: x && x.intervalMinutes != null ? x.intervalMinutes : cfg.intervalMinutes,
+  };
 }
 
 export const CATEGORY_NAMES = ['U7', 'U8', 'U9', 'U10', 'U11', 'U12'];
@@ -63,7 +68,7 @@ export function defaultConfig() {
     koTiming: { enabled: false, periods: 2, halfMinutes: 15, halftimeMinutes: 5 }, // 決勝トーナメントだけ別の試合時間
     dayDates: [], // このカテゴリが試合をする日（大会の開催期間から選ぶ）
     dayCount: 1, // 開催日数（最大4日）
-    extraDays: [], // 2日目以降 [{date, startTime}]
+    extraDays: [], // 2日目以降 [{date, startTime, intervalMinutes（空なら1日目と同じ）}]
     dayBreaks: [], // 各日の区切り（'L2' = リーグ第2節まで、'K0' = トーナメント1段目まで）
     dayBreakSlots: [], // 日程作成時に決まる「◯日目が始まる枠番号」
     grouping: { fixed: {}, separate: [] },
@@ -97,6 +102,8 @@ export function normalizeConfig(c) {
   out.extraDays = Array.from({ length: out.dayCount - 1 }, (_, i) => ({
     date: (ed[i] && ed[i].date) || '',
     startTime: ed[i] && ed[i].startTime != null && ed[i].startTime !== '' ? Math.max(0, Number(ed[i].startTime) || 0) : out.startTime,
+    intervalMinutes: ed[i] && ed[i].intervalMinutes != null && ed[i].intervalMinutes !== '' && Number.isFinite(Number(ed[i].intervalMinutes))
+      ? Math.max(0, Math.min(120, Number(ed[i].intervalMinutes))) : null,
   }));
   out.dayBreaks = (Array.isArray(out.dayBreaks) ? out.dayBreaks : []).slice(0, out.dayCount - 1).map(String);
   out.dayBreakSlots = (Array.isArray(out.dayBreakSlots) ? out.dayBreakSlots : []).map(Number).filter((n) => Number.isFinite(n) && n > 0);

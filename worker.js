@@ -13,6 +13,7 @@ import WEB_ADMIN from './web-admin.js';
 import WEB_PRINT from './web-print.js';
 import WEB_OUTLINE from './web-outline.js';
 import WEB_QR from './web-qr.js';
+import WEB_XLSX from './web-xlsx.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
@@ -388,6 +389,7 @@ const STATIC = {
   '/web-print.js': [WEB_PRINT, JS],
   '/web-outline.js': [WEB_OUTLINE, JS],
   '/web-qr.js': [WEB_QR, JS],
+  '/web-xlsx.js': [WEB_XLSX, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
