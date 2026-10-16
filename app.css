@@ -461,8 +461,10 @@ details.panel > :not(summary) { min-width: 0; }
 .sp-label { flex: none; font-size: 0.62rem; font-weight: 700; color: var(--ink-3); letter-spacing: 0.08em; }
 .sp-track { flex: 1; min-width: 0; height: 44px; display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; }
 .sp-track::-webkit-scrollbar { display: none; }
-.sp-slide { flex: 0 0 100%; height: 100%; scroll-snap-align: start; display: flex; align-items: center; justify-content: center; }
-.sp-slide img { height: 100%; width: auto; max-width: 100%; object-fit: contain; border-radius: 4px; }
+.sp-slide { flex: 0 0 100%; height: 100%; scroll-snap-align: start; display: block; position: relative; overflow: hidden; }
+/* iPhone（Safari）で、画像の読み込みが表示より後になると割合の上限が効かずにはみ出すことがあるため、
+   画像は枠いっぱいの位置と大きさに固定し、object-fit で縦横比を保って収める */
+.sp-slide img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; border-radius: 4px; }
 .sp-dots { display: none; }
 @media (min-width: 640px) { .sp-track { height: 52px; } }
 /* 下部：小さなカードを並べる */
@@ -470,8 +472,8 @@ details.panel > :not(summary) { min-width: 0; }
 .sp-all .group-title { font-size: 0.75rem; color: var(--ink-3); }
 .sp-grid { display: grid; gap: 8px; margin-top: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (min-width: 640px) { .sp-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.sp-banner { display: flex; align-items: center; justify-content: center; height: 52px; padding: 6px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
-.sp-banner img { max-height: 100%; max-width: 100%; width: auto; height: auto; object-fit: contain; }
+.sp-banner { display: block; position: relative; overflow: hidden; height: 52px; border-radius: 10px; background: #fff; border: 1px solid var(--line); }
+.sp-banner img { position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px); max-width: none; max-height: none; object-fit: contain; }
 .sp-list { display: grid; gap: 10px; }
 .sp-item { padding: 10px; border-radius: var(--r-md); background: var(--surface-2); display: grid; gap: 6px; }
 .sp-item.off { opacity: 0.6; }
