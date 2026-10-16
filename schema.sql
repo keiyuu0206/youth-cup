@@ -89,6 +89,7 @@ CREATE TABLE templates (
   name TEXT NOT NULL,
   config TEXT NOT NULL,
   owner_id TEXT,
+  shared INTEGER NOT NULL DEFAULT 0,  -- 全体管理者のものを地域管理者に公開するか
   created_at TEXT NOT NULL
 );
 
@@ -131,9 +132,10 @@ CREATE TABLE lost_items (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, image
 CREATE INDEX idx_lost_tournament ON lost_items(tournament_id);
 
 -- プリセット（要項など）
-CREATE TABLE presets (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE presets (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, owner_id TEXT, shared INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 
 -- 管理者（地域管理者など。全体管理者は環境変数のパスワードでログイン）
 CREATE TABLE users (id TEXT PRIMARY KEY, login_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, region TEXT, role TEXT NOT NULL DEFAULT 'region',
   pass_hash TEXT NOT NULL, pass_salt TEXT NOT NULL, iterations INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, session_ver INTEGER NOT NULL DEFAULT 1,
+  parent_id TEXT, scope TEXT,           -- スコア管理者：発行した管理者と担当大会（JSON）
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_login_at TEXT);

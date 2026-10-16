@@ -14,6 +14,7 @@ import WEB_PRINT from './web-print.js';
 import WEB_OUTLINE from './web-outline.js';
 import WEB_QR from './web-qr.js';
 import WEB_XLSX from './web-xlsx.js';
+import WEB_SCORE from './web-score.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
@@ -100,13 +101,22 @@ async function ensureSchema(db) {
       db.prepare('CREATE TABLE IF NOT EXISTS sponsor_clicks (sponsor_id TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (sponsor_id, day))'),
     ]);
   }
+  const addCol = async (tb, col, def) => {
+    const cs = (await db.prepare(`PRAGMA table_info(${tb})`).all()).results.map((c) => c.name);
+    if (!cs.length || cs.includes(col)) return false;
+    try { await db.prepare(`ALTER TABLE ${tb} ADD COLUMN ${col} ${def}`).run(); return true; }
+    catch (e) { if (!/duplicate column/i.test(String(e))) throw e; return false; }
+  };
   for (const tb of ['templates', 'presets']) {
-    const c2 = (await db.prepare(`PRAGMA table_info(${tb})`).all()).results.map((c) => c.name);
-    if (c2.length && !c2.includes('owner_id')) {
-      try { await db.prepare(`ALTER TABLE ${tb} ADD COLUMN owner_id TEXT`).run(); }
-      catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+    await addCol(tb, 'owner_id', 'TEXT');
+    // 全体管理者のものを地域管理者に公開するか。追加した時点の既存分は、これまでどおり公開のまま引き継ぐ
+    if (await addCol(tb, 'shared', 'INTEGER NOT NULL DEFAULT 0')) {
+      await db.prepare(`UPDATE ${tb} SET shared = 1 WHERE owner_id IS NULL OR owner_id = 'root'`).run();
     }
   }
+  // スコア管理者：発行した管理者（parent_id）と担当する大会（scope：JSON。空ならすべて）
+  await addCol('users', 'parent_id', 'TEXT');
+  await addCol('users', 'scope', 'TEXT');
   schemaChecked = true;
 }
 
@@ -152,16 +162,49 @@ async function currentUser(req, env, db) {
   if (a.uid === 'root') return { ...ROOT, login_id: env.ADMIN_ID || 'admin' };
   const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(a.uid).first();
   if (!u || !u.active || u.session_ver !== a.ver) return null;
-  return { id: u.id, role: u.role, name: u.name, region: u.region || '', login_id: u.login_id };
+  const me = { id: u.id, role: u.role, name: u.name, region: u.region || '', login_id: u.login_id };
+  if (u.role === 'scorer') {
+    // 発行した管理者が停止・削除されていたら使えない
+    let parentRole = 'super';
+    if (u.parent_id && u.parent_id !== 'root') {
+      const p = await db.prepare('SELECT role, active, region, name FROM users WHERE id = ?').bind(u.parent_id).first();
+      if (!p || !p.active) return null;
+      parentRole = p.role;
+      me.region = p.region || '';
+      me.parentName = p.name;
+    } else me.parentName = '全体管理者';
+    me.parent_id = u.parent_id || 'root';
+    me.parentRole = parentRole;
+    try { me.scope = JSON.parse(u.scope || '[]'); } catch { me.scope = []; }
+  }
+  return me;
 }
 const isSuper = (user) => user && user.role === 'super';
 // 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
-const canAccess = (user, t) => !user || isSuper(user) || (t.owner_id && t.owner_id === user.id);
+const canAccess = (user, t) => {
+  if (!user || isSuper(user)) return true;
+  if (user.role === 'scorer') {
+    // スコア管理者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
+    const parentOk = user.parentRole === 'super' || (t.owner_id && t.owner_id === user.parent_id);
+    return parentOk && (!user.scope || !user.scope.length || user.scope.includes(t.id));
+  }
+  return !!(t.owner_id && t.owner_id === user.id);
+};
 const mustSuper = (user) => { if (!isSuper(user)) fail(403, '全体管理者だけが使える機能です'); };
 // テンプレート・プリセット：自分のもの＋共通（全体管理者が作ったもの）を使える。変更は作成者と全体管理者だけ
 const ownerOf = (user) => (isSuper(user) ? 'root' : user.id); // 全体管理者が作ったものは「共通」
 const sharedOwner = (o) => !o || o === 'root';
 const canEditOwned = (user, owner) => isSuper(user) || owner === user.id;
+
+// ---------- スコア管理者（結果の承認だけを行うアカウント） ----------
+
+// 発行した管理者として、担当大会の指定が正しいか（自分が見られる大会だけ）
+async function checkScope(db, user, ids) {
+  const list = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
+  for (const id of list) await getTournament(db, id, user);
+  return list;
+}
+const canManageScorer = (user, sc) => sc && sc.role === 'scorer' && (isSuper(user) || sc.parent_id === user.id);
 
 // ---------- 読み込み ----------
 
@@ -390,6 +433,7 @@ const STATIC = {
   '/web-outline.js': [WEB_OUTLINE, JS],
   '/web-qr.js': [WEB_QR, JS],
   '/web-xlsx.js': [WEB_XLSX, JS],
+  '/web-score.js': [WEB_SCORE, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -460,9 +504,10 @@ export default {
         if (!m) continue;
         const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
         let user = null;
-        if (r.auth === 'admin') {
+        if (r.auth === 'admin' || r.auth === 'score') {
           user = await currentUser(req, env, env.DB);
           if (!user) fail(401, 'ログインしてください');
+          if (r.auth === 'admin' && user.role === 'scorer') fail(403, 'スコア管理者は、結果の承認だけを行えます');
         }
         return await r.handler({ req, env, db: env.DB, url, params, user });
       }
@@ -523,7 +568,71 @@ route('POST', '/api/admin/password', async ({ req, env, db, user }) => {
     .bind(h.hash, h.salt, h.iterations, now(), u.id).run();
   // 変更後もこの端末ではログインしたままにする（ほかの端末は無効になる）
   return json({ ok: true }, 200, { 'Set-Cookie': await issueAdmin(env, u.id, u.session_ver + 1) });
+}, 'score');
+
+// ---------- スコア管理者の発行・編集 ----------
+
+route('GET', '/api/admin/scorers', async ({ db, user }) => {
+  const r = isSuper(user)
+    ? await db.prepare(`SELECT s.id, s.login_id, s.name, s.active, s.scope, s.parent_id, s.last_login_at, s.created_at, p.name AS parent_name, p.region AS parent_region
+        FROM users s LEFT JOIN users p ON p.id = s.parent_id WHERE s.role = 'scorer' ORDER BY p.region, s.name`).all()
+    : await db.prepare("SELECT id, login_id, name, active, scope, parent_id, last_login_at, created_at FROM users WHERE role = 'scorer' AND parent_id = ? ORDER BY name").bind(user.id).all();
+  return json({ scorers: r.results.map((x) => ({ ...x, scope: JSON.parse(x.scope || '[]'), parent_name: x.parent_id === 'root' ? '全体管理者' : x.parent_name || '' })) });
 }, 'admin');
+
+route('POST', '/api/admin/scorers', async ({ req, env, db, user }) => {
+  const b = await body(req);
+  const loginId = checkLoginId(b.login_id);
+  if (loginId === (env.ADMIN_ID || 'admin').toLowerCase()) fail(400, 'このログインIDは使えません');
+  if (await db.prepare('SELECT id FROM users WHERE login_id = ?').bind(loginId).first()) fail(409, 'このログインIDはすでに使われています');
+  const name = clip(b.name, 60);
+  if (!name) fail(400, '名前を入力してください');
+  const scope = await checkScope(db, user, b.tournament_ids);
+  const h = await hashPassword(checkPassword(b.password));
+  const id = uid();
+  await db.prepare(`INSERT INTO users (id, login_id, name, region, role, pass_hash, pass_salt, iterations, active, session_ver, parent_id, scope, created_at, updated_at)
+    VALUES (?, ?, ?, NULL, 'scorer', ?, ?, ?, 1, 1, ?, ?, ?, ?)`)
+    .bind(id, loginId, name, h.hash, h.salt, h.iterations, user.id === 'root' ? 'root' : user.id, JSON.stringify(scope), now(), now()).run();
+  return json({ ok: true, id });
+}, 'admin');
+
+route('PATCH', '/api/admin/scorers/:sid', async ({ req, db, params, user }) => {
+  const sc = await db.prepare('SELECT * FROM users WHERE id = ?').bind(params.sid).first();
+  if (!canManageScorer(user, sc)) fail(404, 'スコア管理者が見つかりません');
+  const b = await body(req);
+  let hash = sc.pass_hash, salt = sc.pass_salt, iter = sc.iterations, ver = sc.session_ver;
+  if (b.password) { const h = await hashPassword(checkPassword(b.password)); hash = h.hash; salt = h.salt; iter = h.iterations; ver += 1; }
+  const active = b.active !== undefined ? (b.active ? 1 : 0) : sc.active;
+  if (active !== sc.active) ver += 1;
+  const scope = b.tournament_ids !== undefined ? JSON.stringify(await checkScope(db, user, b.tournament_ids)) : sc.scope;
+  await db.prepare('UPDATE users SET name = ?, active = ?, pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = ?, scope = ?, updated_at = ? WHERE id = ?')
+    .bind(b.name !== undefined ? clip(b.name, 60) || sc.name : sc.name, active, hash, salt, iter, ver, scope, now(), sc.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+route('DELETE', '/api/admin/scorers/:sid', async ({ db, params, user }) => {
+  const sc = await db.prepare('SELECT * FROM users WHERE id = ?').bind(params.sid).first();
+  if (!canManageScorer(user, sc)) fail(404, 'スコア管理者が見つかりません');
+  await db.prepare('DELETE FROM users WHERE id = ?').bind(sc.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+// スコア管理者の画面用：担当する大会の一覧（承認待ちの件数つき）
+route('GET', '/api/score/tournaments', async ({ db, user }) => {
+  const all = (await db.prepare("SELECT id, slug, name, date, end_date, venue, status, owner_id FROM tournaments WHERE status != 'draft' ORDER BY date DESC").all()).results;
+  const list = all.filter((t) => canAccess(user, t));
+  const pend = list.length ? (await db.prepare(`SELECT c.tournament_id AS tid, COUNT(*) AS n FROM matches m JOIN categories c ON c.id = m.category_id
+    WHERE m.status = 'provisional' GROUP BY c.tournament_id`).all()).results : [];
+  const by = Object.fromEntries(pend.map((x) => [x.tid, x.n]));
+  return json({ tournaments: list.map(({ owner_id, ...t }) => ({ ...t, pending: by[t.id] || 0 })) });
+}, 'score');
+
+// スコア管理者の画面用：大会の試合データ（関係者と同じく仮登録の結果も含む）
+route('GET', '/api/score/tournaments/:id', async ({ db, params, user, url }) => {
+  const t = await getTournament(db, params.id, user);
+  if (url.searchParams.get('rev') === String(t.rev)) return json({ unchanged: true, rev: t.rev });
+  return json(await publicPayload(db, t, 'relative'));
+}, 'score');
 
 // ---------- 全体管理者: 地域管理者のアカウントと利用状況 ----------
 
@@ -549,7 +658,7 @@ route('GET', '/api/admin/users', async ({ db, user }) => {
     (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@ AND t.status IN ('published', 'live')) AS active_now,
     (SELECT MAX(t.date) FROM tournaments t WHERE t.owner_id = @OWNER@) AS last_date,
     (SELECT COUNT(*) FROM teams tm JOIN categories c ON c.id = tm.category_id JOIN tournaments t ON t.id = c.tournament_id WHERE t.owner_id = @OWNER@) AS teams`;
-  const r = await db.prepare(`SELECT u.id, u.login_id, u.name, u.region, u.role, u.active, u.created_at, u.last_login_at, ${stats.replaceAll('@OWNER@', 'u.id')} FROM users u ORDER BY u.region, u.name`)
+  const r = await db.prepare(`SELECT u.id, u.login_id, u.name, u.region, u.role, u.active, u.created_at, u.last_login_at, ${stats.replaceAll('@OWNER@', 'u.id')} FROM users u WHERE u.role != 'scorer' ORDER BY u.region, u.name`)
     .bind(year).all();
   // 全体管理者（既存の大会を含む）
   const rootStats = await db.prepare(`SELECT ${stats.replaceAll('t.owner_id = @OWNER@', "(t.owner_id IS NULL OR t.owner_id = 'root')")}`).bind(year).first();
@@ -596,7 +705,10 @@ route('DELETE', '/api/admin/users/:uid', async ({ db, params, user }) => {
   mustSuper(user);
   const n = await db.prepare('SELECT COUNT(*) AS n FROM tournaments WHERE owner_id = ?').bind(params.uid).first();
   if (n.n) fail(409, `この管理者の大会が${n.n}件あるため削除できません。利用を止める場合は「停止」にしてください`);
-  await db.prepare('DELETE FROM users WHERE id = ?').bind(params.uid).run();
+  await db.batch([
+    db.prepare('DELETE FROM users WHERE parent_id = ?').bind(params.uid),
+    db.prepare('DELETE FROM users WHERE id = ?').bind(params.uid),
+  ]);
   return json({ ok: true });
 }, 'admin');
 
@@ -975,6 +1087,9 @@ async function getMatchCtx(db, id, user) {
 
 route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user }) => {
   const { m, c, t } = await getMatchCtx(db, params.id, user);
+  // スコア管理者は承認まで。確定済みの結果の書き換えは本部（管理者）だけ
+  if (user.role === 'scorer' && m.status === 'confirmed') fail(403, '確定済みの結果は変更できません。修正が必要な場合は本部（管理者）に連絡してください');
+  if (user.role === 'scorer' && t.status === 'draft') fail(403, '準備中の大会の結果は登録できません');
   if (!m.home_team_id || !m.away_team_id) fail(409, '対戦チームが決まっていません');
   const b = await body(req);
   const s = validateScore(m, b, c.config);
@@ -983,12 +1098,12 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user })
   const status = confirm ? 'confirmed' : (m.status === 'confirmed' ? 'confirmed' : 'provisional');
   const corrected = m.status === 'confirmed' ? 1 : m.corrected;
   await db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = ?, status = ?, corrected = ?,
-    updated_by = '本部', updated_at = ?, version = version + 1 WHERE id = ?`)
-    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, now(), m.id).run();
+    updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`)
+    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : '本部', now(), m.id).run();
   await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true });
-}, 'admin');
+}, 'score');
 
 route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params, user }) => {
   const c = await getCategory(db, params.cid, user);
@@ -1005,7 +1120,7 @@ route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params, us
     await bump(db, c.tournament_id);
   }
   return json({ ok: true, confirmed: targets.length, skipped });
-}, 'admin');
+}, 'score');
 
 // 確定を取り消して仮登録に戻す
 route('POST', '/api/admin/matches/:id/reopen', async ({ db, params, user }) => {
@@ -1024,7 +1139,7 @@ route('POST', '/api/admin/matches/:id/clear', async ({ db, params, user }) => {
   await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true });
-}, 'admin');
+}, 'score');
 
 route('POST', '/api/admin/categories/:cid/lottery', async ({ req, db, params, user }) => {
   const c = await getCategory(db, params.cid, user);
@@ -1165,8 +1280,8 @@ route('DELETE', '/api/admin/lost/:lid', async ({ db, params, user }) => {
 route('GET', '/api/admin/presets', async ({ db, url, user }) => {
   const kind = url.searchParams.get('kind') || 'outline';
   const r = isSuper(user) ? await db.prepare('SELECT * FROM presets WHERE kind = ? ORDER BY updated_at DESC').bind(kind).all()
-    : await db.prepare("SELECT * FROM presets WHERE kind = ? AND (owner_id = ? OR owner_id IS NULL OR owner_id = 'root') ORDER BY updated_at DESC").bind(kind, user.id).all();
-  return json({ presets: r.results.map((x) => ({ ...x, data: JSON.parse(x.data), shared: sharedOwner(x.owner_id), editable: canEditOwned(user, x.owner_id) })) });
+    : await db.prepare("SELECT * FROM presets WHERE kind = ? AND (owner_id = ? OR ((owner_id IS NULL OR owner_id = 'root') AND shared = 1)) ORDER BY updated_at DESC").bind(kind, user.id).all();
+  return json({ presets: r.results.map((x) => ({ ...x, data: JSON.parse(x.data), common: sharedOwner(x.owner_id), published: !!x.shared, editable: canEditOwned(user, x.owner_id) })) });
 }, 'admin');
 
 route('POST', '/api/admin/presets', async ({ req, db, user }) => {
@@ -1190,7 +1305,9 @@ route('PATCH', '/api/admin/presets/:pid', async ({ req, db, params, user }) => {
   const b = await body(req);
   const data = b.data !== undefined ? JSON.stringify(b.data) : p.data;
   if (data.length > 300_000) fail(400, '内容が長すぎます');
-  await db.prepare('UPDATE presets SET name = ?, data = ?, updated_at = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : p.name, data, now(), p.id).run();
+  let shared = p.shared;
+  if (b.shared !== undefined) { mustSuper(user); if (!sharedOwner(p.owner_id)) fail(400, '地域管理者のプリセットは公開できません'); shared = b.shared ? 1 : 0; }
+  await db.prepare('UPDATE presets SET name = ?, data = ?, shared = ?, updated_at = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : p.name, data, shared, now(), p.id).run();
   return json({ ok: true });
 }, 'admin');
 
@@ -1210,7 +1327,7 @@ route('POST', '/api/admin/tournaments/:id/apply-preset', async ({ req, db, param
   const t = await getTournament(db, params.id, user);
   const b = await body(req);
   const p = await db.prepare('SELECT * FROM presets WHERE id = ?').bind(b.presetId).first();
-  if (!p || !(isSuper(user) || sharedOwner(p.owner_id) || p.owner_id === user.id)) fail(404, 'プリセットが見つかりません');
+  if (!p || !(isSuper(user) || (sharedOwner(p.owner_id) && p.shared) || p.owner_id === user.id)) fail(404, 'プリセットが見つかりません');
   const data = JSON.parse(p.data);
   const map = await copyAssets(db, outlineImageIds(data), t.id);
   const settings = { ...readSettings(t), outline: remapOutline(data, map) };
@@ -1226,7 +1343,9 @@ route('PATCH', '/api/admin/templates/:id', async ({ req, db, params, user }) => 
   if (!canEditOwned(user, tp.owner_id)) fail(403, 'このテンプレートは作成した管理者だけが変更できます');
   const b = await body(req);
   const cfg = b.config ? JSON.stringify(Object.fromEntries(TEMPLATE_KEYS.filter((k) => k in b.config).map((k) => [k, b.config[k]]))) : tp.config;
-  await db.prepare('UPDATE templates SET name = ?, config = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : tp.name, cfg, tp.id).run();
+  let shared = tp.shared;
+  if (b.shared !== undefined) { mustSuper(user); if (!sharedOwner(tp.owner_id)) fail(400, '地域管理者のテンプレートは公開できません'); shared = b.shared ? 1 : 0; }
+  await db.prepare('UPDATE templates SET name = ?, config = ?, shared = ? WHERE id = ?').bind(b.name ? clip(b.name, 60) : tp.name, cfg, shared, tp.id).run();
   return json({ ok: true });
 }, 'admin');
 
@@ -1318,8 +1437,8 @@ const TEMPLATE_KEYS = ['dayBreaks', 'koTiming', 'periods', 'halfMinutes', 'halft
 
 route('GET', '/api/admin/templates', async ({ db, user }) => {
   const r = isSuper(user) ? await db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all()
-    : await db.prepare("SELECT * FROM templates WHERE (owner_id = ? OR owner_id IS NULL OR owner_id = 'root') ORDER BY created_at DESC").bind(user.id).all();
-  return json({ templates: r.results.map((x) => ({ ...x, config: JSON.parse(x.config), shared: sharedOwner(x.owner_id), editable: canEditOwned(user, x.owner_id) })) });
+    : await db.prepare("SELECT * FROM templates WHERE (owner_id = ? OR ((owner_id IS NULL OR owner_id = 'root') AND shared = 1)) ORDER BY created_at DESC").bind(user.id).all();
+  return json({ templates: r.results.map((x) => ({ ...x, config: JSON.parse(x.config), common: sharedOwner(x.owner_id), published: !!x.shared, editable: canEditOwned(user, x.owner_id) })) });
 }, 'admin');
 
 route('POST', '/api/admin/templates', async ({ req, db, user }) => {

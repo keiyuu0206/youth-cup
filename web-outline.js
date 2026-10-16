@@ -288,25 +288,31 @@ export async function openPresetList({ t, categories, onApply }) {
   const list = h('div', { class: 'stack' });
   const dlg = modal({ title: '要項のプリセット', content: list, actions: [{ label: '閉じる', kind: 'btn-ghost' }] });
   const draw = (presets) => mount(list, presets.length ? presets.map((p) => h('div', { class: 'ol-preset' },
-    h('div', null, h('strong', null, p.name), h('div', { class: 'muted small' }, `更新：${formatDate(p.updated_at.slice(0, 10))}　見出し${(p.data.sections || []).length}件`)),
+    h('div', null, h('strong', null, p.name), ' ', p.common ? (window.__ycRole === 'super'
+      ? h('label', { class: 'check share-check' }, h('input', { type: 'checkbox', checked: !!p.published, onchange: async (e) => {
+        const on = e.target.checked;
+        if (await run(() => api('PATCH', `/api/admin/presets/${p.id}`, { shared: on }), on ? '地域管理者に公開しました' : '非公開にしました')) p.published = on;
+      } }), '地域管理者に公開')
+      : h('span', { class: 'tag done' }, '共通')) : null,
+      h('div', { class: 'muted small' }, `更新：${formatDate(p.updated_at.slice(0, 10))}　見出し${(p.data.sections || []).length}件`)),
     h('div', { class: 'row' },
       onApply ? h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => {
         if (!(await confirmDialog(`「${p.name}」を読み込みます`, '今の要項の内容は、プリセットの内容に置き換わります（大会名などの自動の項目は、この大会の設定から入ります）。', '読み込む'))) return;
         const res = await run(() => api('POST', `/api/admin/tournaments/${t.id}/apply-preset`, { presetId: p.id }), '読み込みました');
         if (res) { dlg.close(); onApply(res.outline); }
       } }, '読み込む') : null,
-      h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
+      p.editable === false ? null : h('button', { class: 'btn btn-sm', type: 'button', onclick: () => {
         dlg.close();
         openOutlineEditor({ t, categories, outline: p.data, target: { kind: 'preset', id: p.id, name: p.name },
           onSave: async (o) => !!(await run(() => api('PATCH', `/api/admin/presets/${p.id}`, { data: o }))) });
       } }, '編集'),
-      h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => {
+      p.editable === false ? null : h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => {
         const nm = h('input', { type: 'text', value: p.name });
         modal({ title: '名前を変更', content: h('label', { class: 'field' }, h('span', null, 'プリセット名'), nm), actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '保存', kind: 'btn-primary', onClick: async () => {
           if (await run(() => api('PATCH', `/api/admin/presets/${p.id}`, { name: nm.value }), '変更しました')) { p.name = nm.value; draw(presets); }
         } }] });
       } }, '名前変更'),
-      h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+      p.editable === false ? null : h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
         if (!(await confirmDialog(`「${p.name}」を削除します`, '添付画像も削除されます。この操作は元に戻せません。', '削除する', true))) return;
         if (await run(() => api('DELETE', `/api/admin/presets/${p.id}`), '削除しました')) draw(presets.filter((x) => x.id !== p.id));
       } }, '削除')))) : h('p', { class: 'muted' }, 'プリセットはまだありません。要項の編集画面の「プリセットとして保存」で作れます。'));
