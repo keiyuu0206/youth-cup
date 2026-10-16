@@ -2,7 +2,7 @@ import { api, ApiError } from './web-api.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -351,7 +351,7 @@ export async function admin(root, path, navigate) {
 function adminHeader(title, navigate, back) {
   const ghost = { background: 'transparent', color: '#fff', borderColor: 'rgba(255,255,255,0.7)' };
   return h('header', { class: 'site-head no-print' }, h('div', { class: 'wrap wide' },
-    back ? h('a', { href: '/admin', onclick: (e) => { e.preventDefault(); navigate('/admin'); } }, '← 大会一覧') : null,
+    back ? h('a', { href: '/admin', onclick: async (e) => { e.preventDefault(); if (window.__leaveGuard && !(await window.__leaveGuard())) return; window.__leaveGuard = null; navigate('/admin'); } }, '← 大会一覧') : null,
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
     h('span', { class: 'spacer' }),
     ME ? h('span', { class: 'me-chip', title: `ログインID：${ME.login_id}` }, ME.role === 'super' ? '全体管理者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
@@ -610,7 +610,7 @@ async function tournamentView(root, id, navigate) {
   const stopPoll = poller(async () => {
     if (!document.body.contains(root.firstChild)) return stopPoll();
     const a = document.activeElement;
-    if (document.querySelector('.modal-back') || st.moveSel || st.dirty || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
+    if (document.querySelector('.modal-back') || st.moveSel || st.dirty || settingsDirty() || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
     if (await load()) render();
   }, 15000);
 
@@ -635,13 +635,21 @@ async function tournamentView(root, id, navigate) {
 
   // ----- カテゴリの切り替え（保存していない設定があれば確認） -----
 
+  // 設定画面の内容が、開いた時点（または最後に保存した時点）から変わっているか
+  const settingsDirty = () => !!(st.sub === 'settings' && st.form && st.form.base != null && st.form.snap() !== st.form.base);
+
   async function leaveSettings() {
+    if (settingsDirty()) st.dirty = st.form.catId;
     if (!st.dirty) return true;
     const c = data.categories.find((x) => x.id === st.dirty);
     const ok = await confirmDialog(`${c ? c.name : 'カテゴリ'}の設定が保存されていません`, '切り替えると、入力した内容は失われます。保存する場合は「キャンセル」を押して、「設定を保存」を押してください。', '保存せずに切り替える', true);
-    if (ok) st.dirty = null;
+    if (ok) { st.dirty = null; st.form = null; }
     return ok;
   }
+
+  // ほかの画面に移るとき・ブラウザを閉じるときも、未保存の設定があれば確認する
+  window.__leaveGuard = leaveSettings;
+  window.onbeforeunload = () => (settingsDirty() || st.dirty ? true : undefined);
 
   async function switchCategory(c) {
     if (c.id === st.catId) return;
@@ -953,6 +961,9 @@ async function tournamentView(root, id, navigate) {
   function settingsView(t, cat, editable) {
     const f = JSON.parse(JSON.stringify(cat.config));
     let name = cat.name;
+    // 未保存の判定は「設定の中身」を比べて行う（ボタンでの変更も見逃さない）。基準は最初の描画の後に記録する
+    const form = { catId: cat.id, snap: () => JSON.stringify({ f, name }), base: null };
+    st.form = form;
     const box = h('div');
     const num = (key, label, opts = {}) => h('label', { class: 'field' }, h('span', null, label),
       h('input', { type: 'number', min: opts.min ?? 0, max: opts.max ?? 240, inputmode: 'numeric', value: f[key], oninput: (e) => { f[key] = Number(e.target.value); drawSummary(); } }));
@@ -1040,7 +1051,7 @@ async function tournamentView(root, id, navigate) {
       h('div', { class: 'row', style: { marginTop: '12px' } },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
           const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: { ...f, _touched: undefined } }));
-          if (r) { st.dirty = null; toast(r.retimed ? `${cat.name}の設定を保存し、全試合の開始時刻を再計算しました` : `${cat.name}の設定を保存しました`); await reload(); }
+          if (r) { st.dirty = null; st.form = null; toast(r.retimed ? `${cat.name}の設定を保存し、全試合の開始時刻を再計算しました` : `${cat.name}の設定を保存しました`); await reload(); }
         } }, `${cat.name}の設定を保存`),
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => saveTemplate(f) }, 'テンプレートとして保存'),
@@ -1052,6 +1063,7 @@ async function tournamentView(root, id, navigate) {
       !editable ? h('p', { class: 'notice', style: { marginTop: '12px' } }, '開催中は、試合時間などを変えても組み合わせ済みの開始時刻は変わりません。当日の時間調整は「結果」または「組み分け・日程」から行ってください。') : null);
     draw();
     drawSummary();
+    form.base = form.snap(); // 描画時の自動の補完（開催日など）を含めた状態を基準にする
     return box;
   }
 
@@ -1277,6 +1289,9 @@ async function tournamentView(root, id, navigate) {
       cat.teams.length < 2 ? h('p', { class: 'empty' }, '先に「チーム」でチームを登録してください') : null,
       d ? warningsList((d.warnings || []).map((text) => ({ level: 'warn', text }))) : null,
       d ? groupsView() : cat.teams.length >= 2 ? h('p', { class: 'muted' }, '「ランダムに組み分け」を押すと、条件を守って組を決めます。決まった後で手動でも変更できます。') : null,
+      d && cat.config.format === 'league_knockout' ? h('p', { class: 'notice', style: { marginTop: '12px' } }, '決勝の形式（保存済みの設定）：',
+        planBrackets(cat).filter((b) => b.n >= 2).map((b, i) => [i ? '・' : '', h('strong', null, b.name), b.format === 'league' ? '（総当たり）' : '']),
+        h('span', { class: 'muted small', style: { display: 'block', marginTop: '2px' } }, '変える場合は「設定」で変更し、「設定を保存」を押してから日程を作成してください。')) : null,
       d ? h('div', { class: 'row', style: { marginTop: '12px' } }, h('button', { class: 'btn btn-primary', type: 'button', onclick: makePreview }, '日程を作成して確認')) : null,
       preview ? h('div', { style: { marginTop: '16px' } },
         h('h3', { style: { marginBottom: '6px' } }, '日程の確認（まだ反映されていません）'),
