@@ -83,6 +83,10 @@ export function normalizeConfig(c) {
   out.lottery = out.lottery || {};
   out.courts = Math.max(1, Math.min(12, Number(out.courts) || 1));
   out.groups = Math.max(1, Math.min(MAX_GROUPS, Number(out.groups) || 1));
+  // コートの優先順位（コート番号の並び）。範囲外・重複を除き、足りないコートは後ろに番号順で足す
+  const pr = (Array.isArray(out.courtPriority) ? out.courtPriority : []).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < out.courts);
+  out.courtPriority = [...new Set(pr)];
+  for (let i = 0; i < out.courts; i++) if (!out.courtPriority.includes(i)) out.courtPriority.push(i);
   out.advance = Number(out.advance) === 1 ? 1 : 2;
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);

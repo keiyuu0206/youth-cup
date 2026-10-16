@@ -917,3 +917,18 @@ pre.issued { white-space: pre-wrap; background: var(--surface-2); padding: 12px;
 
 .rank-all { display: block; font-size: 0.6rem; font-weight: 700; color: var(--turf); white-space: nowrap; margin-top: 2px; }
 .rank-league { margin-top: 18px; }
+
+/* 公開中のロック */
+.lock-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 10px; padding: 10px 14px; border-radius: 12px;
+  background: color-mix(in srgb, #ffd60a 18%, var(--surface)); border: 1.5px solid color-mix(in srgb, #c99a00 55%, var(--line)); font-size: 0.85rem; font-weight: 600; }
+.lock-banner span { flex: 1; min-width: 220px; }
+.lock-banner.open { background: color-mix(in srgb, #1d5fbf 12%, var(--surface)); border-color: #1d5fbf; }
+fieldset.lockable { border: 0; margin: 0; padding: 0; min-width: 0; }
+fieldset.lockable:disabled { opacity: 0.6; }
+fieldset.lockable:disabled * { cursor: not-allowed; }
+/* コートの優先順位 */
+.court-prio { margin-top: 12px; padding: 10px 12px; border-radius: var(--r-md); background: var(--surface-2); }
+.court-prio-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.court-prio-list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--surface); border-radius: 10px; }
+.cp-no { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--turf); color: #fff; font-size: 0.75rem; font-weight: 800; }
+.cp-name { font-weight: 700; }

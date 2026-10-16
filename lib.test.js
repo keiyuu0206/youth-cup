@@ -502,3 +502,25 @@ test('自由に設定: 段の形式を「リーグ戦」にすると、その段
   assert.ok(low.every((m) => /^R/.test(m.code) && /^下位リーグ 第\d節$/.test(m.label)));
   assert.ok(matches.filter((m) => m.group_label === '中位トーナメント').every((m) => /^K/.test(m.code)));
 });
+
+// ---- コートの優先順位 ----
+test('コートの優先順位: 同じ時間帯では、上位の段・決勝ほど優先順位の高いコートに入る', () => {
+  // 優先順位：Cコート → Aコート → Dコート → Bコート
+  const cfg = normalizeConfig({ format: 'league_knockout', groups: 4, courts: 4, minRestSlots: 0, courtPriority: [2, 0, 3, 1],
+    knockoutPlan: { type: 'split3', k: 2, m: 2, mode: 'top3' } });
+  const ts = teams(24).map((t, i) => ({ ...t, group_label: 'ABCD'[i % 4] }));
+  const { matches } = generateCategory(cfg, ts);
+  const ko = matches.filter((m) => m.stage === 'knockout');
+  // 決勝トーナメントの各時間帯で、最も重要な試合が Cコート（2）に入っている
+  const bySlot = {};
+  for (const m of ko) (bySlot[m.slot] ||= []).push(m);
+  const rankOf = (m) => [m.group_label === '上位トーナメント' ? 0 : m.group_label === '中位トーナメント' ? 1 : 2, m.place_w ?? 999];
+  for (const list of Object.values(bySlot)) {
+    const top = [...list].sort((a, b) => rankOf(a)[0] - rankOf(b)[0] || rankOf(a)[1] - rankOf(b)[1])[0];
+    assert.equal(top.court, 2, `${top.label} が Cコートに入っていない`);
+  }
+  // 上位トーナメントの決勝は Cコート
+  assert.equal(ko.find((m) => m.label === '上位トーナメント 決勝').court, 2);
+  // 優先順位の補完：範囲外・重複を除き、足りない分を番号順で足す
+  assert.deepEqual(normalizeConfig({ courts: 4, courtPriority: [3, 3, 9, 1] }).courtPriority, [3, 1, 0, 2]);
+});

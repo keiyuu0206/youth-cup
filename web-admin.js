@@ -1,4 +1,5 @@
 import { api, ApiError } from './web-api.js';
+const apiBase = api;
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner } from './web-ui.js';
@@ -591,7 +592,13 @@ async function tournamentView(root, id, navigate) {
     drafts: {}, // カテゴリID → {assignment, order, warnings}
     preview: {}, // カテゴリID → {matches, warnings}
     resultFilter: 'pending',
+    unlocked: false, // 公開中のロックを一時解除しているか（この画面を開いている間だけ）
   };
+  // ロックを一時解除している間は、設定・チーム・日程の変更に ?unlock=1 を付ける
+  // eslint-disable-next-line no-shadow
+  const api = (method, path, body) => apiBase(method,
+    st.unlocked && method !== 'GET' && /^\/api\/admin\/(categories|teams|tournaments\/[^/]+\/categories)/.test(path) ? `${path}${path.includes('?') ? '&' : '?'}unlock=1` : path, body);
+  const isLocked = () => data && data.tournament.status !== 'draft' && !st.unlocked;
 
   async function load() {
     const res = await api('GET', `/api/admin/tournaments/${id}${data ? `?rev=${data.tournament.rev}` : ''}`);
@@ -624,7 +631,7 @@ async function tournamentView(root, id, navigate) {
     const t = data.tournament;
     document.title = `${t.name} | 大会運営`;
     const cat = data.categories.find((c) => c.id === st.catId);
-    const editable = t.status === 'draft' || t.status === 'published';
+    const editable = (t.status === 'draft' || t.status === 'published') && !isLocked();
     mount(root,
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
@@ -635,8 +642,28 @@ async function tournamentView(root, id, navigate) {
               h('div', { class: 'chips', style: { flex: 1 } },
                 data.categories.map((c, i) => h('button', { class: 'chip-btn cat-chip', type: 'button', 'aria-pressed': String(c.id === st.catId), style: `--cat:${catColor(i)}`,
                   onclick: () => switchCategory(c) }, h('i', { class: 'cat-dot' }), c.name, h('small', null, `${c.teams.length}チーム`)))),
-              h('button', { class: 'btn btn-sm', type: 'button', onclick: addCategory }, '＋ カテゴリを追加')),
+              h('button', { class: 'btn btn-sm', type: 'button', disabled: isLocked(), onclick: addCategory }, '＋ カテゴリを追加')),
+            lockBanner(t),
             cat ? categoryView(t, cat, editable) : h('div', { class: 'panel empty', style: { marginTop: '12px' } }, 'カテゴリ（U7〜U12）を追加すると、チーム登録と日程作成ができます。')))));
+  }
+
+  // ----- 公開中のロック -----
+
+  function lockBanner(t) {
+    if (t.status === 'draft') return null;
+    const STATE = { published: '公開中', live: '開催中', finished: '終了' };
+    if (st.unlocked) {
+      return h('div', { class: 'lock-banner open no-print' },
+        h('span', null, '🔓 ロックを一時解除しています。設定・チーム・日程を変更できます（この画面を閉じるか、再読み込みすると元に戻ります）。'),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { st.unlocked = false; render(); toast('ロックに戻しました'); } }, 'ロックに戻す'));
+    }
+    return h('div', { class: 'lock-banner no-print' },
+      h('span', null, `🔒 ${STATE[t.status]}のため、カテゴリの設定・チームの追加と削除・組み分け・日程はロックされています（誤操作防止）。結果の登録・時間調整・チーム名の修正はこのまま行えます。`),
+      h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+        const ok = await confirmDialog('ロックを一時解除します', `${STATE[t.status]}の大会です。設定や日程を変えると、閲覧ページの内容もすぐに変わります。保護者に案内済みの日程を変える場合は、あわせてお知らせしてください。${t.status !== 'published' ? '（開催中・終了の大会では、解除しても日程の作り直しはできません）' : ''}`, 'ロックを解除する', true);
+        if (!ok) return;
+        st.unlocked = true; render();
+      } }, 'ロックを一時解除'));
   }
 
   // ----- カテゴリの切り替え（保存していない設定があれば確認） -----
@@ -955,7 +982,7 @@ async function tournamentView(root, id, navigate) {
           } },
             label, k === 'results' && pending ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, pending) : null)))),
       h('div', { style: { marginTop: '8px' }, oninput: markDirty, onchange: markDirty },
-        st.sub === 'settings' ? settingsView(t, cat, editable)
+        st.sub === 'settings' ? h('fieldset', { class: 'lockable', disabled: isLocked() }, settingsView(t, cat, editable))
           : st.sub === 'teams' ? teamsView(t, cat, editable)
             : st.sub === 'schedule' ? scheduleTab(t, cat, editable)
               : st.sub === 'results' ? resultsTab(t, cat)
@@ -983,6 +1010,23 @@ async function tournamentView(root, id, navigate) {
         : n === 2 ? `前半${x.halfMinutes}分＋ハーフタイム${x.halftimeMinutes}分＋後半${x.halfMinutes}分`
           : `${x.halfMinutes}分×${n}ピリオド＋休憩${x.halftimeMinutes}分×${n - 1}`;
       return `${body}＋試合間隔${f.intervalMinutes}分＝${len + f.intervalMinutes}分`;
+    };
+    // コートの優先順位（決勝の重要な試合から、上のコートを使う）
+    const courtPriorityPanel = () => {
+      const n = Math.max(1, Number(f.courts) || 1);
+      const pr = (f.courtPriority || []).filter((x) => x < n);
+      for (let i = 0; i < n; i++) if (!pr.includes(i)) pr.push(i);
+      f.courtPriority = pr;
+      const nm = (i) => (f.courtNames && f.courtNames[i]) || `${String.fromCharCode(65 + i)}コート`;
+      const move = (i, d) => { [pr[i], pr[i + d]] = [pr[i + d], pr[i]]; draw(); };
+      return h('div', { class: 'court-prio' },
+        h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, 'コートの優先順位'),
+        h('p', { class: 'muted small', style: { margin: '2px 0 6px' } }, f.format === 'league' ? 'リーグ戦のみのカテゴリでは使いません。' : '決勝トーナメントでは、同じ時間帯の中で重要な試合（上位の段・決勝・順位決定戦）から順に、上のコートを使います。変えた後は日程を作り直すと反映されます。'),
+        h('ol', { class: 'court-prio-list' }, pr.map((c, i) => h('li', null,
+          h('span', { class: 'cp-no' }, i + 1), h('span', { class: 'cp-name' }, nm(c)), i === 0 ? h('span', { class: 'tag done' }, '決勝などに優先') : null,
+          h('span', { class: 'spacer' }),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': `${nm(c)}を上へ`, disabled: i === 0, onclick: () => move(i, -1) }, '↑'),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', 'aria-label': `${nm(c)}を下へ`, disabled: i === pr.length - 1, onclick: () => move(i, 1) }, '↓')))));
     };
     const koOn = () => f.format === 'league_knockout' && f.koTiming && f.koTiming.enabled;
     const drawSummary = () => {
@@ -1026,6 +1070,7 @@ async function tournamentView(root, id, navigate) {
             [[0, '避けない'], [1, '1試合分は休む'], [2, '2試合分は休む']].map(([v, l]) => h('option', { value: v, selected: f.minRestSlots === v }, l))))),
         h('label', { class: 'field', style: { marginTop: '12px' } }, h('span', null, 'コート名（カンマ区切り・空欄なら Aコート, Bコート…）'),
           h('input', { type: 'text', value: (f.courtNames || []).join(', '), placeholder: '例: 第1コート, 第2コート', oninput: (e) => { f.courtNames = e.target.value.split(/[,、]/).map((s) => s.trim()).filter(Boolean); } })),
+        courtPriorityPanel(),
         koPanel(),
         h('div', { style: { marginTop: '12px' } }, (drawSummary(), summary))),
       h('section', { class: 'panel' },
@@ -1112,7 +1157,7 @@ async function tournamentView(root, id, navigate) {
   function teamsView(t, cat, editable) {
     const bulk = h('textarea', { placeholder: '1行に1チーム\n例:\nさくらFC A, さくらFC\nさくらFC B, さくらFC\n青空SC' });
     return h('div', null,
-      h('section', { class: 'panel' },
+      h('fieldset', { class: 'lockable', disabled: isLocked() }, h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '8px' } }, 'チームを追加'),
         h('p', { class: 'muted small', style: { marginTop: 0 } }, '「チーム名, クラブ名」と書くとクラブも登録できます。同じクラブのチームは組み分けで別の組になります。'),
         bulk,
@@ -1122,7 +1167,7 @@ async function tournamentView(root, id, navigate) {
             return { name, club: club || null };
           });
           if (await run(() => api('POST', `/api/admin/categories/${cat.id}/teams`, { teams }), `${teams.length}チームを追加しました`)) await reload();
-        } }, 'チームを追加')),
+        } }, 'チームを追加'))),
       h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '8px' } }, `登録チーム（${cat.teams.length}）`),
         cat.teams.length ? cat.teams.map((tm) => h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--line)' } },
@@ -1132,7 +1177,7 @@ async function tournamentView(root, id, navigate) {
           tm.group_label ? h('span', { class: 'tag' }, `${tm.group_label}組`) : null,
           h('span', { class: 'spacer' }),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editTeam(tm) }, '編集'),
-          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', disabled: isLocked(), onclick: async () => {
             const scheduled = cat.matches.length > 0;
             if (!editable && scheduled) return toast('開催中は日程に入っているチームを削除できません', true);
             if (!(await confirmDialog(`${tm.name}を削除します`, scheduled ? 'このカテゴリの日程は作り直しが必要になります（今の日程は消えます）。' : '削除してよろしいですか。', '削除する', true))) return;
@@ -1171,7 +1216,8 @@ async function tournamentView(root, id, navigate) {
     if (!editable) {
       box.append(h('p', { class: 'notice' }, t.status === 'live'
         ? '開催中は組み合わせを変更できません。遅れが出たら、遅らせたい試合をタップすると、そのコートの以降の試合をまとめてずらせます。'
-        : '終了した大会は変更できません。'));
+        : t.status === 'published' ? '公開中のため、組み分けと日程はロックされています。変更する場合は、上の「ロックを一時解除」を押してください。'
+          : '終了した大会は変更できません。'));
     } else {
       if (cat.config.format !== 'knockout') box.append(constraintsPanel(cat));
       box.append(groupingPanel(cat));

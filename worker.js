@@ -722,10 +722,15 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params, user }) => {
 // ---------- 管理者: カテゴリ ----------
 
 const editable = (t) => t.status === 'draft' || t.status === 'published';
+// 公開中・開催中・終了の大会では、設定・チーム・日程をロックする（誤操作防止）。
+// 管理者が画面で「ロックを一時解除」した操作だけ ?unlock=1 を付けて受け付ける
+const LOCKED_MSG = '公開中の大会のため、設定・チーム・日程はロックされています。変更する場合は、画面上部の「ロックを一時解除」を押してから操作してください';
+const mustUnlocked = (t, url) => { if (t.status !== 'draft' && url.searchParams.get('unlock') !== '1') fail(423, LOCKED_MSG); };
 const mustBeEditable = (t) => { if (!editable(t)) fail(409, '開催中・終了した大会では組み合わせを変更できません。大会の状態を「準備中」に戻してください'); };
 
-route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params, user }) => {
+route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params, user, url }) => {
   const t = await getTournament(db, params.id, user);
+  mustUnlocked(t, url);
   const b = await body(req);
   const dates = tournamentDates(t);
   const given = b.config || {};
@@ -740,9 +745,10 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params,
 
 const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
 
-route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user }) => {
+route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
+  mustUnlocked(t, url);
   const b = await body(req);
   const cfg = normalizeConfig({ ...c.config, ...(b.config || {}) });
   if (cfg.courts < c.config.courts) {
@@ -764,8 +770,9 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user }) =
   return json({ ok: true, retimed: timingChanged && editable(t) });
 }, 'admin');
 
-route('DELETE', '/api/admin/categories/:cid', async ({ db, params, user }) => {
+route('DELETE', '/api/admin/categories/:cid', async ({ db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
+  mustUnlocked(await getTournament(db, c.tournament_id, user), url);
   await batchAll(db, [
     db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id),
     db.prepare('DELETE FROM teams WHERE category_id = ?').bind(c.id),
@@ -777,8 +784,9 @@ route('DELETE', '/api/admin/categories/:cid', async ({ db, params, user }) => {
 
 // ---------- 管理者: チーム ----------
 
-route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params, user }) => {
+route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
+  mustUnlocked(await getTournament(db, c.tournament_id, user), url);
   const b = await body(req);
   const list = Array.isArray(b.teams) ? b.teams : [b];
   const count = await db.prepare('SELECT COUNT(*) AS n FROM teams WHERE category_id = ?').bind(c.id).first();
@@ -814,11 +822,12 @@ route('PATCH', '/api/admin/teams/:id', async ({ req, db, params, user }) => {
   return json({ ok: true });
 }, 'admin');
 
-route('DELETE', '/api/admin/teams/:id', async ({ db, params, user }) => {
+route('DELETE', '/api/admin/teams/:id', async ({ db, params, user, url }) => {
   const team = await db.prepare('SELECT * FROM teams WHERE id = ?').bind(params.id).first();
   if (!team) fail(404, 'チームが見つかりません');
   const c = await getCategory(db, team.category_id, user);
   const t = await getTournament(db, c.tournament_id, user);
+  mustUnlocked(t, url);
   const used = await db.prepare('SELECT COUNT(*) AS n FROM matches WHERE category_id = ? AND (home_team_id = ? OR away_team_id = ?)').bind(c.id, team.id, team.id).first();
   if (used.n && !editable(t)) fail(409, '試合が組まれているチームは開催中に削除できません');
   await db.prepare('DELETE FROM teams WHERE id = ?').bind(team.id).run();
@@ -829,8 +838,9 @@ route('DELETE', '/api/admin/teams/:id', async ({ db, params, user }) => {
 
 // ---------- 管理者: 組み分け・日程 ----------
 
-route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params, user }) => {
+route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
+  mustUnlocked(await getTournament(db, c.tournament_id, user), url);
   const { teams } = await loadCategoryData(db, c.id);
   if (c.config.format === 'knockout') {
     return json({ order: shuffle(teams.map((x) => x.id)), warnings: [] });
@@ -843,6 +853,7 @@ route('POST', '/api/admin/categories/:cid/grouping', async ({ db, params, user }
 route('DELETE', '/api/admin/categories/:cid/schedule', async ({ req, db, params, url, user }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
+  mustUnlocked(t, url);
   mustBeEditable(t);
   const n = await db.prepare("SELECT COUNT(*) AS total, SUM(CASE WHEN status != 'none' THEN 1 ELSE 0 END) AS results FROM matches WHERE category_id = ?").bind(c.id).first();
   if (!n.total) return json({ ok: true, deleted: 0 });
@@ -856,9 +867,10 @@ route('DELETE', '/api/admin/categories/:cid/schedule', async ({ req, db, params,
   return json({ ok: true, deleted: n.total });
 }, 'admin');
 
-route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, user }) => {
+route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
+  mustUnlocked(t, url);
   mustBeEditable(t);
   const b = await body(req);
   const { teams } = await loadCategoryData(db, c.id);
@@ -890,9 +902,10 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, u
 }, 'admin');
 
 // 試合を別の枠・コートへ移動（移動先に試合があれば入れ替え）
-route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user }) => {
+route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
+  mustUnlocked(t, url);
   mustBeEditable(t);
   const b = await body(req);
   const { matches } = await loadCategoryData(db, c.id);

@@ -59,7 +59,18 @@ expect(r.data.unchanged === true, 'rev unchanged shortcut');
 r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);
 cat = r.data.categories[0];
 const firstBefore = Math.min(...cat.matches.map((m) => m.start_min));
-await call('admin', 'PATCH', `/api/admin/categories/${cid}`, { config: { startTime: cat.config.startTime + 30 } });
+// 公開中は設定・チーム・日程がロックされる（一時解除 ?unlock=1 の操作だけ受け付ける）
+r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);
+const statusNow = r.data.tournament.status;
+r = await call('admin', 'PATCH', `/api/admin/categories/${cid}`, { config: { startTime: cat.config.startTime + 30 } });
+expect(statusNow === 'draft' ? r.status === 200 : r.status === 423, 'settings locked when published');
+if (statusNow !== 'draft') {
+  expect((await call('admin', 'POST', `/api/admin/categories/${cid}/teams`, { teams: [{ name: '追加チーム' }] })).status === 423, 'add team locked when published');
+  expect((await call('admin', 'POST', `/api/admin/categories/${cid}/grouping`)).status === 423, 'grouping locked when published');
+  const anyTeam = cat.teams[0];
+  expect((await call('admin', 'PATCH', `/api/admin/teams/${anyTeam.id}`, { name: anyTeam.name })).status === 200, 'team rename allowed when published');
+  await call('admin', 'PATCH', `/api/admin/categories/${cid}?unlock=1`, { config: { startTime: cat.config.startTime + 30 } });
+}
 r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);
 cat = r.data.categories[0];
 expect(Math.min(...cat.matches.map((m) => m.start_min)) === firstBefore + 30, 'global shift +30');
@@ -99,7 +110,9 @@ expect(r.status === 409, 'relative cannot edit confirmed');
 // 開催中にする → 組み合わせ変更不可
 await call('admin', 'PATCH', `/api/admin/tournaments/${tid}`, { status: 'live' });
 r = await call('admin', 'POST', `/api/admin/categories/${cid}/move`, { matchId: lm.id, slot: 0, court: 0 });
-expect(r.status === 409, 'move blocked when live');
+expect(r.status === 423, 'move locked when live');
+r = await call('admin', 'POST', `/api/admin/categories/${cid}/move?unlock=1`, { matchId: lm.id, slot: 0, court: 0 });
+expect(r.status === 409, 'move blocked when live even if unlocked');
 
 // 遅延調整（昼休憩をまたぐ）
 r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);

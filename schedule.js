@@ -171,6 +171,16 @@ export function placeMatches(cfg, league, ko) {
     for (const ref of [m.home_ref, m.away_ref]) if (refKey(ref)) refLast[refKey(ref)] = slot;
   }
 
+  // コートの優先順位：同じ時間帯の決勝の試合は、重要な試合ほど優先順位の高いコートへ
+  //  重要度：上位の段ほど（base が小さい）→ 決勝・3位決定戦など順位が決まる試合（place_w が小さい）→ 後の回戦ほど
+  const prio = cfg.courtPriority && cfg.courtPriority.length ? cfg.courtPriority : [...Array(courts).keys()];
+  const bySlot = {};
+  for (const m of ko) (bySlot[m.slot] ||= []).push(m);
+  for (const list of Object.values(bySlot)) {
+    list.sort((a, b) => (a.base ?? 999) - (b.base ?? 999) || (a.place_w ?? 999) - (b.place_w ?? 999) || (b.level ?? 0) - (a.level ?? 0));
+    list.forEach((m, i) => { m.court = prio[i] ?? i; });
+  }
+
   // 使われなかった枠を詰める（トーナメント前の空き枠を1つまでに）
   const allM = [...league, ...ko];
   const usedSlots = [...new Set(allM.map((m) => m.slot))].sort((a, b) => a - b);
