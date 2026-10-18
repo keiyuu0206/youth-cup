@@ -524,3 +524,23 @@ test('コートの優先順位: 同じ時間帯では、上位の段・決勝ほ
   // 優先順位の補完：範囲外・重複を除き、足りない分を番号順で足す
   assert.deepEqual(normalizeConfig({ courts: 4, courtPriority: [3, 3, 9, 1] }).courtPriority, [3, 1, 0, 2]);
 });
+
+// ---- リーグ戦のコート：同じ組はなるべく同じコートか隣のコートに ----
+test('コートの割り当て: 組ごとに担当のコート付近にまとまり、離れたコートは使わない', () => {
+  const span = (G, courts, n) => {
+    const cfg = normalizeConfig({ format: 'league', groups: G, courts });
+    const ts = teams(n).map((t, i) => ({ ...t, group_label: 'ABCDEFGH'[i % G] }));
+    const { matches } = generateCategory(cfg, ts);
+    return Object.fromEntries([...'ABCDEFGH'.slice(0, G)].map((g) => {
+      const cs = matches.filter((m) => m.group_label === g).map((m) => m.court);
+      return [g, [Math.min(...cs), Math.max(...cs)]];
+    }));
+  };
+  // 4組・8面（各チーム1枠休む）：1つの時間帯に2組が4面ずつ使うので、A・B組は左半分（A〜D）、C・D組は右半分（E〜H）
+  assert.deepEqual(span(4, 8, 32), { A: [0, 3], B: [0, 3], C: [4, 7], D: [4, 7] });
+  // 4組・6面（各チーム1枠休む）：A・B組は左側（A〜C）、C・D組は右側（D〜F）
+  const s6 = span(4, 6, 24);
+  assert.ok(s6.A[1] <= 2 && s6.B[1] <= 2 && s6.C[0] >= 3 && s6.D[0] >= 3, JSON.stringify(s6));
+  // 4組・4面：1組1面
+  assert.deepEqual(span(4, 4, 24), { A: [0, 0], B: [1, 1], C: [2, 2], D: [3, 3] });
+});

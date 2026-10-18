@@ -108,44 +108,98 @@ export function generateCategory(cfg, teams, koOrder) {
   return { matches: all, dayBreakSlots, warnings: extraWarnings };
 }
 
+// リーグ戦の試合の入れ方の候補（どれを使うかは、連戦の少なさ・時間帯の数・コートのまとまりで自動で選ぶ）
+//  組の並べ方：natural（A,B,C…）／ends（A,最後,B,最後から2番目…）／interleave（同じ節で組ごとに交互）
+//  +cap：1つの時間帯に1つの組から入れる試合数に上限を設ける（コートの範囲からはみ出さないように）
+const STRATEGIES = ['natural', 'ends', 'interleave', 'natural+cap', 'ends+cap', 'interleave+nocap'];
+export let lastCandidates = []; // 確認用：直前の日程作成で比べた候補
+
 export function placeMatches(cfg, league, ko) {
   const courts = cfg.courts;
   const minRest = cfg.minRestSlots ?? 1;
-  const lastSlot = new Map();
-  const groupLast = {};
-  const pending = [...league].sort((a, b) => a.round - b.round || a.gi - b.gi || a.idx - b.idx);
-  let s = 0;
+  // 組ごとの担当のコートの範囲の中心（コートの並び順で、組を均等に割り振る）。例：6コート・4組 → A組 0.25（A〜B）、B組 1.75（B〜C）…
+  const groupCount = Math.max(1, ...league.map((m) => m.gi + 1));
+  const center = (gi) => ((gi + 0.5) * courts) / groupCount - 0.5;
 
-  const rested = (id) => s - (lastSlot.has(id) ? lastSlot.get(id) : -99) > minRest;
-
-  while (pending.length) {
-    const chosen = [];
-    const busy = new Set();
-    for (const strict of [true, false]) {
-      if (!strict && chosen.length) break; // 休憩を確保できる試合があれば、それだけで枠を構成する
-      for (const m of pending) {
-        if (chosen.length >= courts) break;
-        if (chosen.includes(m) || busy.has(m.home_team_id) || busy.has(m.away_team_id)) continue;
-        if (strict && !(rested(m.home_team_id) && rested(m.away_team_id))) continue;
-        chosen.push(m);
-        busy.add(m.home_team_id);
-        busy.add(m.away_team_id);
+  // リーグ戦の試合を時間帯とコートに入れる（入れ方 strategy を指定して試す。試合そのものは書き換えない）
+  //  interleave：同じ節の中で組ごとに交互に選び、1つの組から入れる試合数に上限を設ける
+  //  ends：組を「A・最後の組・B・最後から2番目…」の順に選ぶ（同じ時間帯の組が左右に分かれやすい）
+  //  natural：組の順に選ぶ
+  const placeLeague = (strategy) => {
+    const lastSlot = new Map();
+    const place = new Map();
+    const G = groupCount;
+    const endsRank = new Map();
+    for (let i = 0, lo = 0, hi = G - 1; lo <= hi; i++) endsRank.set(i % 2 ? hi-- : lo++, i);
+    const order = new Map();
+    { const cnt = {}; for (const m of [...league].sort((a, b) => a.round - b.round || a.gi - b.gi || a.idx - b.idx)) { const k = `${m.round}:${m.gi}`; cnt[k] = (cnt[k] || 0) + 1; order.set(m, cnt[k]); } }
+    const base = strategy.split('+')[0];
+    const useCap = strategy === 'interleave' || strategy.endsWith('+cap');
+    const pending = [...league].sort((a, b) => a.round - b.round || (base === 'interleave' ? order.get(a) - order.get(b) : 0)
+      || (base === 'ends' ? endsRank.get(a.gi) - endsRank.get(b.gi) : a.gi - b.gi) || a.idx - b.idx);
+    let s = 0;
+    const rested = (id) => s - (lastSlot.has(id) ? lastSlot.get(id) : -99) > minRest;
+    while (pending.length) {
+      const chosen = [];
+      const busy = new Set();
+      const perGroup = {};
+      const activeGroups = new Set(pending.map((m) => m.gi)).size || 1;
+      const cap = Math.max(1, Math.ceil(courts / activeGroups));
+      const passes = useCap ? [[true, true], [true, false], [false, false]] : [[true, false], [false, false]];
+      for (const [strict, capped] of passes) {
+        if (!strict && chosen.length) break; // 休憩を確保できる試合があれば、それだけで枠を構成する
+        for (const m of pending) {
+          if (chosen.length >= courts) break;
+          if (chosen.includes(m) || busy.has(m.home_team_id) || busy.has(m.away_team_id)) continue;
+          if (strict && !(rested(m.home_team_id) && rested(m.away_team_id))) continue;
+          if (capped && (perGroup[m.gi] || 0) >= cap) continue;
+          chosen.push(m);
+          perGroup[m.gi] = (perGroup[m.gi] || 0) + 1;
+          busy.add(m.home_team_id);
+          busy.add(m.away_team_id);
+        }
       }
+      // コートの割り当て：組の順にコートの並び順を保ったまま、各試合を担当の範囲の中心に最も近いコートへ
+      // （同じ組の試合は同じコートか隣のコートに固まり、離れたコートは使わない）。並び順を保つ最適な割り当てを動的計画法で求める
+      const seq = [...chosen].sort((a, b) => center(a.gi) - center(b.gi) || a.idx - b.idx);
+      const n = seq.length;
+      const dp = Array.from({ length: n + 1 }, () => new Array(courts + 1).fill(1e9));
+      for (let j = 0; j <= courts; j++) dp[0][j] = 0;
+      for (let i = 1; i <= n; i++) {
+        for (let j = i; j <= courts; j++) dp[i][j] = Math.min(dp[i][j - 1], dp[i - 1][j - 1] + Math.abs((j - 1) - center(seq[i - 1].gi)));
+      }
+      for (let i = n, j = courts; i > 0; j--) {
+        if (dp[i][j] === dp[i][j - 1] && j - 1 >= i) continue;
+        place.set(seq[i - 1], { slot: s, court: j - 1 });
+        i--;
+      }
+      for (const m of chosen) {
+        lastSlot.set(m.home_team_id, s);
+        lastSlot.set(m.away_team_id, s);
+        pending.splice(pending.indexOf(m), 1);
+      }
+      s++;
     }
-    const used = new Set();
-    // 組とコートを対応させる（A組→1番コート…）
-    for (const m of chosen) {
-      const pref = m.gi % courts;
-      m.court = used.has(pref) ? [...Array(courts).keys()].find((c) => !used.has(c)) : pref;
-      used.add(m.court);
-      m.slot = s;
-      lastSlot.set(m.home_team_id, s);
-      lastSlot.set(m.away_team_id, s);
-      groupLast[m.group_label] = s;
-      pending.splice(pending.indexOf(m), 1);
-    }
-    s++;
+    let dist = 0;
+    for (const [m, x] of place) dist += Math.abs(x.court - center(m.gi));
+    // 休憩が足りない連戦の数
+    let viol = 0;
+    const byTeam = {};
+    for (const [m, x] of place) for (const id of [m.home_team_id, m.away_team_id]) (byTeam[id] ||= []).push(x.slot);
+    for (const list of Object.values(byTeam)) { list.sort((a, b) => a - b); for (let i = 1; i < list.length; i++) if (list[i] - list[i - 1] <= minRest) viol++; }
+    return { place, slots: s, dist, viol };
+  };
+  // ①休憩が足りない連戦が少ない → ②時間帯の数が少ない → ③担当のコートからのずれが小さい、の順で入れ方を選ぶ
+  const cands = STRATEGIES.map((k) => ({ k, ...placeLeague(k) }));
+  lastCandidates = cands.map(({ k, slots, dist, viol }) => ({ k, slots, dist: Math.round(dist * 100) / 100, viol }));
+  const best = cands.sort((a, b) => a.viol - b.viol || a.slots - b.slots || a.dist - b.dist)[0];
+  const groupLast = {};
+  for (const [m, x] of best.place) {
+    m.slot = x.slot;
+    m.court = x.court;
+    groupLast[m.group_label] = Math.max(groupLast[m.group_label] ?? -1, x.slot);
   }
+  const s = best.slots;
 
   const leagueEnd = s;
   const usage = {};
