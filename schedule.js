@@ -235,12 +235,16 @@ export function placeMatches(cfg, league, ko) {
     const byTeam = {};
     for (const [m, x] of place) for (const id of [m.home_team_id, m.away_team_id]) (byTeam[id] ||= []).push(x.slot);
     for (const list of Object.values(byTeam)) { list.sort((a, b) => a - b); for (let i = 1; i < list.length; i++) if (list[i] - list[i - 1] <= minRest) viol++; }
-    return { place, slots: s, dist, viol };
+    // 各節が終わる時間帯の合計（小さいほど、節が順番どおり早く終わる）
+    const roundEnd = {};
+    for (const [m, x] of place) roundEnd[m.round] = Math.max(roundEnd[m.round] ?? -1, x.slot);
+    const late = Object.values(roundEnd).reduce((a, b) => a + b, 0);
+    return { place, slots: s, dist, viol, late };
   };
-  // ①休憩が足りない連戦が少ない → ②時間帯の数が少ない → ③担当のコートからのずれが小さい、の順で入れ方を選ぶ
   const cands = STRATEGIES.map((k) => ({ k, ...placeLeague(k) }));
-  lastCandidates = cands.map(({ k, slots, dist, viol }) => ({ k, slots, dist: Math.round(dist * 100) / 100, viol }));
-  const best = cands.sort((a, b) => a.viol - b.viol || a.slots - b.slots || a.dist - b.dist)[0];
+  lastCandidates = cands.map(({ k, slots, dist, viol, late }) => ({ k, slots, dist: Math.round(dist * 100) / 100, viol, late }));
+  // ①休憩が足りない連戦が少ない → ②時間帯の数が少ない → ③各節がなるべく早く終わる → ④担当のコートからのずれが小さい
+  const best = cands.sort((a, b) => a.viol - b.viol || a.slots - b.slots || a.late - b.late || a.dist - b.dist)[0];
   const groupLast = {};
   for (const [m, x] of best.place) {
     m.slot = x.slot;
