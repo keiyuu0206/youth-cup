@@ -989,3 +989,32 @@ fieldset.lockable:disabled * { cursor: not-allowed; }
 .sc-pm.plus { background: var(--turf); border-color: var(--turf); color: #fff; }
 .sc-pk { display: grid; gap: 6px; padding: 10px; border-radius: 12px; background: var(--surface-2); }
 .sc-foot { text-align: center; margin-top: 16px; }
+
+/* ===== 1まとまり1枚（A4縦・自動で収める） ===== */
+.ds-host { position: absolute; left: -10000px; top: 0; width: 300mm; }
+.ds-port { width: 190mm; height: 274mm; }
+.ds-inner > * + * { margin-top: 3mm; }
+.ds-inner .pd-sec { margin-bottom: 0; }
+.ds-run { display: flex; justify-content: space-between; gap: 6mm; font-size: 8pt; color: #555; border-bottom: 0.4mm solid #0f7b4a; padding-bottom: 1mm; margin-bottom: 2mm; }
+.ds-run span:last-child { font-weight: 700; color: #0a4f31; }
+/* トーナメント：本戦の右に3位決定戦・5位決定戦などを並べる（縦に並べない） */
+.ds-bracket section.bk-target > div:last-child { display: flex; align-items: flex-start; gap: 8mm; }
+.ds-bracket .tree-others { margin-top: 0; }
+.ds-bracket .scroll-hint, .ds-bracket .section-title, .ds-bracket .bk-nav { display: none; }
+.ds-bracket .tree-scroll { overflow: visible; }
+.ds-mini { margin-top: 3mm; }
+.ds-mini td.r { text-align: right; }
+/* プレビュー */
+.dsv-pages { display: grid; justify-items: center; gap: 26px; }
+.dsv-page { display: grid; gap: 6px; }
+.dsv-label { color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: baseline; gap: 4px; }
+.dsv-label span { font-weight: 600; opacity: 0.85; }
+.dsv-zoom { margin-left: auto; background: rgba(255, 255, 255, 0.18); padding: 1px 8px; border-radius: 999px; }
+.dsv-zoom.small { background: #e5484d; opacity: 1 !important; }
+.dsv-page > .ps-sheet { background: #fff; color: #111; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35); outline: 10mm solid #fff; margin: 10mm; }
+
+.ds-bracket.stack section.bk-target > div:last-child { display: block; }
+.ds-bracket.stack .tree-others { margin-top: 5mm; display: flex; flex-wrap: wrap; gap: 6mm 10mm; }
+.ds-bracket.only-main .tree-others { display: none; }
+.ds-bracket.only-others section.bk-target > div:last-child > .tree-scroll { display: none; }
+.ds-bracket.only-others .tree-others { display: flex; flex-wrap: wrap; gap: 6mm 10mm; }

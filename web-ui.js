@@ -48,9 +48,12 @@ export function modal({ title, content, actions = [], onClose }) {
     actions.length ? h('div', { class: 'actions' }, actions.map((a) =>
       h('button', { class: `btn ${a.kind || ''}`, type: 'button', onclick: async (e) => {
         if (a.onClick) {
-          e.currentTarget.disabled = true;
+          // 二重送信を防ぐため処理中は押せなくし、終わったら必ず戻す。
+          // e.currentTarget は処理の途中（await の後）で消えるので、先にボタンを覚えておく
+          const btn = e.currentTarget;
+          btn.disabled = true;
           try { const keep = await a.onClick(close); if (keep !== true) close(); }
-          finally { if (e.currentTarget) e.currentTarget.disabled = false; }
+          finally { btn.disabled = false; }
         } else close();
       } }, a.label))) : null);
   const back = h('div', { class: 'modal-back', onclick: (e) => { if (e.target === back) close(); } }, box);
@@ -237,4 +240,11 @@ export function resizeBanner(file, maxW = 1200, maxH = 600) {
     img.onerror = () => reject(new Error('画像を読み込めませんでした'));
     img.src = url;
   });
+}
+
+// ポップアップ（中央の入力欄・下から出る入力欄）がすべて閉じられるように
+export function closeOverlays() {
+  if (!document.querySelector('.modal-back, .sheet-back')) return false;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  return true;
 }

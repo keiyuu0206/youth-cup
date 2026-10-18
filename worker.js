@@ -3,6 +3,7 @@
 import INDEX_HTML from './index.html';
 import APP_CSS from './app.css';
 import MANIFEST from './manifest.webmanifest';
+import { FAVICON_SVG, ICONS } from './icons.js';
 import WEB_APP from './web-app.js';
 import WEB_API from './web-api.js';
 import WEB_UI from './web-ui.js';
@@ -457,6 +458,13 @@ async function etagOf(path, body) {
 }
 
 async function serveStatic(req, url) {
+  // アイコン（ブックマーク・ホーム画面・タブ）。変わらないので長くキャッシュしてよい
+  if (url.pathname === '/favicon.svg') return new Response(FAVICON_SVG, { headers: { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'public, max-age=86400' } });
+  const iconPath = url.pathname === '/favicon.ico' ? '/favicon-32.png' : url.pathname;
+  if (ICONS[iconPath]) {
+    const bin = Uint8Array.from(atob(ICONS[iconPath]), (c) => c.charCodeAt(0));
+    return new Response(bin, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' } });
+  }
   const file = STATIC[url.pathname];
   const [body, type] = file || [INDEX_HTML, 'text/html; charset=utf-8'];
   const key = file ? url.pathname : '/index.html';

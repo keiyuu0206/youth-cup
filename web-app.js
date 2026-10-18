@@ -1,8 +1,12 @@
-import { h, mount } from './web-ui.js';
+import { h, mount, closeOverlays } from './web-ui.js';
 
 const root = document.getElementById('app');
 
+// 今表示している画面のURL（ポップアップを開いたまま「戻る」を押されたときに、元のURLに戻すため）
+let shownUrl = location.href;
+
 async function route() {
+  shownUrl = location.href;
   const path = location.pathname.replace(/\/+$/, '') || '/';
   document.body.classList.remove('has-bottom-nav');
   const navigate = (to) => { history.pushState(null, '', to); route(); window.scrollTo(0, 0); };
@@ -45,5 +49,9 @@ function home() {
       h('a', { class: 'btn btn-primary', href: '/admin' }, '大会運営者のログイン')));
 }
 
-window.addEventListener('popstate', route);
+// 「戻る」：ポップアップが開いていれば閉じるだけにして、裏の画面はそのままにする（URLも元に戻す）
+window.addEventListener('popstate', () => {
+  if (closeOverlays()) { history.pushState(null, '', shownUrl); return; }
+  route();
+});
 route();
