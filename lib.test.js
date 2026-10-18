@@ -544,3 +544,41 @@ test('コートの割り当て: 組ごとに担当のコート付近にまとま
   // 4組・4面：1組1面
   assert.deepEqual(span(4, 4, 24), { A: [0, 0], B: [1, 1], C: [2, 2], D: [3, 3] });
 });
+
+// ---- 予選と決勝トーナメントの間の時間 ----
+test('予選と決勝の間: 同じ日に続くときだけ、決勝の最初の枠の前に指定の時間をあける', () => {
+  const base = { format: 'league_knockout', groups: 2, courts: 4, halfMinutes: 10, halftimeMinutes: 0, periods: 1, intervalMinutes: 5, startTime: 540,
+    lunchEnabled: false, minRestSlots: 0, knockoutPlan: { type: 'top', k: 2, mode: 'top3' } };
+  const ts = teams(8).map((t, i) => ({ ...t, group_label: 'AB'[i % 2] }));
+  const firstKoGap = (cfg) => {
+    const { matches } = generateCategory(normalizeConfig(cfg), ts);
+    const lastLeague = Math.max(...matches.filter((m) => m.stage === 'league').map((m) => m.start_min));
+    const firstKo = Math.min(...matches.filter((m) => m.stage === 'knockout').map((m) => m.start_min));
+    return firstKo - lastLeague;
+  };
+  assert.equal(firstKoGap(base), 15); // 試合10分＋間隔5分
+  assert.equal(firstKoGap({ ...base, koGapMinutes: 30 }), 45); // ＋30分
+  // 2日開催で決勝が翌日の朝から：あけない（2日目の開始時刻どおり）
+  const two = { ...base, koGapMinutes: 30, dayDates: ['2026-11-21', '2026-11-22'], dayBreaks: ['L3'], extraDays: [{ startTime: 510 }] };
+  const { matches } = generateCategory(normalizeConfig(two), ts);
+  const day2First = Math.min(...matches.filter((m) => m.stage === 'knockout').map((m) => m.start_min));
+  assert.equal(day2First, 510);
+});
+
+// ---- 1日目を時刻で区切る ----
+test('時刻で区切る: 終了時刻までに終わる試合だけ1日目に入り、残りは2日目に回る', () => {
+  const ts = teams(24).map((t, i) => ({ ...t, group_label: 'ABCD'[i % 4] }));
+  for (const end of [720, 900]) {
+    const cfg = normalizeConfig({ format: 'league_knockout', groups: 4, courts: 6, halfMinutes: 12, halftimeMinutes: 3, intervalMinutes: 8, startTime: 540,
+      knockoutPlan: { type: 'split3', k: 2, m: 2, mode: 'top3' }, dayDates: ['2026-11-21', '2026-11-22'], dayBreaks: [`T${end}`], extraDays: [{ startTime: 510 }] });
+    const { matches, dayBreakSlots } = generateCategory(cfg, ts);
+    const day1 = matches.filter((m) => m.slot < dayBreakSlots[0]);
+    const day2 = matches.filter((m) => m.slot >= dayBreakSlots[0]);
+    assert.ok(day1.length > 0 && day2.length > 0);
+    assert.ok(Math.max(...day1.map((m) => m.start_min)) + 27 <= end, `${end}: 1日目の最後の試合が終了時刻を過ぎている`);
+    assert.equal(Math.min(...day2.map((m) => m.start_min)), 510);
+    const ws = scheduleWarnings({ ...cfg, dayBreakSlots }, matches.map((m, i) => ({ ...m, id: `m${i}` })));
+    assert.equal(ws.filter((w) => w.level === 'error').length, 0);
+    assert.equal(matches.length, 84);
+  }
+});

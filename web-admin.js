@@ -299,16 +299,18 @@ function dayPanel(f, cat, t, redraw) {
   }));
   f.dayBreaks = Array.from({ length: n - 1 }, (_, i) => {
     const cur = f.dayBreaks && f.dayBreaks[i];
-    if (cur && keys.includes(cur)) return cur;
+    if (cur && (keys.includes(cur) || /^T\d+$/.test(cur))) return cur; // 'T900' = 15:00 までに終わる試合まで
     const leagueEnd = keys.filter((k) => k[0] === 'L').at(-1);
     if (n === 2 && f.format === 'league_knockout' && leagueEnd) return leagueEnd;
     return keys[Math.min(keys.length - 1, Math.max(0, Math.round(((i + 1) * keys.length) / n) - 1))] || '';
   });
   for (let i = 1; i < f.dayBreaks.length; i++) {
+    if (/^T/.test(f.dayBreaks[i]) || /^T/.test(f.dayBreaks[i - 1])) continue;
     const prev = keys.indexOf(f.dayBreaks[i - 1]);
     if (keys.indexOf(f.dayBreaks[i]) <= prev && keys[prev + 1] && !(f._touched || {})[i]) f.dayBreaks[i] = keys[prev + 1];
   }
-  const order = f.dayBreaks.map((k) => keys.indexOf(k));
+  // 節・段で区切る日どうしの順番だけを確かめる（時刻で区切る日は順番の確認の対象外）
+  const order = f.dayBreaks.filter((k) => !/^T/.test(k)).map((k) => keys.indexOf(k));
   const bad = order.some((x, i) => x < 0 || (i > 0 && x <= order[i - 1]));
   const tooFew = keys.length < n - 1;
 
@@ -342,8 +344,17 @@ function dayPanel(f, cat, t, redraw) {
           oninput: (e) => { f.extraDays[d - 1].intervalMinutes = e.target.value === '' ? null : Number(e.target.value); } }))),
       d < n - 1 && opts.length ? h('div', { class: 'grid-form', style: { marginTop: '8px' } },
         h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, `${d + 1}日目はどこまで`),
-          h('select', { onchange: (e) => { f.dayBreaks[d] = e.target.value; f._touched = { ...(f._touched || {}), [d]: true }; redraw(); } },
-            opts.map(([k, l]) => h('option', { value: k, selected: f.dayBreaks[d] === k }, l))))) : null))) : null,
+          h('select', { onchange: (e) => {
+            // 「時刻で区切る」を選んだら、終了時刻は15:00から（前に入れていた時刻があればそれ）
+            f.dayBreaks[d] = e.target.value === 'T' ? (/^T\d+$/.test(f.dayBreaks[d]) ? f.dayBreaks[d] : 'T900') : e.target.value;
+            f._touched = { ...(f._touched || {}), [d]: true }; redraw();
+          } },
+            opts.map(([k, l]) => h('option', { value: k, selected: f.dayBreaks[d] === k }, l)),
+            h('option', { value: 'T', selected: /^T/.test(f.dayBreaks[d] || '') }, '時刻で区切る（終了時刻を指定）'))),
+        /^T\d+$/.test(f.dayBreaks[d] || '') ? h('label', { class: 'field' }, h('span', null, `${d + 1}日目の終了時刻`),
+          h('input', { type: 'time', value: toHHMM(Number(f.dayBreaks[d].slice(1))), oninput: (e) => { if (e.target.value) f.dayBreaks[d] = `T${fromHHMM(e.target.value)}`; } })) : null,
+        /^T\d+$/.test(f.dayBreaks[d] || '') ? h('p', { class: 'muted small', style: { margin: 0, gridColumn: '1 / -1' } },
+          `この時刻までに終わる試合を${d + 1}日目に入れ、残りの試合は${d + 2}日目に回します（節の途中で区切れることもあります）。`) : null) : null))) : null,
     tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, `いまの形式とチーム数では、${n}日に分けるだけの区切りがありません。試合をする日を減らしてください。`) : null,
     bad && !tooFew && n > 1 ? h('p', { class: 'notice error', style: { marginTop: '12px' } }, '区切りは、1日目 → 2日目 … の順に後ろの段階になるように選んでください。') : null,
     h('p', { class: 'muted small' }, '開催日や区切りを変えたときは「組み分け・日程」で日程を作り直してください。'));
@@ -1139,7 +1150,12 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, '決勝の試合の形'), h('select', { onchange: (e) => { k.periods = Number(e.target.value); draw(); } },
             [[2, '前後半'], [1, 'ハーフなし'], [3, '3ピリオド']].map(([v, l]) => h('option', { value: v, selected: k.periods === v }, l)))),
           kn('halfMinutes', k.periods === 1 ? '決勝の試合時間（分）' : k.periods === 2 ? '決勝の前後半（各・分）' : '決勝の1ピリオド（分）', 90),
-          k.periods > 1 ? kn('halftimeMinutes', k.periods === 2 ? '決勝のハーフタイム（分）' : '決勝のピリオド間の休憩（分）', 30) : null) : null);
+          k.periods > 1 ? kn('halftimeMinutes', k.periods === 2 ? '決勝のハーフタイム（分）' : '決勝のピリオド間の休憩（分）', 30) : null) : null,
+        // 予選と決勝トーナメントの間にあける時間（同じ日に続くときだけ）
+        h('div', { class: 'grid-form', style: { marginTop: '10px' } },
+          h('label', { class: 'field' }, h('span', null, '予選と決勝トーナメントの間（分）'),
+            h('input', { type: 'number', min: 0, max: 240, inputmode: 'numeric', value: f.koGapMinutes || 0, oninput: (e) => { f.koGapMinutes = Math.max(0, Number(e.target.value) || 0); } }))),
+        h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '同じ日に予選の後に決勝トーナメントが続くとき、最後の予選の試合と最初の決勝の試合の間に、試合間隔に加えてこの時間をあけます（組み合わせの確認や会場の切り替えのため）。決勝トーナメントが翌日の朝から始まる場合はあけません。'));
     };
     drawSummary();
 

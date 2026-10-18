@@ -51,6 +51,7 @@ export function defaultConfig() {
     halfMinutes: 15,
     halftimeMinutes: 5,
     intervalMinutes: 5,
+    koGapMinutes: 0, // 同じ日に予選の後に決勝トーナメントが続くとき、その間にあける時間（試合間隔に加えて）
     lunchEnabled: true,
     lunchStart: 720, // 12:00 を過ぎる試合は昼休憩の後に回す
     lunchMinutes: 45,
@@ -91,6 +92,7 @@ export function normalizeConfig(c) {
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }
+  out.koGapMinutes = Math.max(0, Math.min(240, Number(out.koGapMinutes) || 0));
   out.periods = [1, 2, 3].includes(Number(out.periods)) ? Number(out.periods) : 2;
   const kt = out.koTiming && typeof out.koTiming === 'object' ? out.koTiming : {};
   out.koTiming = {
@@ -135,20 +137,23 @@ export function courtName(c, i) {
 
 // 枠番号ごとの開始時刻。lunchStart をまたぐ試合は昼休憩の後に回す。
 // 枠ごとの開始時刻。lenOf(i) で枠ごとに試合の長さを変えられる（予選と決勝で時間が違う場合）
-export function slotTimes(c, n, lenOf = () => matchLength(c)) {
+// gapBefore(i)：i 番目の枠の前に、試合間隔に加えてあける時間（予選と決勝トーナメントの間など）
+export function slotTimes(c, n, lenOf = () => matchLength(c), gapBefore = () => 0) {
   const out = [];
   let t = c.startTime;
   let lunchDone = !c.lunchEnabled || c.lunchMinutes <= 0;
   let session = 'am';
   for (let i = 0; i < n; i++) {
     const len = lenOf(i);
-    if (!lunchDone && t + len > c.lunchStart) {
+    const gap = i > 0 ? gapBefore(i) : 0;
+    if (!lunchDone && t + gap + len > c.lunchStart) {
       lunchDone = true;
       if (i > 0) {
-        t = out[i - 1].start + lenOf(i - 1) + c.lunchMinutes;
+        // 昼休憩と「試合間隔＋あける時間」の長い方をとる
+        t = Math.max(out[i - 1].start + lenOf(i - 1) + c.lunchMinutes, t + gap);
         session = 'pm';
       }
-    }
+    } else t += gap;
     out.push({ start: t, session });
     t += len + c.intervalMinutes;
   }

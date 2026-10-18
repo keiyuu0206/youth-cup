@@ -90,6 +90,54 @@ export function generateCategory(cfg, teams, koOrder) {
   const all = [...league, ...ko];
   const dayBreakSlots = [];
   let offset = 0;
+
+  // 時刻で区切る日（'T900' = 15:00 までに終わる試合までをその日に）があるときは、1日ずつ順に決める
+  const isTimeKey = (k) => /^T\d+$/.test(String(k || ''));
+  if (cfg.dayCount > 1 && (cfg.dayBreaks || []).slice(0, cfg.dayCount - 1).some(isTimeKey)) {
+    let restL = [...league];
+    let restK = [...ko];
+    for (let d = 0; d < cfg.dayCount; d++) {
+      const key = (cfg.dayBreaks || [])[d];
+      const last = d === cfg.dayCount - 1;
+      let dl = restL;
+      let dk = restK;
+      // 節・段で区切る日は、その区切りまでの試合だけ
+      if (!last && key && !isTimeKey(key)) {
+        const u = unitKey(key);
+        if (Number.isFinite(u)) { dl = restL.filter((m) => unitOf(m) <= u); dk = restK.filter((m) => unitOf(m) <= u); }
+      }
+      if (d > 0) dayBreakSlots.push(offset);
+      if (!dl.length && !dk.length) continue;
+      const dcfg = dayConfig(cfg, d);
+      placeMatches(dcfg, dl, dk);
+      let dayMatches = [...dl, ...dk];
+      dropRestAroundLunch(dcfg, dayMatches);
+      if (!last && isTimeKey(key)) {
+        // 残りの試合をすべてこの日に並べて時刻を計算し、終了時刻までに終わる時間帯までをこの日に入れる
+        const limit = Number(String(key).slice(1));
+        const n = dayMatches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
+        const lenOf = lenOfSlots(dcfg, dayMatches);
+        const times = slotTimes(dcfg, n, lenOf, gapOfSlots(dcfg, dayMatches));
+        let cut = times.findIndex((t, i) => t.start + lenOf(i) > limit);
+        if (cut === -1) cut = n;
+        if (cut === 0) {
+          extraWarnings.push({ level: 'warn', ids: [], text: `${d + 1}日目の終了時刻（${Math.floor(limit / 60)}:${String(limit % 60).padStart(2, '0')}）までに終わる試合がないため、最初の時間帯だけを${d + 1}日目にしました` });
+          cut = 1;
+        }
+        dayMatches = dayMatches.filter((m) => m.slot < cut);
+      }
+      const inDay = new Set(dayMatches);
+      restL = restL.filter((m) => !inDay.has(m));
+      restK = restK.filter((m) => !inDay.has(m));
+      const used = dayMatches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
+      for (const m of dayMatches) m.slot += offset;
+      offset += used;
+    }
+    applyTimes({ ...cfg, dayBreakSlots }, all);
+    for (const m of league) m.label = `${m.group_label}組 第${m.round}節`;
+    return { matches: all, dayBreakSlots, warnings: extraWarnings };
+  }
+
   for (let d = 0; d <= breaks.length; d++) {
     const dl = league.filter((m) => dayIdx(m) === d);
     const dk = ko.filter((m) => dayIdx(m) === d);
@@ -250,6 +298,18 @@ export function placeMatches(cfg, league, ko) {
 }
 
 // 枠の中に決勝トーナメントの試合があれば、その長さを使う
+// 予選と決勝トーナメントの間：同じ日に予選の後に決勝トーナメントが続くとき、決勝の最初の枠の前に koGapMinutes をあける
+function gapOfSlots(cfg, matches, base = 0) {
+  const gapMin = cfg.format === 'league_knockout' ? Number(cfg.koGapMinutes) || 0 : 0;
+  if (!gapMin) return () => 0;
+  const league = matches.filter((m) => m.stage === 'league').map((m) => m.slot - base);
+  const ko = matches.filter((m) => m.stage === 'knockout').map((m) => m.slot - base);
+  if (!league.length || !ko.length) return () => 0;
+  const lastLeague = Math.max(...league);
+  const firstKo = Math.min(...ko.filter((i) => i > lastLeague));
+  return (i) => (i === firstKo ? gapMin : 0);
+}
+
 function lenOfSlots(cfg, matches, base = 0) {
   const ko = new Set(matches.filter((m) => m.stage === 'knockout').map((m) => m.slot - base));
   const koLen = matchLengthFor(cfg, { stage: 'knockout' });
@@ -261,6 +321,7 @@ function lenOfSlots(cfg, matches, base = 0) {
 export function dropRestAroundLunch(cfg, matches) {
   for (let guard = 0; guard < 4; guard++) {
     const n = matches.reduce((mx, m) => Math.max(mx, m.slot), -1) + 1;
+    // 予選と決勝の間にあける時間は、これまでの日程に上乗せするものなので、ここ（昼休憩の前後の空き枠を詰める判断）には含めない
     const times = slotTimes(cfg, n, lenOfSlots(cfg, matches));
     const used = new Set(matches.map((m) => m.slot));
     const firstPm = times.findIndex((t) => t.session === 'pm');
@@ -279,7 +340,7 @@ export function applyTimes(cfg, matches) {
   for (const [d, list] of Object.entries(byDay)) {
     const start = bounds[d] || 0;
     const n = list.reduce((mx, m) => Math.max(mx, m.slot - start), -1) + 1;
-    const times = slotTimes(dayConfig(cfg, Number(d)), n, lenOfSlots(cfg, list, start));
+    const times = slotTimes(dayConfig(cfg, Number(d)), n, lenOfSlots(cfg, list, start), gapOfSlots(cfg, list, start));
     for (const m of list) {
       const t = times[m.slot - start];
       m.start_min = t.start;

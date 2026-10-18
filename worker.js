@@ -863,7 +863,7 @@ route('POST', '/api/admin/tournaments/:id/categories', async ({ req, db, params,
   return json({ id });
 }, 'admin');
 
-const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
+const TIMING_KEYS = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'koGapMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
 
 route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
