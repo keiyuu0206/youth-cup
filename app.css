@@ -1001,3 +1001,8 @@ fieldset.lockable:disabled * { cursor: not-allowed; }
 .pd-court-wrap { break-inside: avoid; }
 .ps-court .pd-court td, .ps-court .pd-court th { font-size: 11pt; padding: 2.2mm 1.6mm; }
 .ps-court .pd-court td.sm { font-size: 9pt; }
+
+/* 閲覧専用アカウント：操作はできないが、読みやすさのため薄くしない */
+fieldset.lockable.ro:disabled { opacity: 1; }
+fieldset.lockable.ro:disabled * { cursor: default; }
+.lock-banner.viewer { background: color-mix(in srgb, #1d5fbf 10%, var(--surface)); border-color: color-mix(in srgb, #1d5fbf 50%, var(--line)); }

@@ -516,6 +516,12 @@ export default {
           user = await currentUser(req, env, env.DB);
           if (!user) fail(401, 'ログインしてください');
           if (r.auth === 'admin' && user.role === 'scorer') fail(403, 'スコア管理者は、結果の承認だけを行えます');
+          // 閲覧専用アカウント：全体管理者と同じ範囲を見られるが、変更は自分のパスワードだけ。アカウント情報は見せない
+          if (user.role === 'viewer') {
+            if (req.method !== 'GET' && url.pathname !== '/api/admin/password') fail(403, '閲覧専用のアカウントでは変更できません');
+            if (/^\/api\/admin\/(users|scorers)(\/|$)/.test(url.pathname)) fail(403, '閲覧専用のアカウントでは表示できません');
+            user = { ...user, role: 'super', viewer: true };
+          }
         }
         return await r.handler({ req, env, db: env.DB, url, params, user });
       }
@@ -682,7 +688,8 @@ route('POST', '/api/admin/users', async ({ req, env, db, user }) => {
   const name = clip(b.name, 60);
   if (!name) fail(400, '名前を入力してください');
   const h = await hashPassword(checkPassword(b.password));
-  const role = b.role === 'super' ? 'super' : 'region';
+  // region：地域管理者／viewer：閲覧専用（設定の確認だけ）／super：全体管理者
+  const role = b.role === 'super' ? 'super' : b.role === 'viewer' ? 'viewer' : 'region';
   const id = uid();
   await db.prepare('INSERT INTO users (id, login_id, name, region, role, pass_hash, pass_salt, iterations, active, session_ver, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)')
     .bind(id, loginId, name, clip(b.region, 40) || null, role, h.hash, h.salt, h.iterations, now(), now()).run();
@@ -704,7 +711,7 @@ route('PATCH', '/api/admin/users/:uid', async ({ req, db, params, user }) => {
   await db.prepare('UPDATE users SET name = ?, region = ?, role = ?, active = ?, pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = ?, updated_at = ? WHERE id = ?').bind(
     b.name !== undefined ? clip(b.name, 60) || u.name : u.name,
     b.region !== undefined ? clip(b.region, 40) || null : u.region,
-    b.role === 'super' || b.role === 'region' ? b.role : u.role,
+    ['super', 'region', 'viewer'].includes(b.role) && u.role !== 'scorer' ? b.role : u.role,
     active, hash, salt, iter, ver, now(), u.id).run();
   return json({ ok: true });
 }, 'admin');
