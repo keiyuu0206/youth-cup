@@ -1006,3 +1006,12 @@ fieldset.lockable:disabled * { cursor: not-allowed; }
 fieldset.lockable.ro:disabled { opacity: 1; }
 fieldset.lockable.ro:disabled * { cursor: default; }
 .lock-banner.viewer { background: color-mix(in srgb, #1d5fbf 10%, var(--surface)); border-color: color-mix(in srgb, #1d5fbf 50%, var(--line)); }
+
+/* 利用マニュアルへのリンク */
+.manual-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; margin: 10px 0 0; font-size: 0.85rem; }
+.manual-link { color: var(--turf); font-weight: 700; text-decoration: none; }
+.manual-link:hover { text-decoration: underline; }
+.manual-list { display: grid; gap: 8px; }
+.manual-list a { display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--line); text-decoration: none; color: var(--ink); background: var(--surface); }
+.manual-list a:hover { border-color: var(--turf); }
+.manual-list small { color: var(--ink-2); }

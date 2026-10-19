@@ -1,6 +1,6 @@
 import { api } from './web-api.js';
 import { openPrintDialog, printParking } from './web-print.js';
-import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin } from './web-ui.js';
+import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
 export async function viewer(root, slug) {
@@ -98,7 +98,8 @@ export async function viewer(root, slug) {
           if (team) return printParking(t, cat, team);
           openTeamPicker(cat, null, (tid) => { if (!tid) return; store.set(myKey(), tid); render(); printParking(t, cat, cat.teams.find((x) => x.id === tid)); });
         } }, icon('car'), '駐車券を出力') : null),
-      h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })));
+      h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })),
+      h('p', { class: 'manual-row' }, manualLink('parents', '使い方（保護者マニュアル）')));
 
     const pickTeam = () => openTeamPicker(cat, ctx.myTeam, (id) => {
       store.set(myKey(), id);

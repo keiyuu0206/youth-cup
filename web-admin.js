@@ -2,7 +2,7 @@ import { api, ApiError } from './web-api.js';
 const apiBase = api;
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
@@ -380,6 +380,19 @@ export async function admin(root, path, navigate) {
   return listView(root, navigate);
 }
 
+// マニュアルの一覧（権限に合わせて並べる）
+function openManuals() {
+  const keys = isSuperUser() ? ['organizer', 'superadmin', 'scorer', 'team', 'parents']
+    : isViewer() ? ['organizer', 'parents'] : ['organizer', 'scorer', 'team', 'parents'];
+  modal({
+    title: '利用マニュアル（PDF）',
+    content: h('div', { class: 'manual-list' }, keys.map((k) => h('a', { href: MANUALS[k].href, target: '_blank', rel: 'noopener' },
+      h('strong', null, '📖 ', MANUALS[k].title), h('small', null, MANUALS[k].desc))),
+      h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, 'チーム関係者・スコア管理者・保護者のマニュアルは、それぞれの方に案内するときにもお使いください。')),
+    actions: [{ label: '閉じる', kind: 'btn-ghost' }],
+  });
+}
+
 function adminHeader(title, navigate, back) {
   const ghost = { background: 'transparent', color: '#fff', borderColor: 'rgba(255,255,255,0.7)' };
   return h('header', { class: 'site-head no-print' }, h('div', { class: 'wrap wide' },
@@ -389,6 +402,7 @@ function adminHeader(title, navigate, back) {
     ME ? h('span', { class: 'me-chip', title: `ログインID：${ME.login_id}` }, ME.role === 'super' ? '全体管理者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
     isSuperUser() ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: () => navigate('/admin/accounts') }, 'アカウント管理') : null,
     ME && !isViewer() ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: () => navigate('/admin/scorers') }, 'スコア管理者') : null,
+    ME ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: openManuals }, 'マニュアル') : null,
     ME && ME.id !== 'root' ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: changePassword }, 'パスワード変更') : null,
     h('button', { class: 'btn btn-sm', type: 'button', style: ghost,
       onclick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } }, 'ログアウト')));
@@ -429,7 +443,8 @@ function loginView(root, onDone) {
     h('label', { class: 'field' }, h('span', null, 'ログインID'), id),
     h('label', { class: 'field' }, h('span', null, 'パスワード'), pw), err,
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'ログイン'),
-    h('p', { class: 'muted small', style: { margin: 0 } }, 'IDとパスワードは全体管理者から発行されます。わからない場合は全体管理者にお問い合わせください。')));
+    h('p', { class: 'muted small', style: { margin: 0 } }, 'IDとパスワードは全体管理者から発行されます。わからない場合は全体管理者にお問い合わせください。'),
+    h('p', { class: 'manual-row', style: { margin: 0 } }, manualLink('organizer', '大会管理者マニュアル'), manualLink('scorer', 'スコア管理者マニュアル'))));
   (last ? pw : id).focus();
 }
 

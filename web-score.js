@@ -1,6 +1,6 @@
 // スコア管理者の画面：結果の承認だけを行う（主にスマートフォン）
 import { api } from './web-api.js';
-import { h, mount, modal, confirmDialog, toast, run, poller, toHHMM, formatDate, sheet, store, formatUpdated } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, poller, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
@@ -11,6 +11,7 @@ export async function scoreApp(root, me) {
   const header = () => h('header', { class: 'site-head sc-head' }, h('div', { class: 'wrap' },
     h('div', { class: 'sc-who' }, h('strong', null, '結果の承認'), h('small', null, `${me.name}（${me.region || me.parentName || ''}）`)),
     h('span', { class: 'spacer' }),
+    h('a', { class: 'sc-mini', href: MANUALS.scorer.href, target: '_blank', rel: 'noopener', style: { textDecoration: 'none' } }, '使い方'),
     h('button', { class: 'sc-mini', type: 'button', onclick: changePassword }, 'パスワード変更'),
     h('button', { class: 'sc-mini', type: 'button', onclick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } }, 'ログアウト')));
 
