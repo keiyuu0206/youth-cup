@@ -14,5 +14,7 @@
       "database_id": "0addbc7a-3e31-4187-8d98-5e750780661e"
     }
   ],
+  // 利用マニュアル（PDF）を manuals フォルダから配信する（/INFINEX_manual_parents.pdf など）
+  "assets": { "directory": "./manuals" },
   "observability": { "enabled": true }
 }
