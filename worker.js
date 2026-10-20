@@ -118,6 +118,8 @@ async function ensureSchema(db) {
   // スコア管理者：発行した管理者（parent_id）と担当する大会（scope：JSON。空ならすべて）
   await addCol('users', 'parent_id', 'TEXT');
   await addCol('users', 'scope', 'TEXT');
+  // 全体管理者の大会を地域管理者に共有（'all' = すべての地域管理者、["ユーザーID", ...] = 選んだ地域管理者）
+  await addCol('tournaments', 'shared_with', 'TEXT');
   schemaChecked = true;
 }
 
@@ -217,6 +219,22 @@ async function getTournament(db, id, user) {
   const t = await db.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first();
   if (!t || !canAccess(user, t)) fail(404, '大会が見つかりません');
   return t;
+}
+
+// 共有：地域管理者は、全体管理者から共有された大会を「閲覧とコピー」だけできる
+const sharedWith = (t) => { try { return JSON.parse(t.shared_with || 'null'); } catch { return null; } };
+const isSharedTo = (user, t) => {
+  if (!user || user.role !== 'region') return false;
+  const s = sharedWith(t);
+  return s === 'all' || (Array.isArray(s) && s.includes(user.id));
+};
+// 閲覧用の取得（自分の大会に加えて、共有された大会も。共有された大会には readonly を付ける）
+async function getTournamentForRead(db, id, user) {
+  const t = await db.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first();
+  if (!t) fail(404, '大会が見つかりません');
+  if (canAccess(user, t)) return { ...t, readonly: false };
+  if (isSharedTo(user, t)) return { ...t, readonly: true };
+  fail(404, '大会が見つかりません');
 }
 
 async function getTournamentBySlug(db, slug) {
@@ -464,6 +482,15 @@ async function serveStatic(req, url) {
   if (ICONS[iconPath]) {
     const bin = Uint8Array.from(atob(ICONS[iconPath]), (c) => c.charCodeAt(0));
     return new Response(bin, { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' } });
+  }
+  if (/^\/INFINEX_manual_[a-z]+\.pdf$/.test(url.pathname)) {
+    return new Response(`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>マニュアルが見つかりません</title>
+<body style="font-family:sans-serif;max-width:640px;margin:40px auto;padding:0 20px;line-height:1.8"><h1 style="font-size:20px">マニュアルのファイルが見つかりません</h1>
+<p>マニュアル（PDF）が、まだサーバーに配置されていないようです。管理者の方は、次の2点を確認してください。</p>
+<ol><li>GitHub のリポジトリに <b>manuals</b> フォルダがあり、その中に INFINEX_manual_〜.pdf の5つのファイルがあること</li>
+<li><b>wrangler.jsonc</b> に <code>"assets": { "directory": "./manuals" },</code> の1行があること</li></ol>
+<p>確認・修正の後、Cloudflare のデプロイが終わると開けるようになります。</p><p><a href="/admin">管理画面に戻る</a></p></body></html>`,
+      { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...SECURITY_HEADERS } });
   }
   const file = STATIC[url.pathname];
   const [body, type] = file || [INDEX_HTML, 'text/html; charset=utf-8'];
@@ -732,9 +759,14 @@ route('DELETE', '/api/admin/users/:uid', async ({ db, params, user }) => {
 route('GET', '/api/admin/tournaments', async ({ db, user }) => {
   const [r, c] = await Promise.all([
     isSuper(user)
-      ? db.prepare(`SELECT t.id, t.slug, t.name, t.date, t.end_date, t.venue, t.status, t.logo, t.show_logo, t.owner_id, u.name AS owner_name, u.region AS owner_region
+      ? db.prepare(`SELECT t.id, t.slug, t.name, t.date, t.end_date, t.venue, t.status, t.logo, t.show_logo, t.owner_id, t.shared_with, u.name AS owner_name, u.region AS owner_region
           FROM tournaments t LEFT JOIN users u ON u.id = t.owner_id ORDER BY t.date DESC, t.created_at DESC`).all()
-      : db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo, owner_id FROM tournaments WHERE owner_id = ? ORDER BY date DESC, created_at DESC').bind(user.id).all(),
+      : (async () => {
+        const own = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo, owner_id FROM tournaments WHERE owner_id = ? ORDER BY date DESC, created_at DESC').bind(user.id).all()).results;
+        const sh = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, logo, show_logo, owner_id, shared_with FROM tournaments WHERE shared_with IS NOT NULL AND (owner_id IS NULL OR owner_id != ?) ORDER BY date DESC, created_at DESC').bind(user.id).all()).results
+          .filter((t) => isSharedTo(user, t)).map(({ shared_with, ...t }) => ({ ...t, shared: true }));
+        return { results: [...own, ...sh] };
+      })(),
     db.prepare(`SELECT c.id, c.tournament_id, c.name, c.config,
         (SELECT COUNT(*) FROM teams t WHERE t.category_id = c.id) AS team_count,
         (SELECT COUNT(*) FROM matches m WHERE m.category_id = c.id) AS match_count,
@@ -748,7 +780,7 @@ route('GET', '/api/admin/tournaments', async ({ db, user }) => {
     (cats[x.tournament_id] ||= []).push({ id: x.id, name: x.name, format: cfg.format, groups: cfg.groups, courts: cfg.courts,
       team_count: x.team_count, match_count: x.match_count, done_count: x.done_count, pending_count: x.pending_count });
   }
-  return json({ tournaments: r.results.map((t) => ({ ...t, logo: t.show_logo ? t.logo : null, categories: cats[t.id] || [] })) });
+  return json({ tournaments: r.results.map((t) => ({ ...t, shared_with: t.shared_with !== undefined ? sharedWith(t) : undefined, logo: t.show_logo ? t.logo : null, categories: cats[t.id] || [] })) });
 }, 'admin');
 
 route('POST', '/api/admin/tournaments', async ({ req, db, user }) => {
@@ -763,7 +795,7 @@ route('POST', '/api/admin/tournaments', async ({ req, db, user }) => {
 }, 'admin');
 
 route('GET', '/api/admin/tournaments/:id', async ({ db, params, url, user }) => {
-  const t = await getTournament(db, params.id, user);
+  const t = await getTournamentForRead(db, params.id, user);
   if (url.searchParams.get('rev') === String(t.rev)) return json({ unchanged: true, rev: t.rev });
   const cats = await loadFull(db, t);
   const out = cats.map((c) => {
@@ -773,7 +805,8 @@ route('GET', '/api/admin/tournaments/:id', async ({ db, params, url, user }) => 
   });
   const sponsors = await listSponsors(db, t.id, true);
   const settings = readSettings(t);
-  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors), settings, parking: publicParking(settings), owner_id: t.owner_id || null },
+  return json({ tournament: { ...publicTournament(t, true), sponsors: publicSponsors(sponsors), settings, parking: publicParking(settings), owner_id: t.owner_id || null,
+    readonly: !!t.readonly, shared_with: isSuper(user) ? sharedWith(t) : undefined, pin: t.readonly ? null : t.pin },
     categories: out, sponsors, lost: await listLost(db, t.id, true) });
 }, 'admin');
 
@@ -782,6 +815,21 @@ const STATUSES = ['draft', 'published', 'live', 'finished'];
 route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params, user }) => {
   const t = await getTournament(db, params.id, user);
   const b = await body(req);
+  if (b.shared_with !== undefined) {
+    mustSuper(user);
+    let v = b.shared_with;
+    if (v === 'all') v = 'all';
+    else if (Array.isArray(v)) {
+      const ids = [...new Set(v.map(String))];
+      for (const uid2 of ids) {
+        const u = await db.prepare("SELECT id FROM users WHERE id = ? AND role = 'region'").bind(uid2).first();
+        if (!u) fail(400, '共有先の地域管理者が見つかりません');
+      }
+      v = ids.length ? ids : null;
+    } else v = null;
+    await db.prepare('UPDATE tournaments SET shared_with = ? WHERE id = ?').bind(v ? JSON.stringify(v) : null, t.id).run();
+    if (Object.keys(b).length === 1) return json({ ok: true });
+  }
   const next = {
     name: b.name !== undefined ? clip(b.name, 80) || t.name : t.name,
     date: b.date !== undefined ? b.date || null : t.date,
@@ -1371,7 +1419,7 @@ route('PATCH', '/api/admin/templates/:id', async ({ req, db, params, user }) => 
 const MATCH_COLS = ['stage', 'group_label', 'round', 'code', 'label', 'slot', 'court', 'start_min', 'session', 'home_team_id', 'away_team_id', 'home_ref', 'away_ref',
   'place_w', 'place_l', 'home_score', 'away_score', 'home_pk', 'away_pk', 'forfeit', 'status', 'updated_by', 'updated_at', 'version', 'time_changed', 'corrected', 'ref_conflict'];
 route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user }) => {
-  const t = await getTournament(db, params.id, user);
+  const t = await getTournamentForRead(db, params.id, user);
   const b = await body(req);
   const scope = ['settings', 'teams', 'all'].includes(b.scope) ? b.scope : b.withTeams ? 'teams' : 'settings';
   const withTeams = scope !== 'settings';

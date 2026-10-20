@@ -689,7 +689,9 @@ async function listView(root, navigate) {
       t.logo ? h('img', { class: 't-logo', src: t.logo, alt: '' }) : h('span', { class: 't-logo ph' }, icon('ball')),
       h('div', { class: 't-title' },
         h('div', { class: 'row', style: { gap: '6px' } }, h('span', { class: `tag ${t.status === 'live' ? 'live' : t.status === 'published' ? 'done' : ''}` }, STATUS[t.status].label),
-          isSuperUser() || isViewer() ? h('span', { class: 'tag owner' }, ownerLabel(t)) : null),
+          isSuperUser() || isViewer() ? h('span', { class: 'tag owner' }, ownerLabel(t)) : null,
+          t.shared ? h('span', { class: 'tag shared' }, '共有（閲覧・コピーのみ）') : null,
+          isSuperUser() && t.shared_with ? h('span', { class: 'tag shared' }, t.shared_with === 'all' ? '地域管理者に共有中（全員）' : `地域管理者に共有中（${t.shared_with.length}人）`) : null),
         h('h2', null, t.name),
         h('div', { class: 't-meta' },
           t.date ? h('span', null, icon('calendar'), periodText(t)) : null,
@@ -697,12 +699,15 @@ async function listView(root, navigate) {
       icon('chevron', 't-go')),
     h('div', { class: 'cat-grid' },
       t.categories.map((c) => catCard(t, c)),
-      h('button', { class: 'cat-card cat-add', type: 'button', onclick: () => navigate(`/admin/t/${t.id}?add=1`) }, '＋ カテゴリを追加')),
+      t.shared || isViewer() ? null : h('button', { class: 'cat-card cat-add', type: 'button', onclick: () => navigate(`/admin/t/${t.id}?add=1`) }, '＋ カテゴリを追加')),
     isViewer() ? null : h('div', { class: 't-actions' },
       h('button', { class: 'link-btn', type: 'button', onclick: () => openCopyDialog(t, navigate) }, icon('list'), 'この大会をコピー')));
 
-  const live = tournaments.filter((t) => t.status !== 'finished');
-  const done = tournaments.filter((t) => t.status === 'finished');
+  // 地域管理者：全体管理者から共有された大会は、自分の大会とは分けて表示する
+  const sharedList = tournaments.filter((t) => t.shared);
+  const own = tournaments.filter((t) => !t.shared);
+  const live = own.filter((t) => t.status !== 'finished');
+  const done = own.filter((t) => t.status === 'finished');
   mount(root,
     adminHeader('大会運営', navigate, false),
     h('main', { class: 'wrap wide', style: { marginTop: '20px' } },
@@ -711,11 +716,14 @@ async function listView(root, navigate) {
       (isSuperUser() || isViewer()) && owners.length > 1 ? h('div', { class: 'chips', style: { marginTop: '8px' } },
         [['all', `すべて（${all.length}）`], ...owners.map(([k, l]) => [k, `${l}（${all.filter((t) => ownerKey(t) === k).length}）`])].map(([k, l]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(listFilter === k), onclick: () => { listFilter = k; listView(root, navigate); } }, l))) : null,
-      tournaments.length ? null : h('div', { class: 'panel empty', style: { marginTop: '16px' } },
+      own.length ? null : h('div', { class: 'panel empty', style: { marginTop: '16px' } },
         h('p', { style: { marginTop: 0 } }, '大会はまだありません。'),
         h('button', { class: 'btn btn-primary', type: 'button', onclick: createDialog }, '最初の大会を作成')),
       live.length ? h('div', { class: 't-grid' }, live.map(tCard)) : null,
-      done.length ? h('section', null, h('h3', { class: 'group-title' }, '終了した大会'), h('div', { class: 't-grid' }, done.map(tCard))) : null));
+      done.length ? h('section', null, h('h3', { class: 'group-title' }, '終了した大会'), h('div', { class: 't-grid' }, done.map(tCard))) : null,
+      sharedList.length ? h('section', null, h('h3', { class: 'group-title' }, '全体管理者から共有された大会'),
+        h('p', { class: 'muted small', style: { margin: '-4px 0 10px' } }, '閲覧と、コピーして自分の大会を作ることができます（編集はできません）。'),
+        h('div', { class: 't-grid' }, sharedList.map(tCard))) : null));
 }
 
 // ---------- 大会画面 ----------
@@ -736,9 +744,11 @@ async function tournamentView(root, id, navigate) {
   // eslint-disable-next-line no-shadow
   const api = (method, path, body) => apiBase(method,
     st.unlocked && method !== 'GET' && /^\/api\/admin\/(categories|teams|tournaments\/[^/]+\/categories)/.test(path) ? `${path}${path.includes('?') ? '&' : '?'}unlock=1` : path, body);
-  const isLocked = () => isViewer() || (data && data.tournament.status !== 'draft' && !st.unlocked);
+  // 変更できない表示：閲覧専用アカウント、または全体管理者から共有された大会（閲覧とコピーだけ）
+  const ro = () => isViewer() || !!(data && data.tournament.readonly);
+  const isLocked = () => ro() || (data && data.tournament.status !== 'draft' && !st.unlocked);
   // 閲覧専用アカウントでは、中の入力欄・ボタンをまとめて無効に（見やすさのため薄くはしない）
-  const readOnly = (el) => (isViewer() ? h('fieldset', { class: 'lockable ro', disabled: true }, el) : el);
+  const readOnly = (el) => (ro() ? h('fieldset', { class: 'lockable ro', disabled: true }, el) : el);
 
   async function load() {
     const res = await api('GET', `/api/admin/tournaments/${id}${data ? `?rev=${data.tournament.rev}` : ''}`);
@@ -776,7 +786,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), readOnly(infoPanel(t)), outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel())),
+          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, readOnly(infoPanel(t)), outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel())),
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
@@ -787,9 +797,44 @@ async function tournamentView(root, id, navigate) {
             cat ? categoryView(t, cat, editable) : h('div', { class: 'panel empty', style: { marginTop: '12px' } }, 'カテゴリ（U7〜U12）を追加すると、チーム登録と日程作成ができます。')))));
   }
 
+  // ----- 地域管理者への共有（全体管理者のみ） -----
+
+  function regionSharePanel(t) {
+    const box = h('section', { class: 'panel' });
+    const cur = t.shared_with;
+    const f = { mode: cur === 'all' ? 'all' : Array.isArray(cur) && cur.length ? 'some' : 'none', ids: Array.isArray(cur) ? [...cur] : [] };
+    let users = null;
+    const draw = () => mount(box,
+      h('h2', null, '地域管理者への共有'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, '共有した地域管理者は、この大会を閲覧し、コピーして自分の大会を作れます（編集はできません）。'),
+      [['none', '共有しない'], ['all', 'すべての地域管理者'], ['some', '地域管理者を選ぶ']].map(([k, l]) => h('label', { class: 'check' },
+        h('input', { type: 'radio', name: 'region-share', checked: f.mode === k, onchange: async () => {
+          f.mode = k;
+          if (k === 'some' && !users) users = (await run(() => api('GET', '/api/admin/users')) || { users: [] }).users.filter((u) => u.role === 'region');
+          draw();
+        } }), l)),
+      f.mode === 'some' ? h('div', { class: 'scope-list' }, users === null ? h('span', { class: 'muted small' }, '読み込み中…')
+        : users.length ? users.map((u) => h('label', { class: 'check' },
+          h('input', { type: 'checkbox', checked: f.ids.includes(u.id), onchange: (e) => { f.ids = e.target.checked ? [...f.ids, u.id] : f.ids.filter((x) => x !== u.id); } }),
+          `${u.region || '（地域未設定）'}　${u.name}`)) : h('span', { class: 'muted small' }, '地域管理者がいません')) : null,
+      h('button', { class: 'btn btn-sm btn-block', type: 'button', style: { marginTop: '8px' }, onclick: async () => {
+        const v = f.mode === 'all' ? 'all' : f.mode === 'some' ? f.ids : null;
+        if (f.mode === 'some' && !f.ids.length) { toast('共有する地域管理者を選んでください', true); return; }
+        if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { shared_with: v }), v ? '共有しました' : '共有をやめました')) await reload();
+      } }, '共有の設定を保存'));
+    if (f.mode === 'some') run(() => api('GET', '/api/admin/users')).then((r) => { users = ((r || {}).users || []).filter((u) => u.role === 'region'); draw(); });
+    draw();
+    return box;
+  }
+
   // ----- 公開中のロック -----
 
   function lockBanner(t) {
+    if (data && data.tournament.readonly) {
+      return h('div', { class: 'lock-banner viewer no-print' },
+        h('span', null, '👁 全体管理者から共有された大会です。設定・チーム・日程・結果などの閲覧と、PDF・Excelの出力ができます（編集はできません）。この大会をもとに自分の大会を作るときは、コピーしてください。'),
+        h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => openCopyDialog(t, navigate) }, 'コピーして自分の大会を作る'));
+    }
     if (isViewer()) {
       return h('div', { class: 'lock-banner viewer no-print' },
         h('span', null, '👁 閲覧専用のアカウントです。設定・チーム・日程・結果などの確認と、PDF・Excelの出力ができます（変更はできません）。'));
@@ -851,7 +896,7 @@ async function tournamentView(root, id, navigate) {
     return h('section', { class: 'panel' },
       h('h2', { style: { marginBottom: '8px' } }, '大会の状態'),
       h('div', { class: 'chips', style: { flexWrap: 'wrap', paddingTop: 0 } }, order.map((s) =>
-        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(s === t.status), disabled: isViewer() && s !== t.status, onclick: () => set(s) }, STATUS[s].label))),
+        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(s === t.status), disabled: ro() && s !== t.status, onclick: () => set(s) }, STATUS[s].label))),
       h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, STATUS[t.status].note));
   }
 
@@ -866,15 +911,16 @@ async function tournamentView(root, id, navigate) {
           t.status === 'draft' ? h('p', { class: 'muted', style: { margin: 0 } }, '「公開中」にすると見られるようになります') : null,
           h('div', { class: 'row' }, h('a', { href: viewUrl, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, viewUrl),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(viewUrl) }, 'コピー'))),
-        h('div', null, h('strong', null, '結果の登録ページ（チーム関係者向け）'),
+        // 共有された大会では、保護者向けの閲覧ページだけ（結果の登録ページ・PINは主催者だけのもの）
+        t.readonly ? null : h('div', null, h('strong', null, '結果の登録ページ（チーム関係者向け）'),
           h('div', { class: 'row' }, h('span', { style: { overflowWrap: 'anywhere' } }, relUrl), h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(relUrl) }, 'コピー'))),
-        h('div', { class: 'row' }, h('strong', null, 'PIN'), h('span', { class: 'num', style: { fontSize: '1.8rem', fontWeight: 700, letterSpacing: '0.15em' } }, t.pin),
+        t.readonly ? null : h('div', { class: 'row' }, h('strong', null, 'PIN'), h('span', { class: 'num', style: { fontSize: '1.8rem', fontWeight: 700, letterSpacing: '0.15em' } }, t.pin),
           h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-sm', type: 'button', disabled: isViewer(), onclick: async () => {
+          h('button', { class: 'btn btn-sm', type: 'button', disabled: ro(), onclick: async () => {
             if (!(await confirmDialog('PINを再発行します', '今のPINでログインしている関係者は、新しいPINで入り直す必要があります。', '再発行する', true))) return;
             if (await run(() => api('POST', `/api/admin/tournaments/${id}/pin`), 'PINを再発行しました')) await reload();
           } }, '再発行')),
-        h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
+        t.readonly ? null : h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
   }
 
   function infoPanel(t) {
@@ -1126,9 +1172,9 @@ async function tournamentView(root, id, navigate) {
           } },
             label, k === 'results' && pending ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, pending) : null)))),
       h('div', { style: { marginTop: '8px' }, oninput: markDirty, onchange: markDirty },
-        st.sub === 'settings' && isLocked() && !isViewer() ? h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '8px' } },
+        st.sub === 'settings' && isLocked() && !ro() ? h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '8px' } },
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => applyTemplate(null, null) }, 'テンプレートの管理（公開・名前変更・削除）')) : null,
-        st.sub === 'settings' ? h('fieldset', { class: `lockable${isViewer() ? ' ro' : ''}`, disabled: isLocked() }, settingsView(t, cat, editable))
+        st.sub === 'settings' ? h('fieldset', { class: `lockable${ro() ? ' ro' : ''}`, disabled: isLocked() }, settingsView(t, cat, editable))
           : readOnly(st.sub === 'teams' ? teamsView(t, cat, editable)
             : st.sub === 'schedule' ? scheduleTab(t, cat, editable)
               : st.sub === 'results' ? resultsTab(t, cat)
@@ -1367,7 +1413,7 @@ async function tournamentView(root, id, navigate) {
   function scheduleTab(t, cat, editable) {
     const box = h('div');
     if (!editable) {
-      box.append(h('p', { class: 'notice' }, isViewer() ? '閲覧専用のアカウントのため、組み分けと日程は確認だけできます。'
+      box.append(h('p', { class: 'notice' }, ro() ? (isViewer() ? '閲覧専用のアカウントのため、組み分けと日程は確認だけできます。' : '共有された大会のため、組み分けと日程は確認だけできます。')
         : t.status === 'live'
         ? '開催中は組み合わせを変更できません。遅れが出たら、遅らせたい試合をタップすると、そのコートの以降の試合をまとめてずらせます。'
         : t.status === 'published' ? '公開中のため、組み分けと日程はロックされています。変更する場合は、上の「ロックを一時解除」を押してください。'

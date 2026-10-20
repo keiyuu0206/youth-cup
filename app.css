@@ -1015,3 +1015,6 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .manual-list a { display: grid; gap: 2px; padding: 12px 14px; border-radius: 12px; border: 1.5px solid var(--line); text-decoration: none; color: var(--ink); background: var(--surface); }
 .manual-list a:hover { border-color: var(--turf); }
 .manual-list small { color: var(--ink-2); }
+
+.tag.shared { background: color-mix(in srgb, #1d5fbf 14%, var(--surface)); color: #1d5fbf; }
+@media (prefers-color-scheme: dark) { .tag.shared { color: #8fb6ff; } }
