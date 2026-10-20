@@ -33,6 +33,36 @@ const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', ...headers } });
 
 const now = () => new Date().toISOString();
+
+// 閲覧ページ・結果の登録ページのデータを、版ごとに一時保存して使い回す。
+// 大会の版が変わるまで内容は同じなので、同じ拠点に来た問い合わせはデータベースを読まずに返せる。
+// 同時に大勢から問い合わせが来たときも、読み込みは1回にまとめる（読み込み中の処理を共有）。
+const PAYLOAD_CACHE = new Map();
+const PAYLOAD_PENDING = new Map();
+const jsonText = (text, how) => new Response(text, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'X-Payload-Cache': how } });
+async function cachedPayload(key, origin, build) {
+  if (PAYLOAD_CACHE.has(key)) return jsonText(PAYLOAD_CACHE.get(key), 'hit');
+  // 独自ドメインでは Cache API（拠点の共有キャッシュ）も使う。workers.dev では使えないので、そのときは何もしない
+  const ckey = new Request(`${origin}/__payload/${encodeURIComponent(key)}`);
+  let cache = null;
+  try { cache = caches.default; const hit = await cache.match(ckey); if (hit) { const text = await hit.text(); remember(key, text); return jsonText(text, 'edge'); } } catch { cache = null; }
+  const shared = PAYLOAD_PENDING.has(key);
+  if (!shared) {
+    PAYLOAD_PENDING.set(key, (async () => {
+      try {
+        const text = JSON.stringify(await build());
+        remember(key, text);
+        if (cache) { try { await cache.put(ckey, new Response(text, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=600' } })); } catch { /* 使えない環境では無視 */ } }
+        return text;
+      } finally { PAYLOAD_PENDING.delete(key); }
+    })());
+  }
+  return jsonText(await PAYLOAD_PENDING.get(key), shared ? 'shared' : 'miss');
+}
+function remember(key, text) {
+  PAYLOAD_CACHE.set(key, text);
+  while (PAYLOAD_CACHE.size > 40) PAYLOAD_CACHE.delete(PAYLOAD_CACHE.keys().next().value); // 古いものから捨てる
+}
 const uid = () => crypto.randomUUID();
 const randomSlug = (n = 10) => {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
@@ -120,6 +150,8 @@ async function ensureSchema(db) {
   await addCol('users', 'scope', 'TEXT');
   // 全体管理者の大会を地域管理者に共有（'all' = すべての地域管理者、["ユーザーID", ...] = 選んだ地域管理者）
   await addCol('tournaments', 'shared_with', 'TEXT');
+  // 閲覧ページ向けの版：保護者に見える内容が変わったときだけ上げる（関係者の仮登録では上げない）
+  await addCol('tournaments', 'pub_rev', 'INTEGER NOT NULL DEFAULT 0');
   schemaChecked = true;
 }
 
@@ -245,7 +277,7 @@ async function getTournamentBySlug(db, slug) {
 
 // 20秒ごとの更新確認用。ロゴなどの大きな列を読まない
 async function getTournamentHead(db, slug) {
-  const t = await db.prepare('SELECT id, slug, status, rev, pin_version FROM tournaments WHERE slug = ?').bind(slug).first();
+  const t = await db.prepare('SELECT id, slug, status, rev, pub_rev, pin_version FROM tournaments WHERE slug = ?').bind(slug).first();
   if (!t) fail(404, '大会が見つかりません');
   return t;
 }
@@ -278,8 +310,9 @@ async function loadFull(db, t) {
   return out;
 }
 
-async function bump(db, tid) {
-  await db.prepare('UPDATE tournaments SET rev = rev + 1, updated_at = ? WHERE id = ?').bind(now(), tid).run();
+// 大会の版を上げる。pub = false のとき（関係者の仮登録など保護者に見えない変更）は、閲覧ページ向けの版は上げない
+async function bump(db, tid, pub = true) {
+  await db.prepare('UPDATE tournaments SET rev = rev + 1, pub_rev = pub_rev + ?, updated_at = ? WHERE id = ?').bind(pub ? 1 : 0, now(), tid).run();
 }
 
 // 予選・トーナメントの結果から、まだ始まっていない試合のチームを差し替える
@@ -438,6 +471,22 @@ async function publicPayload(db, t, level) {
 // ---------- 画面ファイルの配信 ----------
 
 const JS = 'text/javascript; charset=utf-8';
+// 版の番号：画面のファイルの内容から作る（アプリを更新すると変わる）。拠点ごとに一度だけ計算する
+let BUILD_ID = null;
+function buildId() {
+  if (BUILD_ID) return BUILD_ID;
+  let h = 0x811c9dc5;
+  for (const [body] of Object.values(STATIC)) {
+    const str = String(body);
+    for (let i = 0; i < str.length; i += 7) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    h ^= str.length; h = Math.imul(h, 16777619) >>> 0;
+  }
+  BUILD_ID = h.toString(36);
+  return BUILD_ID;
+}
+// 画面のファイルどうしの読み込み（import）にも版の番号を付ける
+const versionImports = (src, build) => src.replace(/((?:from\s*|import\()\s*)(['"])\.\/((?:web-[\w-]+|icons)\.js)\2/g, (_, pre, q, f) => `${pre}${q}./${f}?v=${build}${q}`);
+
 const STATIC = {
   '/app.css': [APP_CSS, 'text/css; charset=utf-8'],
   '/manifest.webmanifest': [MANIFEST, 'application/manifest+json; charset=utf-8'],
@@ -493,10 +542,16 @@ async function serveStatic(req, url) {
       { status: 404, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...SECURITY_HEADERS } });
   }
   const file = STATIC[url.pathname];
-  const [body, type] = file || [INDEX_HTML, 'text/html; charset=utf-8'];
+  let [body, type] = file || [INDEX_HTML, 'text/html; charset=utf-8'];
   const key = file ? url.pathname : '/index.html';
+  // 画面のファイルには版の番号（全ファイルの内容から作る）を付けて配信する。
+  // 番号つきのファイルは内容が変わらないので、ブラウザに1年間保存させる（2回目以降はサーバーに問い合わせない）
+  const build = buildId();
+  if (key === '/index.html') body = body.replace('href="/app.css"', `href="/app.css?v=${build}"`).replace('src="/web-app.js"', `src="/web-app.js?v=${build}"`);
+  else if (/^\/web-[\w-]+\.js$/.test(key)) body = versionImports(body, build);
+  const versioned = file && url.searchParams.get('v') === build;
   const etag = await etagOf(key, body);
-  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', ETag: etag, ...SECURITY_HEADERS };
+  const headers = { 'Content-Type': type, 'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'no-cache', ETag: etag, ...SECURITY_HEADERS };
   if (req.headers.get('If-None-Match') === etag) return new Response(null, { status: 304, headers });
   // それ以外の画面のURL（/admin, /t/..., /r/...）はすべて index.html を返し、画面側で振り分ける
   return new Response(body, { headers });
@@ -1525,9 +1580,12 @@ route('DELETE', '/api/admin/templates/:id', async ({ db, params, user }) => {
 route('GET', '/api/public/:slug', async ({ db, params, url }) => {
   const head = await getTournamentHead(db, params.slug);
   if (head.status === 'draft') fail(404, 'この大会はまだ公開されていません');
-  if (url.searchParams.get('rev') === String(head.rev)) return json({ unchanged: true, rev: head.rev });
-  const t = await getTournamentBySlug(db, params.slug);
-  return json(await publicPayload(db, t, 'public'));
+  // 閲覧ページは「閲覧ページ向けの版」で更新を判定する（仮登録では変わらない）
+  if (url.searchParams.get('rev') === String(head.pub_rev)) return json({ unchanged: true, rev: head.pub_rev });
+  return cachedPayload(`public:${head.slug}:${head.pub_rev}`, url.origin, async () => {
+    const t = await getTournamentBySlug(db, params.slug);
+    return publicPayload(db, { ...t, rev: t.pub_rev }, 'public');
+  });
 });
 
 // ---------- 関係者 ----------
@@ -1549,8 +1607,7 @@ route('GET', '/api/rel/:slug', async ({ req, env, db, params, url }) => {
   const head = await getTournamentHead(db, params.slug);
   if (!(await isRelative(req, env, head))) fail(401, 'PINを入力してください');
   if (url.searchParams.get('rev') === String(head.rev)) return json({ unchanged: true, rev: head.rev });
-  const t = await getTournamentBySlug(db, params.slug);
-  return json(await publicPayload(db, t, 'relative'));
+  return cachedPayload(`relative:${head.slug}:${head.rev}`, url.origin, async () => publicPayload(db, await getTournamentBySlug(db, params.slug), 'relative'));
 });
 
 route('POST', '/api/rel/:slug/matches/:id', async ({ req, env, db, params }) => {
@@ -1571,6 +1628,6 @@ route('POST', '/api/rel/:slug/matches/:id', async ({ req, env, db, params }) => 
     const cur = parseMatch(await db.prepare('SELECT * FROM matches WHERE id = ?').bind(m.id).first());
     fail(409, '他の人が先に更新しました。最新の内容を確認してください', { match: maskMatch(cur, 'relative') });
   }
-  await bump(db, t.id);
+  await bump(db, t.id, false); // 仮登録は保護者には見えないので、閲覧ページの読み込み直しは起こさない
   return json({ ok: true });
 });
