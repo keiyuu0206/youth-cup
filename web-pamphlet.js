@@ -9,6 +9,14 @@ import { defaultOutline, autoInfo, autoSection } from './web-outline.js';
 
 const PAGE = '@page { size: A4 landscape; margin: 8mm; }';
 export const THEMES = { red: '赤×黒', green: '緑', blue: '青', black: '黒' };
+// 文字の大きさ：大きくするほど1ページに載せる量を減らす
+export const SIZES = { normal: '標準', large: '大きめ', xl: '特大' };
+const PER = {
+  normal: { courts: 2, groups: 3, brackets: 99, numCols: 3 },
+  large: { courts: 2, groups: 2, brackets: 1, numCols: 2 },
+  xl: { courts: 1, groups: 1, brackets: 1, numCols: 2 },
+};
+const per = (opts) => PER[opts.ppSize] || PER.normal;
 
 // ①〜㊿（それより多いときは数字）
 const circled = (n) => (n >= 1 && n <= 20 ? String.fromCharCode(0x245f + n)
@@ -205,18 +213,20 @@ function courtSheets(t, cat, opts, disp) {
         h('thead', null, h('tr', null, h('th', null, '試合'), h('th', null, '開始'), h('th', { colspan: 3 }, '対戦カード'), h('th', null, '結果'))),
         h('tbody', null, slots.map((s, i) => {
           const m = cat.matches.find((x) => x.slot === s && x.court === c);
-          if (!m) return h('tr', { class: 'free' }, h('td', null, `第${i + 1}試合`), h('td', { class: 'tm' }, toHHMM(startOf(s))), h('td', { colspan: 4, class: 'c muted' }, '—'));
+          if (!m) return h('tr', { class: 'free' }, h('td', null, `第${i + 1}試合`), h('td', { class: 'pp-tm' }, toHHMM(startOf(s))), h('td', { colspan: 4, class: 'c muted' }, '—'));
           const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
           const w = done ? winnerSide(m) : null;
           const nm = (side) => sideInfo(m, side, cat, cache).text;
           const tag = m.stage === 'league' ? `${m.group_label}組` : disp[m.code] || '';
-          return h('tr', null, h('td', null, `第${i + 1}試合`, h('small', null, tag)), h('td', { class: 'tm' }, toHHMM(m.start_min)),
+          return h('tr', null, h('td', null, `第${i + 1}試合`, h('small', null, tag)), h('td', { class: 'pp-tm' }, toHHMM(m.start_min)),
             h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')), h('td', { class: 'vs' }, 'vs'), h('td', { class: w === 'away' ? 'b' : '' }, nm('away')),
             h('td', { class: 'c res' }, done ? `${m.home_score}-${m.away_score}${m.home_pk != null ? `（PK${m.home_pk}-${m.away_pk}）` : ''}` : ''));
         }))));
-    for (let i = 0; i < usedCourts.length; i += 2) {
+    const n = per(opts).courts;
+    for (let i = 0; i < usedCourts.length; i += n) {
+      const list = usedCourts.slice(i, i + n);
       out.push(sheet(head(t, cat, '試合スケジュール', dayLabel(cat, d, t, true)),
-        h('div', { class: 'pp-courts' }, table(usedCourts[i]), usedCourts[i + 1] != null ? table(usedCourts[i + 1]) : h('div', { class: 'pp-court empty' }))));
+        h('div', { class: `pp-courts n${n}` }, list.map(table), n === 2 && list.length === 1 ? h('div', { class: 'pp-court empty' }) : null)));
     }
   }
   return out;
@@ -259,77 +269,82 @@ function starSheets(t, cat, opts) {
         }))));
   };
   const out = [];
-  for (let i = 0; i < groups.length; i += 3) {
-    out.push(sheet(head(t, cat, '予選リーグ 星取表', groups.slice(i, i + 3).map((g) => `${g}グループ`).join('・')),
-      h('div', { class: 'pp-stars' }, groups.slice(i, i + 3).map(card)),
+  const gn = per(opts).groups;
+  for (let i = 0; i < groups.length; i += gn) {
+    out.push(sheet(head(t, cat, '予選リーグ 星取表', groups.slice(i, i + gn).map((g) => `${g}グループ`).join('・')),
+      h('div', { class: 'pp-stars' }, groups.slice(i, i + gn).map(card)),
       h('p', { class: 'pp-note' }, `○勝ち　●負け　△引き分け（勝ち3点・引き分け1点・負け0点）。勝点が並んだ場合：${(cat.config.tiebreak || []).map((x) => TIEBREAK_LABEL[x]).filter(Boolean).join(' → ')}`)));
   }
   return out;
 }
 
-function koSheet(t, cat, opts) {
+// タイムテーブル（時間×コート）：日ごとに1ページ。予選リーグの日も決勝の日も同じ形
+function timetableSheets(t, cat, opts) {
   const cfg = cat.config;
   const { secs, disp } = koSections(cat);
-  const trees = secs.filter((s) => !s.league && s.built);
-  if (!trees.length && !secs.some((s) => s.league)) return null;
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
-  // タイムテーブル：決勝の段の試合がある日
-  const koM = cat.matches.filter((m) => m.stage === 'knockout');
-  const dayList = [...new Set(koM.map((m) => dayOf(cfg, m.slot)))].sort();
-  const courts = [...new Set(koM.map((m) => m.court))].sort((a, b) => a - b);
-  const secIdx = (m) => { const s = secs.find((x) => (x.name || null) === (m.group_label || null) && (!!x.league === isRankLeague(m))); return s ? s.idx : 0; };
-  const grid = dayList.map((d) => {
-    const slots = [...new Set(cat.matches.filter((m) => dayOf(cfg, m.slot) === d).map((m) => m.slot))].sort((a, b) => a - b);
-    return h('div', { class: 'pp-tt' },
-      dayList.length > 1 ? h('div', { class: 'pp-tt-d' }, dayLabel(cat, d, t, true)) : null,
-      h('table', { class: 'pp-tbl pp-grid' },
-        h('thead', null, h('tr', null, h('th', null, '時間'), courts.map((c) => h('th', null, courtName(cfg, c))), h('th', { class: 'sum' }, '主な内容'))),
-        h('tbody', null, slots.map((s) => {
-          const ms = cat.matches.filter((m) => m.slot === s);
+  const secIdx = (m) => { const s2 = secs.find((x) => (x.name || null) === (m.group_label || null) && (!!x.league === isRankLeague(m))); return s2 ? s2.idx : 0; };
+  const nm = (m, side) => { const info = sideInfo(m, side, cat, cache); return info.placeholder ? '' : info.team.short_name || info.team.name; };
+  const out = [];
+  for (let d = 0; d < dayTotal(cfg); d++) {
+    const dayM = cat.matches.filter((m) => dayOf(cfg, m.slot) === d);
+    if (!dayM.length) continue;
+    const slots = [...new Set(dayM.map((m) => m.slot))].sort((a, b) => a - b);
+    const courts = [...new Set(dayM.map((m) => m.court))].sort((a, b) => a - b);
+    out.push(sheet(head(t, cat, 'タイムテーブル', dayLabel(cat, d, t, true)),
+      h('table', { class: `pp-tbl pp-grid big c${Math.min(courts.length, 12)}` },
+        h('thead', null, h('tr', null, h('th', { class: 'pp-tm' }, '時間'), courts.map((c) => h('th', null, courtName(cfg, c))))),
+        h('tbody', null, slots.map((s2) => {
+          const ms = dayM.filter((m) => m.slot === s2);
           const st = Math.min(...ms.map((m) => m.start_min));
           const en = Math.max(...ms.map((m) => m.start_min + matchLengthFor(cfg, m)));
-          const sum = {};
-          ms.forEach((m) => { const key = m.stage === 'league' ? '予選リーグ' : `${SHORT(m.group_label) || '決勝'}${isRankLeague(m) ? 'リーグ' : ''} ${isRankLeague(m) ? '' : roundName(m)}`.trim(); sum[key] = (sum[key] || 0) + 1; });
-          return h('tr', null, h('td', { class: 'tm' }, `${toHHMM(st)}〜${toHHMM(en)}`),
+          return h('tr', null, h('td', { class: 'pp-tm' }, toHHMM(st), h('small', null, `〜${toHHMM(en)}`)),
             courts.map((c) => {
               const m = ms.find((x) => x.court === c);
-              if (!m) return h('td', { class: 'none' }, '');
-              const lab = m.stage === 'league' ? `${m.group_label}組` : disp[m.code] || m.label;
-              return h('td', { class: `cl s${m.stage === 'league' ? 'L' : secIdx(m) % 4}` }, lab);
-            }),
-            h('td', { class: 'sum' }, Object.entries(sum).map(([k2, n]) => `${k2}（${n}）`).join('・')));
-        }))));
-  });
-  // 試合番号の対応表
+              if (!m) return h('td', { class: 'none' }, '—');
+              const league = m.stage === 'league';
+              const tag = league ? `${m.group_label}組` : disp[m.code] || m.label;
+              const a = nm(m, 'home'), b = nm(m, 'away');
+              const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
+              return h('td', { class: `cl s${league ? 'L' : secIdx(m) % 4}` }, h('b', null, tag),
+                a || b ? h('span', { class: 'vs2' }, h('span', null, a || refLabel(m.home_ref, disp)), h('i', null, done ? `${m.home_score}-${m.away_score}` : 'vs'), h('span', null, b || refLabel(m.away_ref, disp)))
+                  : h('span', { class: 'vs2 ref' }, `${refLabel(m.home_ref, disp)} vs ${refLabel(m.away_ref, disp)}`));
+            }));
+        })))));
+  }
+  return out;
+}
+
+// 決勝トーナメント：トーナメント表と試合番号の対応表だけ（タイムテーブルは別ページ）
+function koSheets(t, cat, opts) {
+  const cfg = cat.config;
+  const { secs, disp } = koSections(cat);
+  const trees = secs.filter((s2) => !s2.league && s2.built);
+  if (!trees.length) return [];
+  const cache = { teams: teamMap(cat), codes: codeMap(cat) };
   const where = (m) => `${dayTotal(cfg) > 1 ? `${dayOf(cfg, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)} ${courtName(cfg, m.court)}`;
-  const numItems = secs.flatMap((s2) => s2.list.slice().sort((a, b) => a.slot - b.slot || a.court - b.court).map((m) => ({ s: s2, m })))
-    .sort((a, b) => a.s.idx - b.s.idx || a.m.slot - b.m.slot || a.m.court - b.m.court);
-  const numTable = h('div', { class: 'pp-nums' }, numItems.map(({ s: s2, m }) => h('div', { class: `s${s2.league ? 'L' : s2.idx % 4}` },
+  const numTable = (list) => h('div', { class: `pp-nums c${per(opts).numCols}` }, list.flatMap((s2) => s2.list.slice().sort((a, b) => a.slot - b.slot || a.court - b.court).map((m) => h('div', { class: `s${s2.idx % 4}` },
     h('b', null, disp[m.code] || ''), h('span', { class: 'rn' }, roundName(m)),
     m.home_ref && m.home_ref.t === 'lose' ? h('small', null, `${refLabel(m.home_ref, disp)}・${refLabel(m.away_ref, disp)}`) : null,
-    h('span', { class: 'wh' }, where(m)))));
-  // グループ一覧
-  const groups = [...new Set(cat.teams.map((x) => x.group_label).filter(Boolean))].sort();
-  const glist = groups.length ? h('div', { class: 'pp-glist' }, groups.map((g) => h('div', { class: 'pp-g' }, h('b', null, `${g}グループ`),
-    cat.teams.filter((x) => x.group_label === g).map((x, i) => h('div', null, h('span', null, `${g}${i + 1}`), x.short_name || x.name))))) : null;
-  const title = trees.map((s2) => s2.name).filter(Boolean).join('・');
-  // 小さなトーナメントが4つ以上あるときは、2段に折り返して並べる
-  const bracketsEl = h('div', { class: `pp-ko${trees.length >= 4 && trees.every((s2) => s2.built.leaves <= 8) ? ' wrap' : ''}` },
-    trees.map((s2) => h('div', { class: `pp-br s${s2.idx % 4}` },
-      h('div', { class: 'pp-br-h' }, h('b', null, s2.name || '決勝トーナメント'), h('span', null, `${s2.built.leaves}チーム`)),
-      bracketSvg(cat, s2, disp, opts),
-      s2.others.length ? h('div', { class: 'pp-others' }, s2.others.map((m) => h('div', null, h('b', null, disp[m.code]), ` ${roundName(m)}：`,
-        `${sideInfo(m, 'home', cat, cache).placeholder ? refLabel(m.home_ref, disp) : sideInfo(m, 'home', cat, cache).text} vs ${sideInfo(m, 'away', cat, cache).placeholder ? refLabel(m.away_ref, disp) : sideInfo(m, 'away', cat, cache).text}`))) : null)));
-  const tableEl = (wide) => h('div', { class: `pp-ko-b${wide ? ' wide' : ''}` },
-    h('div', { class: 'pp-ko-l' }, h('h3', { class: 'pp-sub' }, 'タイムテーブル'), grid),
-    h('div', { class: 'pp-ko-r' }, glist ? [h('h3', { class: 'pp-sub' }, 'グループ一覧'), glist] : null, h('h3', { class: 'pp-sub' }, '試合番号 対応表'), numTable,
-      opts.qr ? h('div', { class: 'pp-ko-qr' }, qrBlock(t, '結果・速報はこちら', 'pp-qr')) : null));
-  // 1つのトーナメントが17チーム以上のときは、文字が小さくなりすぎないよう、トーナメント表とタイムテーブルなどを2枚に分ける
-  if (trees.some((s2) => s2.built.leaves > 16)) {
-    return [sheet(head(t, cat, '決勝トーナメント', title), bracketsEl),
-      sheet(head(t, cat, '決勝トーナメント', 'タイムテーブル・試合番号'), tableEl(true))];
+    h('span', { class: 'wh' }, where(m))))));
+  const bracketEl = (s2) => h('div', { class: `pp-br s${s2.idx % 4}` },
+    h('div', { class: 'pp-br-h' }, h('b', null, s2.name || '決勝トーナメント'), h('span', null, `${s2.built.leaves}チーム`)),
+    bracketSvg(cat, s2, disp, opts),
+    s2.others.length ? h('div', { class: 'pp-others' }, s2.others.map((m) => h('div', null, h('b', null, disp[m.code]), ` ${roundName(m)}：`,
+      `${sideInfo(m, 'home', cat, cache).placeholder ? refLabel(m.home_ref, disp) : sideInfo(m, 'home', cat, cache).text} vs ${sideInfo(m, 'away', cat, cache).placeholder ? refLabel(m.away_ref, disp) : sideInfo(m, 'away', cat, cache).text}`))) : null);
+  // 1ページに載せるトーナメントの数（17チーム以上のトーナメントは、標準でも2つまで）
+  let n = per(opts).brackets;
+  if (trees.some((s2) => s2.built.leaves > 16)) n = Math.min(n, 2);
+  const out = [];
+  for (let i = 0; i < trees.length; i += n) {
+    const list = trees.slice(i, i + n);
+    const wrap = list.length >= 4 && list.every((s2) => s2.built.leaves <= 8);
+    out.push(sheet(head(t, cat, '決勝トーナメント', list.map((s2) => s2.name).filter(Boolean).join('・')),
+      h('div', { class: `pp-ko${wrap ? ' wrap' : ''}` }, list.map(bracketEl)),
+      h('div', { class: 'pp-ko-num' }, h('h3', { class: 'pp-sub' }, '試合番号 対応表'), numTable(list)),
+      opts.qr && i + n >= trees.length ? h('div', { class: 'pp-ko-qr' }, qrBlock(t, '結果・速報はこちら', 'pp-qr')) : null));
   }
-  return [sheet(head(t, cat, '決勝トーナメント', title), bracketsEl, tableEl(false))];
+  return out;
 }
 
 export function printPamphlet(t, cats, opts) {
@@ -340,12 +355,13 @@ export function printPamphlet(t, cats, opts) {
     if (!cat.matches.length) continue;
     const { disp } = koSections(cat);
     if (p.courts) sheets.push(...courtSheets(t, cat, opts, disp));
+    if (p.tt) sheets.push(...timetableSheets(t, cat, opts));
     if (p.star && cat.config.format !== 'knockout') sheets.push(...starSheets(t, cat, opts));
-    if (p.ko && cat.config.format !== 'league') { const s = koSheet(t, cat, opts); if (s) sheets.push(...s); }
+    if (p.ko && cat.config.format !== 'league') sheets.push(...koSheets(t, cat, opts));
   }
   if (!sheets.length) return false;
   sheets[sheets.length - 1].classList.add('last');
-  const doc = h('div', { class: `pd ps pp theme-${opts.theme || 'red'}${opts.logos ? ' pd-logos' : ''}` }, sheets);
+  const doc = h('div', { class: `pd ps pp theme-${opts.theme || 'red'} pp-size-${opts.ppSize || 'normal'}${opts.logos ? ' pd-logos' : ''}` }, sheets);
   runPrint(doc, `${t.name}_パンフレット`, PAGE);
   return true;
 }

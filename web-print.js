@@ -1,5 +1,5 @@
 // 組合せ・結果を A4 縦で出力する（ブラウザの印刷から「PDFとして保存」）
-import { printPamphlet, THEMES } from './web-pamphlet.js';
+import { printPamphlet, THEMES, SIZES } from './web-pamphlet.js';
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
 import { qrDataUrl } from './web-qr.js';
 import { buildXlsx, downloadBlob } from './web-xlsx.js';
@@ -34,8 +34,9 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     qr: true,
     post: { blocks: true, brackets: true, timeline: true, courts: false },
     xl: { schedule: true, groups: true, standings: true, ranking: true, teams: true },
-    pp: { overview: true, courts: true, star: true, ko: true }, // パンフレット（A4横）
+    pp: { overview: true, courts: true, tt: true, star: true, ko: true }, // パンフレット（A4横）
     theme: 'red',
+    ppSize: 'normal',
   };
   const sponsors = tournament.sponsors || [];
   const hasLogos = categories.some((c) => c.teams.some((x) => x.logo));
@@ -60,11 +61,15 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           h('option', { value: 'all', selected: st.cat === 'all' }, 'すべてのカテゴリ'))) : null,
         st.mode === 'pamphlet' ? h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力する内容（A4横・デザイン版）'),
-          [['overview', '大会概要（大会要項の内容から）'], ['courts', 'コート別タイムスケジュール（1ページに2コート）'], ['star', '予選リーグ星取表（1ページに3組）', hasLeague],
-            ['ko', '決勝トーナメントのまとめ（トーナメント表・タイムテーブル・試合番号を1枚に）', hasKo]].map(([k2, l, ok = true]) => ok ? h('label', { class: 'check' },
+          [['overview', '大会概要（大会要項の内容から）'], ['courts', 'コート別タイムスケジュール'], ['tt', 'タイムテーブル（時間×コートの表・1日1枚）'], ['star', '予選リーグ星取表', hasLeague],
+            ['ko', '決勝トーナメント（トーナメント表と試合番号の対応表）', hasKo]].map(([k2, l, ok = true]) => ok ? h('label', { class: 'check' },
             h('input', { type: 'checkbox', checked: st.pp[k2], onchange: (e) => { st.pp[k2] = e.target.checked; } }), l) : null),
-          h('label', { class: 'field', style: { marginTop: '6px' } }, h('span', null, '色のテーマ'), h('select', { onchange: (e) => { st.theme = e.target.value; } },
-            Object.entries(THEMES).map(([k2, l]) => h('option', { value: k2, selected: st.theme === k2 }, l)))),
+          h('div', { class: 'grid-form', style: { marginTop: '6px' } },
+            h('label', { class: 'field' }, h('span', null, '色のテーマ'), h('select', { onchange: (e) => { st.theme = e.target.value; } },
+              Object.entries(THEMES).map(([k2, l]) => h('option', { value: k2, selected: st.theme === k2 }, l)))),
+            h('label', { class: 'field' }, h('span', null, '文字の大きさ'), h('select', { onchange: (e) => { st.ppSize = e.target.value; } },
+              Object.entries(SIZES).map(([k2, l]) => h('option', { value: k2, selected: st.ppSize === k2 }, l))))),
+          h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '標準：1ページに2コート・3組・すべてのトーナメント／大きめ：2コート・2組・トーナメント1つ／特大：1コート・1組・トーナメント1つ'),
           h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '星取表の自チームどうしのマスには、大会のロゴが入ります（大会情報でロゴを登録してください）。')) : null,
         st.mode === 'xlsx' ? h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力するシート'),

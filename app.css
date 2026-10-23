@@ -1167,3 +1167,35 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .pp-br { flex: none; }
 .pp-ko.wrap { flex-wrap: wrap; row-gap: 3mm; }
 .pp-ko.wrap > .pp-br { flex: 0 0 calc(50% - 2mm); }
+
+/* パンフレット：開始時刻は通常の表のマス */
+.pp-ct td.pp-tm { font-weight: 900; width: 13mm; text-align: center; font-size: 10pt; }
+.pp-grid th.pp-tm, .pp-grid td.pp-tm { white-space: nowrap; font-weight: 800; width: 15mm; }
+.pp-grid td.pp-tm small { display: block; font-size: 0.75em; font-weight: 600; color: #666; }
+/* タイムテーブル（時間×コート） */
+.pp-grid.big { table-layout: fixed; }
+.pp-grid.big th, .pp-grid.big td { font-size: 8.5pt; padding: 1.2mm 1mm; vertical-align: middle; }
+.pp-grid.big td.cl b { display: block; font-size: 8pt; }
+.pp-grid.big .vs2 { display: block; color: #222; font-weight: 600; font-size: 7.5pt; line-height: 1.35; }
+.pp-grid.big .vs2 > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-grid.big .vs2 i { display: block; font-style: normal; font-size: 6.5pt; color: #888; }
+.pp-grid.big .vs2.ref { font-size: 6.5pt; white-space: normal; }
+.pp-grid.big td.none { color: #bbb; }
+.pp-grid.big.c9 .vs2, .pp-grid.big.c10 .vs2, .pp-grid.big.c11 .vs2, .pp-grid.big.c12 .vs2 { font-size: 6.5pt; }
+/* 決勝：トーナメント表＋試合番号 */
+.pp-ko-num { margin-top: 4mm; }
+.pp-nums.c2 { columns: 2; font-size: 8pt; }
+.pp-nums.c3 { columns: 3; font-size: 7pt; }
+.pp-nums.c2 b { width: 9mm; }
+/* コート別：1ページ1コート */
+.pp-courts.n1 { grid-template-columns: 1fr; }
+.pp-courts.n1 .pp-ct td, .pp-courts.n1 .pp-ct th { font-size: 11pt; padding: 2mm 2.5mm; }
+/* 文字の大きさ */
+.pp-size-large .pp-ct td, .pp-size-large .pp-ct th { font-size: 10.5pt; padding: 2mm; }
+.pp-size-large .pp-st td.tn { font-size: 10.5pt; }
+.pp-size-large .pp-st td { height: 10mm; font-size: 10pt; }
+.pp-size-large .pp-grid.big th, .pp-size-large .pp-grid.big td { font-size: 9.5pt; }
+.pp-size-xl .pp-st td.tn { font-size: 12pt; }
+.pp-size-xl .pp-st td { height: 13mm; font-size: 11.5pt; }
+.pp-size-xl .pp-grid.big th, .pp-size-xl .pp-grid.big td { font-size: 10.5pt; }
+.pp-size-xl .pp-grid.big .vs2 { font-size: 8.5pt; }
