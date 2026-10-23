@@ -1199,3 +1199,10 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .pp-size-xl .pp-st td { height: 13mm; font-size: 11.5pt; }
 .pp-size-xl .pp-grid.big th, .pp-size-xl .pp-grid.big td { font-size: 10.5pt; }
 .pp-size-xl .pp-grid.big .vs2 { font-size: 8.5pt; }
+
+/* 大会ロゴは枠いっぱいに表示する（白い余白を付けない）。透過の部分だけ白い背景が見える */
+.hero-logo { padding: 0; overflow: hidden; }
+.sns-card .sh img { padding: 0; }
+.ol-logo { padding: 0; overflow: hidden; }
+.pp-head img, .pp-hero img { padding: 0; overflow: hidden; }
+.pp-st td.diag img { padding: 0; }
