@@ -15,6 +15,7 @@ import WEB_PRINT from './web-print.js';
 import WEB_OUTLINE from './web-outline.js';
 import WEB_QR from './web-qr.js';
 import WEB_XLSX from './web-xlsx.js';
+import WEB_PAMPHLET from './web-pamphlet.js';
 import WEB_SCORE from './web-score.js';
 import { normalizeConfig, matchLength } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
@@ -501,6 +502,7 @@ const STATIC = {
   '/web-outline.js': [WEB_OUTLINE, JS],
   '/web-qr.js': [WEB_QR, JS],
   '/web-xlsx.js': [WEB_XLSX, JS],
+  '/web-pamphlet.js': [WEB_PAMPHLET, JS],
   '/web-score.js': [WEB_SCORE, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）

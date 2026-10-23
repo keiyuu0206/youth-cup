@@ -151,6 +151,36 @@ export function poller(fn, ms) {
   return () => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
 }
 
+// 自動更新はしない。別のアプリなどから一定時間（初期値5分）たって画面に戻ってきたときだけ、1回だけ確認する
+export function resumeCheck(fn, staleMs = 5 * 60 * 1000) {
+  let hiddenAt = null;
+  const onVis = async () => {
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+    if (hiddenAt && Date.now() - hiddenAt >= staleMs) { hiddenAt = null; try { await fn(); } catch { /* 次の操作で再試行 */ } }
+  };
+  document.addEventListener('visibilitychange', onVis);
+  return () => document.removeEventListener('visibilitychange', onVis);
+}
+
+// 最後に情報を取得した時刻（「更新」ボタンに表示する）
+let LAST_FETCH = null;
+export const markFetched = () => { LAST_FETCH = new Date(); document.querySelectorAll('.rf-time').forEach((el) => { el.textContent = fetchedText(); }); };
+const fetchedText = () => (LAST_FETCH ? `${toHHMM(LAST_FETCH.getHours() * 60 + LAST_FETCH.getMinutes())}時点` : '');
+
+// 「更新」ボタン（取得した時刻つき）。スマホでは画面の右下に浮かべて常に見える位置に置く。押すと onRefresh（変化があれば true を返す）を呼ぶ
+export function refreshButton(onRefresh, { withNav = false } = {}) {
+  const btn = h('button', { class: `refresh-fab${withNav ? ' with-nav' : ''} no-print`, type: 'button', 'aria-label': '最新の情報に更新' },
+    h('span', { class: 'rf-icon', 'aria-hidden': 'true' }, '↻'), h('span', { class: 'rf-label' }, '更新'), h('span', { class: 'rf-time' }, fetchedText()));
+  btn.onclick = async () => {
+    if (btn.disabled) return;
+    btn.disabled = true; btn.classList.add('busy');
+    try { const changed = await onRefresh(); markFetched(); toast(changed ? '最新の情報に更新しました' : '最新の情報です'); }
+    catch (e) { toast(e.message || '更新できませんでした。通信状況を確認してください', true); }
+    finally { btn.disabled = false; btn.classList.remove('busy'); }
+  };
+  return btn;
+}
+
 export async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('コピーしました'); }
   catch { toast('コピーできませんでした。長押しで選択してください', true); }

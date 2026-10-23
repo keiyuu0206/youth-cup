@@ -2,7 +2,7 @@ import { api, ApiError } from './web-api.js';
 const apiBase = api;
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
 
 const STATUS = {
@@ -752,6 +752,7 @@ async function tournamentView(root, id, navigate) {
 
   async function load() {
     const res = await api('GET', `/api/admin/tournaments/${id}${data ? `?rev=${data.tournament.rev}` : ''}`);
+    markFetched();
     if (res.unchanged) return false;
     data = res;
     if (!data.categories.find((c) => c.id === st.catId)) st.catId = data.categories[0]?.id || null;
@@ -769,13 +770,19 @@ async function tournamentView(root, id, navigate) {
     addCategory();
   }
 
-  // 関係者の仮登録を拾うため、入力中でなければ定期的に更新する
-  const stopPoll = poller(async () => {
-    if (!document.body.contains(root.firstChild)) return stopPoll();
+  // 自動更新はしない（「更新」ボタンで読み込む）。5分以上たって画面に戻ってきたときだけ、入力中でなければ1回確認する
+  function canRefresh() {
     const a = document.activeElement;
-    if (document.querySelector('.modal-back') || st.moveSel || st.dirty || settingsDirty() || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName))) return;
-    if (await load()) render();
-  }, 15000);
+    return !(document.querySelector('.modal-back') || st.moveSel || st.dirty || settingsDirty() || (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName)));
+  }
+  // 自動更新はしない。最新の情報（関係者の仮登録など）は「更新」ボタン（取得した時刻つき）で読み込む
+  // 画面を描く処理から使うので、定義の順番に左右されない関数宣言にする
+  async function refreshNow() {
+    if (!canRefresh()) throw new Error('入力中の内容があるため更新できません。保存するか、入力を終えてから押してください');
+    const changed = await load();
+    if (changed) render();
+    return changed;
+  }
 
   function render() {
     const t = data.tournament;
@@ -1151,6 +1158,13 @@ async function tournamentView(root, id, navigate) {
 
   // ----- カテゴリ -----
 
+  // カテゴリの帯の「更新」ボタン（関係者の仮登録などを読み込む）
+  function refreshInline() {
+    const b = refreshButton(refreshNow);
+    b.classList.remove('refresh-fab'); b.classList.add('btn', 'btn-sm', 'refresh-inline');
+    return b;
+  }
+
   function categoryView(t, cat, editable) {
     const subs = [['settings', '設定'], ['teams', `チーム（${cat.teams.length}）`], ['schedule', '組み分け・日程'], ['results', '結果'], ['standings', '順位']];
     const pending = cat.matches.filter((m) => m.status === 'provisional').length;
@@ -1164,6 +1178,7 @@ async function tournamentView(root, id, navigate) {
           h('span', { class: 'cat-bar-label' }, 'を編集中'),
           h('span', { class: 'cat-bar-meta' }, `${FORMAT[cat.config.format] || ''}　${cat.teams.length}チーム`),
           h('span', { class: 'spacer' }),
+          refreshInline(),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
         h('div', { class: 'chips' }, subs.map(([k, label]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: async () => {

@@ -1,5 +1,5 @@
 import { api, ApiError } from './web-api.js';
-import { h, mount, store, poller, toast, toHHMM, formatUpdated, formatDate, manualLink } from './web-ui.js';
+import { h, mount, store, poller, toast, toHHMM, formatUpdated, formatDate, manualLink, markFetched, refreshButton } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, statusOf, crest, absMin, dayOf, dayTotal, dayLabel } from './web-views.js';
 
 export async function relative(root, slug) {
@@ -9,6 +9,7 @@ export async function relative(root, slug) {
 
   async function load() {
     const res = await api('GET', `/api/rel/${encodeURIComponent(slug)}${data ? `?rev=${data.tournament.rev}` : ''}`);
+    markFetched();
     if (res.unchanged) return false;
     data = res;
     return true;
@@ -49,7 +50,7 @@ export async function relative(root, slug) {
 
   function start() {
     render();
-    poller(async () => { if (await load()) render(); }, 10000);
+    // 自動更新はしない。最新の情報は「更新」ボタン（取得した時刻つき）で読み込む
   }
 
   function selected() {
@@ -93,7 +94,8 @@ export async function relative(root, slug) {
       h('p', { class: 'muted small' }, '入力した結果は「仮登録」として相手チームと本部に表示されます。本部が確定すると、閲覧ページに公開されます。'),
       mine.length ? mine.map((m, i) => scoreCard(m, cat, team, cache, i === nextIdx)) : h('p', { class: 'empty' }, '試合はまだ組まれていません'),
       h('p', { style: { textAlign: 'center', marginTop: '24px' } }, h('a', { href: `/t/${slug}` }, '閲覧ページを開く')),
-      h('p', { class: 'manual-row' }, manualLink('team', '結果の入力のしかた（チーム関係者マニュアル）')));
+      h('p', { class: 'manual-row' }, manualLink('team', '結果の入力のしかた（チーム関係者マニュアル）')),
+      refreshButton(async () => { const changed = await load(); if (changed) render(); return changed; }));
   }
 
   function scoreCard(m, cat, team, cache, isNext) {

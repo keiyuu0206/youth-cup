@@ -1,4 +1,5 @@
 // 組合せ・結果を A4 縦で出力する（ブラウザの印刷から「PDFとして保存」）
+import { printPamphlet, THEMES } from './web-pamphlet.js';
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
 import { qrDataUrl } from './web-qr.js';
 import { buildXlsx, downloadBlob } from './web-xlsx.js';
@@ -33,6 +34,8 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     qr: true,
     post: { blocks: true, brackets: true, timeline: true, courts: false },
     xl: { schedule: true, groups: true, standings: true, ranking: true, teams: true },
+    pp: { overview: true, courts: true, star: true, ko: true }, // パンフレット（A4横）
+    theme: 'red',
   };
   const sponsors = tournament.sponsors || [];
   const hasLogos = categories.some((c) => c.teams.some((x) => x.logo));
@@ -50,11 +53,19 @@ export function openPrintDialog(tournament, categories, currentCatId) {
       h('input', { type: 'checkbox', checked: st.post[key], onchange: (e) => { st.post[key] = e.target.checked; } }), label) : null);
     mount(content,
       h('div', { class: 'stack' },
-        h('div', { class: 'chips', style: { paddingTop: 0 } }, [['normal', '資料（A4縦）'], ['posting', '掲示用（大きく1枚ずつ）'], ['xlsx', 'スプレッドシート（Excel）']].map(([k, l]) =>
+        h('div', { class: 'chips', style: { paddingTop: 0 } }, [['normal', '資料（A4縦）'], ['posting', '掲示用（大きく1枚ずつ）'], ['pamphlet', 'パンフレット（A4横）'], ['xlsx', 'スプレッドシート（Excel）']].map(([k, l]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.mode === k), onclick: () => { st.mode = k; draw(); } }, l))),
         categories.length > 1 ? h('label', { class: 'field' }, h('span', null, 'カテゴリ'), h('select', { onchange: (e) => { st.cat = e.target.value; draw(); } },
           categories.map((c) => h('option', { value: c.id, selected: st.cat === c.id }, c.name)),
           h('option', { value: 'all', selected: st.cat === 'all' }, 'すべてのカテゴリ'))) : null,
+        st.mode === 'pamphlet' ? h('div', null,
+          h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力する内容（A4横・デザイン版）'),
+          [['overview', '大会概要（大会要項の内容から）'], ['courts', 'コート別タイムスケジュール（1ページに2コート）'], ['star', '予選リーグ星取表（1ページに3組）', hasLeague],
+            ['ko', '決勝トーナメントのまとめ（トーナメント表・タイムテーブル・試合番号を1枚に）', hasKo]].map(([k2, l, ok = true]) => ok ? h('label', { class: 'check' },
+            h('input', { type: 'checkbox', checked: st.pp[k2], onchange: (e) => { st.pp[k2] = e.target.checked; } }), l) : null),
+          h('label', { class: 'field', style: { marginTop: '6px' } }, h('span', null, '色のテーマ'), h('select', { onchange: (e) => { st.theme = e.target.value; } },
+            Object.entries(THEMES).map(([k2, l]) => h('option', { value: k2, selected: st.theme === k2 }, l)))),
+          h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '星取表の自チームどうしのマスには、大会のロゴが入ります（大会情報でロゴを登録してください）。')) : null,
         st.mode === 'xlsx' ? h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '出力するシート'),
           [['schedule', '日程・結果'], ['groups', '組分け'], ['standings', '順位表'], ['ranking', '最終順位'], ['teams', 'チーム一覧']].map(([k, l]) => h('label', { class: 'check' },
@@ -65,7 +76,7 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           check('schedule', '組合せ・日程'),
           check('league', '星取表・順位', hasLeague),
           check('bracket', 'トーナメント表', hasKo),
-          check('courts', 'コート別の試合一覧')) : h('div', null,
+          check('courts', 'コート別の試合一覧')) : st.mode !== 'posting' ? null : h('div', null,
           h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '掲示する内容'),
           pcheck('blocks', 'リーグ戦（1ブロック1枚・A4縦）', hasLeague),
           pcheck('brackets', 'トーナメント（上位・中位・下位などを1つずつ1枚・A4横）', hasKo),
@@ -83,7 +94,7 @@ export function openPrintDialog(tournament, categories, currentCatId) {
           'チームのロゴを表示する') : null,
         sponsors.length && st.mode === 'normal' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: st.sponsors, onchange: (e) => { st.sponsors = e.target.checked; } }),
           `協賛スポンサーを表示する（${sponsors.length}件）`) : null,
-        st.mode === 'xlsx' ? null : h('p', { class: 'muted small', style: { margin: 0 } }, '用紙はA4縦です。印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
+        st.mode === 'xlsx' ? null : h('p', { class: 'muted small', style: { margin: 0 } }, (st.mode === 'pamphlet' ? '用紙はA4横です。' : '用紙はA4縦です。') + '印刷の画面が開いたら、送信先で「PDFとして保存」を選んでください（iPhoneは印刷画面の右上の共有ボタン →「"ファイル"に保存」）。')));
   };
   draw();
   modal({
@@ -92,7 +103,12 @@ export function openPrintDialog(tournament, categories, currentCatId) {
     actions: [
       { label: 'キャンセル', kind: 'btn-ghost' },
       { label: 'PDFを作成', kind: 'btn-primary', onClick: () => {
-        if (!Object.values(st.mode === 'posting' ? st.post : st.mode === 'xlsx' ? st.xl : st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
+        if (!Object.values(st.mode === 'posting' ? st.post : st.mode === 'xlsx' ? st.xl : st.mode === 'pamphlet' ? st.pp : st.sections).some(Boolean)) { toast('出力する内容を選んでください', true); return true; }
+        if (st.mode === 'pamphlet') {
+          const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
+          if (!printPamphlet(tournament, cats, st)) toast('出力できる日程がありません', true);
+          return;
+        }
         if (st.mode === 'xlsx') {
           const cats = st.cat === 'all' ? categories : categories.filter((c) => c.id === st.cat);
           exportSpreadsheet(tournament, cats, st);

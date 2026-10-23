@@ -1,6 +1,6 @@
 import { api } from './web-api.js';
 import { openPrintDialog, printParking } from './web-print.js';
-import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink } from './web-ui.js';
+import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
 export async function viewer(root, slug) {
@@ -24,10 +24,12 @@ export async function viewer(root, slug) {
   async function load(initial = false) {
     const res = await api('GET', `/api/public/${encodeURIComponent(slug)}${data ? `?rev=${data.tournament.rev}` : ''}`);
     lastLoaded = new Date();
-    if (res.unchanged) { updateStamp(); return; }
+    markFetched();
+    if (res.unchanged) { updateStamp(); return false; }
     data = res;
     if (!data.categories.find((c) => c.id === st.catId)) st.catId = data.categories[0]?.id;
     if (!initial) render();
+    return true;
   }
 
   try {
@@ -38,11 +40,11 @@ export async function viewer(root, slug) {
   }
   document.title = `${data.tournament.name} | 試合結果`;
   render();
-  poller(() => load(), 20000);
+  // 自動更新はしない。最新の情報は「更新」ボタン（取得した時刻つき）で読み込む
 
   function updateStamp() {
     const el = document.getElementById('stamp');
-    if (el && lastLoaded) el.textContent = `自動で更新しています（${toHHMM(lastLoaded.getHours() * 60 + lastLoaded.getMinutes())} 時点）`;
+    if (el && lastLoaded) el.textContent = `${toHHMM(lastLoaded.getHours() * 60 + lastLoaded.getMinutes())} 時点の情報です。最新の結果は右下の「更新」を押してください`;
   }
 
   function render() {
@@ -99,6 +101,7 @@ export async function viewer(root, slug) {
           openTeamPicker(cat, null, (tid) => { if (!tid) return; store.set(myKey(), tid); render(); printParking(t, cat, cat.teams.find((x) => x.id === tid)); });
         } }, icon('car'), '駐車券を出力') : null),
       h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })),
+      refreshButton(() => load(), { withNav: true }),
       h('p', { class: 'manual-row' }, manualLink('parents', '使い方（保護者マニュアル）')));
 
     const pickTeam = () => openTeamPicker(cat, ctx.myTeam, (id) => {

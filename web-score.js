@@ -1,6 +1,6 @@
 // スコア管理者の画面：結果の承認だけを行う（主にスマートフォン）
 import { api } from './web-api.js';
-import { h, mount, modal, confirmDialog, toast, run, poller, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
@@ -33,21 +33,26 @@ export async function scoreApp(root, me) {
     st.tid = tid; store.set('score:tid', tid); st.rev = null;
     if (!(await load())) return;
     draw();
-    if (st.stop) st.stop();
-    st.stop = poller(async () => {
-      if (document.querySelector('.modal-back, .sheet-back')) return;
-      const before = pendingCount();
-      if (await load()) {
-        draw();
-        const after = pendingCount();
-        if (after > before) toast(`新しい仮登録が${after - before}件あります`);
-      }
-    }, 15000);
+    // 自動更新はしない。最新の情報は「更新」ボタン（取得した時刻つき）で読み込む
+  }
+
+  // 新しい仮登録を読み込む（ボタン・画面に戻ってきたとき）
+  async function refresh(fromButton = true) {
+    if (document.querySelector('.modal-back, .sheet-back')) return false;
+    const before = pendingCount();
+    const changed = await load();
+    if (changed) {
+      draw();
+      const after = pendingCount();
+      if (after > before) { toast(`新しい仮登録が${after - before}件あります`); return fromButton ? 'quiet' : true; }
+    }
+    return changed;
   }
 
   async function load() {
     try {
       const r = await api('GET', `/api/score/tournaments/${st.tid}${st.rev != null ? `?rev=${st.rev}` : ''}`);
+      markFetched();
       if (r.unchanged) return false;
       st.data = r; st.rev = r.rev;
       if (!st.catId || !r.categories.some((c) => c.id === st.catId)) st.catId = r.categories[0] && r.categories[0].id;
@@ -81,7 +86,8 @@ export async function scoreApp(root, me) {
           h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), onclick: () => { st.tab = k; draw(); } }, l))),
       !cat ? h('p', { class: 'empty' }, 'カテゴリがありません')
         : st.tab === 'pending' ? pendingView(t, cat) : allView(t, cat),
-      h('p', { class: 'sc-foot muted small' }, `この大会の承認待ち：全${pendAll}件　15秒ごとに自動で更新しています`)));
+      h('p', { class: 'sc-foot muted small' }, `この大会の承認待ち：全${pendAll}件　新しい仮登録は「更新」を押すと表示されます`),
+      refreshButton(async () => { const r = await refresh(); return r === 'quiet' ? true : r; })));
   }
 
   const cacheOf = (cat) => ({ teams: teamMap(cat), codes: codeMap(cat) });
