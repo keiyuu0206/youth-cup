@@ -119,7 +119,9 @@ function bracketSvg(cat, sec, disp, opts) {
       const name = id && tm[id] && !opts.blank ? tm[id].short_name || tm[id].name : '';
       els.push(`<rect x="0" y="${y - 3.3}" width="9" height="6.6" rx="1" class="pk"/>`);
       els.push(`<text x="4.5" y="${y + 1.25}" class="pkt" text-anchor="middle">${esc(lab.length > 3 ? lab.slice(0, 3) : lab)}</text>`);
-      els.push(`<text x="11" y="${y + 1.2}" class="pn">${esc(name)}</text>`);
+      // 長い名前は途中で切らず、枠の幅（約32）に収まるよう詰めて表示する
+      const fit = name && [...name].reduce((a, ch) => a + (/[\x20-\x7e]/.test(ch) ? 0.55 : 1), 0) * 3.4 > leafW - 12;
+      els.push(`<text x="11" y="${y + 1.2}" class="pn"${fit ? ` textLength="${leafW - 12}" lengthAdjust="spacingAndGlyphs"` : ''}>${esc(name)}</text>`);
       els.push(`<path d="M10.5 ${y + 3}H${leafW}" class="pu"/>`);
       return { x: leafW, y };
     }
@@ -153,6 +155,20 @@ function bracketSvg(cat, sec, disp, opts) {
 
 // ---------- 各ページ ----------
 
+// その日の試合の内容：予選リーグ、上位・中位・下位トーナメント、下位リーグ など
+function stageText(ms) {
+  const parts = [];
+  if (ms.some((m) => m.stage === 'league')) parts.push('予選リーグ');
+  const ko = ms.filter((m) => m.stage === 'knockout');
+  const minPlace = (name) => Math.min(...ko.filter((m) => (m.group_label || null) === name).map((m) => m.place_w ?? 999));
+  const names = [...new Set(ko.map((m) => m.group_label || null))].sort((a, b) => minPlace(a) - minPlace(b));
+  const tour = names.filter((n) => !n || /トーナメント$/.test(n));
+  const others = names.filter((n) => n && !/トーナメント$/.test(n));
+  if (tour.length) parts.push(tour.every(Boolean) && tour.length > 1 ? `${tour.map((n) => n.replace(/トーナメント$/, '')).join('・')}トーナメント` : tour.map((n) => n || '決勝トーナメント').join('・'));
+  parts.push(...others);
+  return parts.join('・');
+}
+
 function overviewSheet(t, cats, opts) {
   const o = (t.settings && t.settings.outline) || defaultOutline(t);
   const info = (o.info || []).map((r) => ({ label: r.label, value: (r.value || '').trim() || (r.auto ? autoInfo(r.auto, t, cats) : '') })).filter((r) => r.label && r.value).slice(0, 8);
@@ -162,7 +178,7 @@ function overviewSheet(t, cats, opts) {
     const parts = cats.map((c) => {
       const ms = c.matches.filter((m) => dayOf(c.config, m.slot) === d);
       if (!ms.length) return null;
-      const st = [...new Set(ms.map((m) => (m.stage === 'league' ? '予選リーグ' : isRankLeague(m) ? '順位リーグ' : '決勝トーナメント')))].join('・');
+      const st = stageText(ms);
       const first = Math.min(...ms.map((m) => m.start_min));
       return `${c.name}：${st}（${toHHMM(first)}〜）`;
     }).filter(Boolean);
@@ -170,11 +186,15 @@ function overviewSheet(t, cats, opts) {
     return h('div', { class: 'pp-day' }, h('div', { class: 'pp-day-n' }, h('b', null, `${d + 1}日目`), date ? h('span', null, formatDate(date)) : null),
       h('div', { class: 'pp-day-b' }, parts.map((p) => h('div', null, p))));
   });
+  const lenText = (x) => (x.periods === 1 ? `${x.halfMinutes}分` : x.periods === 3 ? `${x.halfMinutes}分×3（休憩${x.halftimeMinutes}分）` : `${x.halfMinutes}分ハーフ（${x.halfMinutes}-${x.halftimeMinutes}-${x.halfMinutes}）`);
   const rules = cats.map((c) => {
     const cfg = c.config;
-    const len = cfg.periods === 1 ? `${cfg.halfMinutes}分` : cfg.periods === 3 ? `${cfg.halfMinutes}分×3（休憩${cfg.halftimeMinutes}分）` : `${cfg.halfMinutes}分ハーフ（${cfg.halfMinutes}-${cfg.halftimeMinutes}-${cfg.halfMinutes}）`;
     const tb = (cfg.tiebreak || []).map((k) => TIEBREAK_LABEL[k]).filter(Boolean).join(' → ');
-    return h('tr', null, h('th', null, c.name), h('td', null, `試合時間 ${len}`, h('br'), `勝点（勝3・分1・負0）が並んだ場合：${tb}`));
+    // 決勝トーナメントだけ試合時間を変えているときは、両方を書く
+    const ko = cfg.format === 'league_knockout' && cfg.koTiming && cfg.koTiming.enabled ? { ...cfg, ...cfg.koTiming } : null;
+    const timeLines = ko ? [`予選リーグ ${lenText(cfg)}`, `決勝トーナメント ${lenText(ko)}`] : [`試合時間 ${lenText(cfg)}`];
+    return h('tr', null, h('th', null, c.name), h('td', null, timeLines.map((l) => [l, h('br')]),
+      cfg.format !== 'knockout' ? `勝点（勝3・分1・負0）が並んだ場合：${tb}` : null));
   });
   const secs = (o.sections || []).filter((s) => !['schedule', 'ranking'].includes(s.auto)).map((s) => ({ title: s.title, text: [s.auto ? autoSection(s.auto, t, cats) : '', s.body || ''].filter((x) => x.trim()).join('\n') }))
     .filter((s) => s.text.trim()).slice(0, 4);

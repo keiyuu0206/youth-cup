@@ -1206,3 +1206,11 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .ol-logo { padding: 0; overflow: hidden; }
 .pp-head img, .pp-hero img { padding: 0; overflow: hidden; }
 .pp-st td.diag img { padding: 0; }
+
+/* パンフレット：チーム名は途中で切らずに折り返す */
+.pp-st th.tn, .pp-st td.tn { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }
+.pp-st td.tn { display: table-cell; }
+.pp-st td.tn .no, .pp-st td.tn img.tl { float: left; }
+.pp-grid.big .vs2 > span { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.2; }
+.pp-g div { white-space: normal; overflow: visible; text-overflow: clip; }
+.pp-nums .rn { white-space: normal; }
