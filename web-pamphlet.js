@@ -63,7 +63,9 @@ function koSections(cat) {
   const secs = names.map((name, si) => {
     const list = ko.filter((m) => (m.group_label || null) === name);
     const built = buildTree(list);
-    const prefix = SHORT(name);
+    // 段が複数ある大会で、段の名前が「決勝トーナメント」のときは「上位①」のように（1つだけの大会は「①」）
+    const multi = names.length > 1 || cat.matches.some(isRankLeague);
+    const prefix = !name || name === '決勝トーナメント' ? (multi ? '上位' : '') : SHORT(name);
     let n = 0;
     const matchNodes = [];
     if (built) {

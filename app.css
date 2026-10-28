@@ -1214,3 +1214,6 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .pp-grid.big .vs2 > span { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.2; }
 .pp-g div { white-space: normal; overflow: visible; text-overflow: clip; }
 .pp-nums .rn { white-space: normal; }
+/* トーナメント表の並び：幅を中身に合わせて確保してから中央に置く（はみ出しを用紙に収める計算に含めるため） */
+.pp-ko { width: max-content; max-width: none; margin-left: auto; margin-right: auto; }
+.pp-ko.wrap { width: auto; }
