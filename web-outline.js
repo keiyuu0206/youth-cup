@@ -128,16 +128,33 @@ export function autoSection(key, t, cats) {
 
 // ---------- 要項のPDF ----------
 
-// 本文を行ごとに整形（【】は小見出し、●は箇条書き、※は注記）
-function bodyBlocks(text) {
+// 赤字の強調：**…** で囲んだ部分を赤字（太字）で表示する
+export function richText(text) {
+  const out = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0, m;
+  const str = String(text || '');
+  while ((m = re.exec(str))) {
+    if (m.index > last) out.push(str.slice(last, m.index));
+    out.push(h('span', { class: 'ol-red' }, m[1]));
+    last = m.index + m[0].length;
+  }
+  if (last < str.length) out.push(str.slice(last));
+  return out;
+}
+// 赤字の記号（**）を取り除いた文字（1行の入力欄の表示など）
+export const plainText = (text) => String(text || '').replace(/\*\*(.+?)\*\*/g, '$1');
+
+// 本文を行ごとに整形（【】は小見出し、●は箇条書き、※は注記。**…** は赤字）
+export function bodyBlocks(text) {
   const out = [];
   for (const raw of String(text || '').split('\n')) {
     const line = raw.replace(/\s+$/, '');
     if (!line.trim()) continue;
-    if (/^【.*】$/.test(line.trim())) out.push(h('h4', { class: 'ol-h4' }, line.trim().slice(1, -1)));
-    else if (/^[●・◆■]/.test(line.trim())) out.push(h('p', { class: 'ol-li' }, line.trim().slice(1).trim()));
-    else if (/^※/.test(line.trim())) out.push(h('p', { class: 'ol-note' }, line.trim()));
-    else out.push(h('p', { class: `ol-p${/^\s/.test(raw) ? ' ind' : ''}` }, line.trim()));
+    if (/^【.*】$/.test(line.trim())) out.push(h('h4', { class: 'ol-h4' }, richText(line.trim().slice(1, -1))));
+    else if (/^[●・◆■]/.test(line.trim())) out.push(h('p', { class: 'ol-li' }, richText(line.trim().slice(1).trim())));
+    else if (/^※/.test(line.trim())) out.push(h('p', { class: 'ol-note' }, richText(line.trim())));
+    else out.push(h('p', { class: `ol-p${/^\s/.test(raw) ? ' ind' : ''}` }, richText(line.trim())));
   }
   return out;
 }
@@ -148,11 +165,19 @@ export function outlineWeb(t, cats, outline) {
   const info = (o.info || []).map((r) => ({ label: r.label, value: (r.value || '').trim() || (r.auto ? autoInfo(r.auto, t, cats) : '') })).filter((r) => r.label && r.value);
   const secs = (o.sections || []).map((x) => ({ ...x, text: [x.auto ? autoSection(x.auto, t, cats) : '', x.body || ''].filter((v) => String(v).trim()).join('\n') }))
     .filter((x) => x.title && (x.text.trim() || (x.images || []).length));
+  const sponsors = (t.sponsors || []).filter((sp) => sp.img);
   return h('div', { class: 'olw' },
-    h('div', { class: 'olw-cover' }, h('h2', null, o.title || t.name), o.subtitle ? h('p', { class: 'olw-sub' }, o.subtitle) : null, o.catch ? h('p', { class: 'olw-catch' }, o.catch) : null),
-    info.length ? h('table', { class: 'olw-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, v])))))) : null,
+    h('div', { class: 'olw-cover' },
+      t.logo ? h('img', { class: 'olw-logo', src: t.logo, alt: '' }) : null,
+      h('div', null, h('div', { class: 'olw-kicker' }, '大会要項'), h('h2', null, plainText(o.title) || t.name),
+        o.subtitle ? h('p', { class: 'olw-sub' }, plainText(o.subtitle)) : null, o.catch ? h('p', { class: 'olw-catch' }, plainText(o.catch)) : null)),
+    info.length ? h('table', { class: 'olw-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label),
+      h('td', null, r.value.split('\n').map((v, k) => [k ? h('br') : null, ...richText(v)])))))) : null,
     secs.map((x) => h('section', { class: 'olw-sec' }, h('h3', null, x.title), bodyBlocks(x.text),
-      (x.images || []).map((im) => h('img', { class: 'olw-img', src: `/img/a/${im.id}`, alt: im.name || x.title, loading: 'lazy' })))));
+      (x.images || []).length ? h('div', { class: `olw-imgs n${Math.min(x.images.length, 2)}` }, x.images.map((im) => h('figure', null,
+        h('a', { href: `/img/a/${im.id}`, target: '_blank', rel: 'noopener', 'aria-label': `${im.caption || x.title}（拡大して見る）` },
+          h('img', { src: `/img/a/${im.id}`, alt: im.caption || x.title, loading: 'lazy' })), im.caption ? h('figcaption', null, im.caption) : null))) : null)),
+    sponsors.length ? h('div', { class: 'olw-sponsors' }, h('span', null, 'ご協賛'), h('div', null, sponsors.map((sp) => h('img', { src: sp.img, alt: sp.name })))) : null);
 }
 
 export function printOutline(t, cats, outline, opts = {}) {
@@ -163,10 +188,10 @@ export function printOutline(t, cats, outline, opts = {}) {
       t.logo ? h('img', { class: 'ol-logo', src: t.logo, alt: '' }) : null,
       h('div', { class: 'ol-hero-t' },
         h('div', { class: 'ol-kicker' }, '大会要項'),
-        h('h1', null, o.title || t.name),
-        o.subtitle ? h('div', { class: 'ol-sub' }, o.subtitle) : null,
-        o.catch ? h('div', { class: 'ol-catch' }, o.catch) : null)),
-    info.length ? h('table', { class: 'ol-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, v])))))) : null,
+        h('h1', null, plainText(o.title) || t.name),
+        o.subtitle ? h('div', { class: 'ol-sub' }, plainText(o.subtitle)) : null,
+        o.catch ? h('div', { class: 'ol-catch' }, plainText(o.catch)) : null)),
+    info.length ? h('table', { class: 'ol-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, ...richText(v)])))))) : null,
     opts.qr && t.slug ? h('div', { class: 'ol-qr' }, qrBlock(t, '', 'ol-qr-img'),
       h('div', null, h('strong', null, '大会当日の試合結果・速報はこちら'), h('p', null, 'スマートフォンで読み取ると、日程・結果・順位表・トーナメント表をいつでも確認できます。'), h('small', null, viewerUrl(t)))) : null,
     (o.sections || []).map((sec) => {
@@ -220,7 +245,18 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
     const el = h('textarea', { rows, placeholder: ph, oninput: (e) => { onInput(e.target.value); touch(); autoGrow(e.target); } });
     el.value = value || '';
     setTimeout(() => autoGrow(el), 0);
-    return el;
+    // 赤字：選んだ部分を ** で囲む（**…** の部分が赤字で表示される）
+    const red = h('button', { class: 'ol-redbtn', type: 'button', title: '選んだ部分を赤字にする', onmousedown: (e) => e.preventDefault(), onclick: () => {
+      const a = el.selectionStart, b = el.selectionEnd;
+      if (a === b) { toast('赤字にしたい文字を選んでから［赤字］を押してください', true); return; }
+      const sel = el.value.slice(a, b);
+      const isRed = /^\*\*[\s\S]+\*\*$/.test(sel);
+      const rep2 = isRed ? sel.slice(2, -2) : `**${sel.replace(/\*\*/g, '')}**`;
+      el.value = el.value.slice(0, a) + rep2 + el.value.slice(b);
+      el.setSelectionRange(a, a + rep2.length); el.focus();
+      onInput(el.value); touch(); autoGrow(el);
+    } }, '赤字');
+    return h('div', { class: 'ol-area' }, el, red);
   };
   // 入力した行数に合わせて高さを変える（空欄なら1行分）
   const autoGrow = (el) => { el.style.height = 'auto'; if (el.value) el.style.height = `${Math.max(el.scrollHeight + 2, 44)}px`; };
@@ -265,7 +301,7 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
           Object.entries(AUTO_SECTION).map(([k, l]) => h('option', { value: k, selected: (sec.auto || '') === k }, l)))),
         sec.auto ? h('pre', { class: 'ol-auto' }, autoSection(sec.auto, t, categories) || '（カテゴリを登録すると自動で作られます）') : null,
         h('label', { class: 'field', style: { marginTop: '8px' } }, h('span', null, sec.auto ? '自動の文章の後に続ける内容' : '本文'),
-          area(sec.body, (v) => { sec.body = v; }, 4, '1行ごとに入力。行頭に●を付けると箇条書き、【】で囲むと小見出し、※で始めると注記になります')),
+          area(sec.body, (v) => { sec.body = v; }, 4, '1行ごとに入力。行頭に●を付けると箇条書き、【】で囲むと小見出し、※で始めると注記になります。強調したい部分を選んで［赤字］を押すと赤字になります（**…** で囲まれた部分が赤字）')),
         h('div', { class: 'ol-imgs-edit' },
           (sec.images || []).map((im, j) => h('figure', null,
             h('img', { src: `/img/a/${im.id}`, alt: '' }),

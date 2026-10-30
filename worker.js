@@ -472,7 +472,7 @@ function publicOutline(o) {
     title: str(o.title, 120), subtitle: str(o.subtitle, 120), catch: str(o.catch, 200),
     info: (Array.isArray(o.info) ? o.info : []).slice(0, 30).map((r) => ({ label: str(r.label, 40), value: str(r.value, 1000), auto: str(r.auto, 20) })),
     sections: (Array.isArray(o.sections) ? o.sections : []).slice(0, 40).map((x) => ({ title: str(x.title, 80), auto: str(x.auto, 20), body: str(x.body, 6000),
-      images: (Array.isArray(x.images) ? x.images : []).slice(0, 10).map((i) => ({ id: str(i.id, 64), name: str(i.name, 80) })).filter((i) => /^[\w-]+$/.test(i.id)) })),
+      images: (Array.isArray(x.images) ? x.images : []).slice(0, 10).map((i) => ({ id: str(i.id, 64), caption: str(i.caption || i.name, 120) })).filter((i) => /^[\w-]+$/.test(i.id)) })),
   };
 }
 

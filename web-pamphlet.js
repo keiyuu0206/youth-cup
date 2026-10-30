@@ -5,7 +5,7 @@
 import { h, toHHMM, formatDate } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, winnerSide, isRankLeague, matchLengthFor, TIEBREAK_LABEL } from './web-views.js';
 import { runPrint, periodText, qrBlock } from './web-print.js';
-import { defaultOutline, autoInfo, autoSection } from './web-outline.js';
+import { defaultOutline, autoInfo, autoSection, richText, plainText } from './web-outline.js';
 
 const PAGE = '@page { size: A4 landscape; margin: 8mm; }';
 export const THEMES = { red: '赤×黒', green: '緑', blue: '青', black: '黒' };
@@ -203,19 +203,19 @@ function overviewSheet(t, cats, opts) {
   return sheet(
     h('header', { class: 'pp-hero' },
       t.logo ? h('img', { src: t.logo, alt: '' }) : null,
-      h('div', null, h('div', { class: 'pp-hero-k' }, 'TOURNAMENT GUIDE'), h('h1', null, o.title || t.name),
-        o.catch || o.subtitle ? h('p', null, o.catch || o.subtitle) : null),
+      h('div', null, h('div', { class: 'pp-hero-k' }, 'TOURNAMENT GUIDE'), h('h1', null, plainText(o.title) || t.name),
+        o.catch || o.subtitle ? h('p', null, plainText(o.catch || o.subtitle)) : null),
       opts.qr ? qrBlock(t, '結果・速報はこちら', 'pp-qr') : null),
     h('div', { class: 'pp-ov' },
       h('div', { class: 'pp-col' },
         h('h2', { class: 'pp-band' }, '大会概要', h('small', null, 'OVERVIEW')),
-        h('table', { class: 'pp-tbl' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, v])))))),
+        h('table', { class: 'pp-tbl' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, ...richText(v)])))))),
         h('h2', { class: 'pp-band' }, '大会日程', h('small', null, 'SCHEDULE')),
         h('div', { class: 'pp-days' }, dayCards)),
       h('div', { class: 'pp-col' },
         h('h2', { class: 'pp-band' }, '試合ルール', h('small', null, 'MATCH RULES')),
         h('table', { class: 'pp-tbl' }, h('tbody', null, rules)),
-        secs.map((s) => [h('h2', { class: 'pp-band' }, s.title), h('div', { class: 'pp-text' }, s.text.split('\n').slice(0, 6).map((l) => h('div', null, l)))]),
+        secs.map((s) => [h('h2', { class: 'pp-band' }, s.title), h('div', { class: 'pp-text' }, s.text.split('\n').slice(0, 6).map((l) => h('div', null, richText(l))))]),
         opts.sponsors && (t.sponsors || []).length ? h('div', { class: 'pp-sponsors' }, h('span', null, 'ご協賛'), t.sponsors.map((sp) => h('img', { src: sp.img, alt: sp.name }))) : null)));
 }
 

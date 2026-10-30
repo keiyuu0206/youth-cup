@@ -1263,3 +1263,28 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .sheet-back ~ .modal-back { z-index: 62; }
 /* タブは数に合わせて横一列に（運営管理者は3つ） */
 .sc-tabs { display: grid; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }
+
+/* 要項：赤字の強調 */
+.ol-red { color: #d0202f; font-weight: 800; }
+.ol-area { position: relative; }
+.ol-area textarea { padding-right: 52px; }
+.ol-redbtn { position: absolute; right: 6px; top: 6px; min-height: 28px; padding: 0 8px; border-radius: 8px; border: 1.5px solid #d0202f; background: #fff; color: #d0202f; font: inherit; font-size: 0.75rem; font-weight: 800; cursor: pointer; }
+/* 保護者の画面の要項：PDFと同じ内容（ロゴ・画像2列・説明文・協賛） */
+.olw-cover { display: flex; align-items: center; gap: 12px; }
+.olw-logo { width: 64px; height: 64px; border-radius: 12px; object-fit: contain; background: #fff; flex: none; }
+.olw-kicker { font-size: 0.72rem; letter-spacing: 0.2em; font-weight: 800; opacity: 0.85; }
+.olw-imgs { display: grid; gap: 8px; margin-top: 8px; }
+.olw-imgs.n2 { grid-template-columns: 1fr 1fr; }
+.olw-imgs figure { margin: 0; }
+.olw-imgs img { display: block; width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); }
+.olw-imgs figcaption { font-size: 0.8rem; color: var(--ink-2); margin-top: 4px; text-align: center; }
+.olw-sponsors { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.olw-sponsors > span { font-size: 0.8rem; color: var(--ink-2); }
+.olw-sponsors > div { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.olw-sponsors img { height: 40px; max-width: 45%; object-fit: contain; }
+.olw-info .ol-red, .olw-sec .ol-red { color: #d0202f; }
+
+/* スマホの幅では、要項の画像は1列で大きく（押すと元の大きさで開く） */
+@media (max-width: 600px) { .olw-imgs.n2 { grid-template-columns: 1fr; } }
+.olw-imgs a { display: block; }
+.olw-sec > p.olw-hint, .olw-imgs + .olw-hint { font-size: 0.75rem; color: var(--ink-2); }
