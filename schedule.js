@@ -303,7 +303,7 @@ export function placeMatches(cfg, league, ko) {
 
 // 枠の中に決勝トーナメントの試合があれば、その長さを使う
 // 予選と決勝トーナメントの間：同じ日に予選の後に決勝トーナメントが続くとき、決勝の最初の枠の前に koGapMinutes をあける
-function gapOfSlots(cfg, matches, base = 0) {
+export function gapOfSlots(cfg, matches, base = 0) {
   const gapMin = cfg.format === 'league_knockout' ? Number(cfg.koGapMinutes) || 0 : 0;
   if (!gapMin) return () => 0;
   const league = matches.filter((m) => m.stage === 'league').map((m) => m.slot - base);
@@ -314,7 +314,7 @@ function gapOfSlots(cfg, matches, base = 0) {
   return (i) => (i === firstKo ? gapMin : 0);
 }
 
-function lenOfSlots(cfg, matches, base = 0) {
+export function lenOfSlots(cfg, matches, base = 0) {
   const ko = new Set(matches.filter((m) => m.stage === 'knockout').map((m) => m.slot - base));
   const koLen = matchLengthFor(cfg, { stage: 'knockout' });
   const len = matchLength(cfg);

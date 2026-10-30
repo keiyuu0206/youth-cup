@@ -500,7 +500,7 @@ function loginView(root, onDone) {
     h('label', { class: 'field' }, h('span', null, 'パスワード'), pw), err,
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'ログイン'),
     h('p', { class: 'muted small', style: { margin: 0 } }, 'IDとパスワードは全体管理者から発行されます。わからない場合は全体管理者にお問い合わせください。'),
-    h('p', { class: 'manual-row', style: { margin: 0 } }, manualLink('organizer', '大会管理者マニュアル'), manualLink('scorer', 'スコア管理者マニュアル'))));
+    h('p', { class: 'manual-row', style: { margin: 0 } }, manualLink('organizer', '大会管理者マニュアル'), manualLink('scorer', 'スコア・運営管理者マニュアル'))));
   (last ? pw : id).focus();
 }
 

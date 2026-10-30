@@ -1,5 +1,6 @@
 import { api } from './web-api.js';
-import { openPrintDialog, printParking } from './web-print.js';
+import { printParking } from './web-print.js';
+import { outlineWeb } from './web-outline.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
@@ -42,6 +43,11 @@ export async function viewer(root, slug) {
   render();
   // 自動更新はしない。最新の情報は「更新」ボタン（取得した時刻つき）で読み込む
 
+  // 大会要項（Webで表示）
+  function openOutlineWeb(t) {
+    sheet({ title: '大会要項', content: outlineWeb(t, data.categories, t.outline) });
+  }
+
   function updateStamp() {
     const el = document.getElementById('stamp');
     if (el && lastLoaded) el.textContent = `${toHHMM(lastLoaded.getHours() * 60 + lastLoaded.getMinutes())} 時点の情報です。最新の結果は右下の「更新」を押してください`;
@@ -68,7 +74,8 @@ export async function viewer(root, slug) {
         t.date ? h('span', null, icon('calendar'), dateRange(t, data.categories)) : null,
         t.venue ? h('span', null, icon('pin'), t.venue) : null,
         statePill,
-        (t.lost || []).length ? h('button', { class: 'state-pill lost-pill', type: 'button', onclick: () => openLost(t) }, icon('bag'), `忘れ物 ${t.lost.length}件`) : null)));
+        (t.lost || []).length ? h('button', { class: 'state-pill lost-pill', type: 'button', onclick: () => openLost(t) }, icon('bag'), `忘れ物 ${t.lost.length}件`) : null),
+      h('div', { class: 'hero-actions' }, h('button', { class: 'outline-btn', type: 'button', onclick: () => openOutlineWeb(t) }, icon('list'), '大会要項を見る'))));
 
     if (!cat) {
       mount(root, hero, h('div', { class: 'wrap' }, h('p', { class: 'empty' }, '試合日程はまだ公開されていません')));
@@ -94,7 +101,6 @@ export async function viewer(root, slug) {
       sponsorAll(sponsors),
       h('div', { class: 'share-row' },
         h('button', { class: 'btn', type: 'button', onclick: () => snsMode(t, cat, ctx) }, icon('share'), 'SNSに投稿する画像'),
-        h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, icon('list'), 'PDFで保存'),
         t.parking ? h('button', { class: 'btn', type: 'button', onclick: () => {
           const team = ctx.cache.teams[ctx.myTeam];
           if (team) return printParking(t, cat, team);

@@ -142,6 +142,19 @@ function bodyBlocks(text) {
   return out;
 }
 
+// 大会要項をWebで表示する（閲覧ページ用）。要項が無い大会は、基本の情報（大会名・日程・会場など）だけ
+export function outlineWeb(t, cats, outline) {
+  const o = outline || { ...defaultOutline(t), sections: defaultOutline(t).sections.filter((x) => x.auto).map((x) => ({ ...x, body: '' })) };
+  const info = (o.info || []).map((r) => ({ label: r.label, value: (r.value || '').trim() || (r.auto ? autoInfo(r.auto, t, cats) : '') })).filter((r) => r.label && r.value);
+  const secs = (o.sections || []).map((x) => ({ ...x, text: [x.auto ? autoSection(x.auto, t, cats) : '', x.body || ''].filter((v) => String(v).trim()).join('\n') }))
+    .filter((x) => x.title && (x.text.trim() || (x.images || []).length));
+  return h('div', { class: 'olw' },
+    h('div', { class: 'olw-cover' }, h('h2', null, o.title || t.name), o.subtitle ? h('p', { class: 'olw-sub' }, o.subtitle) : null, o.catch ? h('p', { class: 'olw-catch' }, o.catch) : null),
+    info.length ? h('table', { class: 'olw-info' }, h('tbody', null, info.map((r) => h('tr', null, h('th', null, r.label), h('td', null, r.value.split('\n').map((v, i) => [i ? h('br') : null, v])))))) : null,
+    secs.map((x) => h('section', { class: 'olw-sec' }, h('h3', null, x.title), bodyBlocks(x.text),
+      (x.images || []).map((im) => h('img', { class: 'olw-img', src: `/img/a/${im.id}`, alt: im.name || x.title, loading: 'lazy' })))));
+}
+
 export function printOutline(t, cats, outline, opts = {}) {
   const o = outline || defaultOutline(t);
   const info = (o.info || []).map((r) => ({ label: r.label, value: (r.value || '').trim() || (r.auto ? autoInfo(r.auto, t, cats) : '') })).filter((r) => r.label && r.value);

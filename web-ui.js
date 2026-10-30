@@ -276,7 +276,7 @@ export function resizeBanner(file, maxW = 1200, maxH = 600) {
 export const MANUALS = {
   parents: { href: '/INFINEX_manual_parents.pdf', title: '保護者マニュアル', desc: '日程・結果・順位表・トーナメント表の見かた' },
   team: { href: '/INFINEX_manual_team.pdf', title: 'チーム関係者マニュアル', desc: '試合結果の入力（仮登録）のしかた' },
-  scorer: { href: '/INFINEX_manual_scorer.pdf', title: 'スコア管理者マニュアル', desc: '結果の承認・修正・差し戻し' },
+  scorer: { href: '/INFINEX_manual_scorer.pdf', title: 'スコア管理者・運営管理者マニュアル', desc: '結果の承認・修正・差し戻し、確定済みの修正、忘れ物の登録' },
   organizer: { href: '/INFINEX_manual_organizer.pdf', title: '大会管理者マニュアル', desc: '大会の作成から当日の運営、資料の出力まで' },
   superadmin: { href: '/INFINEX_manual_superadmin.pdf', title: '全体管理者マニュアル', desc: 'アカウントの管理、テンプレートの公開' },
 };

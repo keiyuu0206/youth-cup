@@ -139,3 +139,7 @@ CREATE TABLE users (id TEXT PRIMARY KEY, login_id TEXT NOT NULL UNIQUE, name TEX
   pass_hash TEXT NOT NULL, pass_salt TEXT NOT NULL, iterations INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, session_ver INTEGER NOT NULL DEFAULT 1,
   parent_id TEXT, scope TEXT,           -- スコア管理者：発行した管理者と担当大会（JSON）
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_login_at TEXT);
+
+-- 当日の時間の調整の履歴（「直前の調整を元に戻す」用）
+CREATE TABLE time_history (id TEXT PRIMARY KEY, category_id TEXT NOT NULL, label TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX idx_time_history_category ON time_history(category_id);
