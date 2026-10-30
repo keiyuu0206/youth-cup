@@ -1217,3 +1217,49 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 /* トーナメント表の並び：幅を中身に合わせて確保してから中央に置く（はみ出しを用紙に収める計算に含めるため） */
 .pp-ko { width: max-content; max-width: none; margin-left: auto; margin-right: auto; }
 .pp-ko.wrap { width: auto; }
+
+/* 時間の調整 */
+.retime-ops { display: grid; gap: 6px; }
+.retime-ops .choice { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; text-align: left; background: var(--surface); }
+.retime-ops .choice.on { border-color: var(--turf); background: var(--turf-soft); }
+.retime-ops .choice input { grid-row: span 2; }
+.retime-ops .choice span { grid-column: 2; font-size: 0.8rem; color: var(--ink-2); }
+.retime-list { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.retime-list table { width: 100%; font-size: 0.82rem; }
+.retime-list th, .retime-list td { padding: 4px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+
+/* 閲覧ページ：大会要項のボタンと、Webでの要項の表示 */
+.hero-actions { margin-top: 12px; }
+.outline-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 16px; border-radius: 999px; border: 1.5px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.14); color: #fff; font: inherit; font-weight: 800; font-size: 0.9rem; cursor: pointer; }
+.outline-btn .ico { width: 18px; height: 18px; }
+.olw { display: grid; gap: 14px; }
+.olw-cover { padding: 16px; border-radius: 14px; background: var(--turf); color: #fff; }
+.olw-cover h2 { margin: 0; font-size: 1.25rem; line-height: 1.35; }
+.olw-sub { margin: 4px 0 0; font-weight: 700; }
+.olw-catch { margin: 6px 0 0; font-size: 0.9rem; opacity: 0.9; }
+.olw-info { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.olw-info th, .olw-info td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.olw-info th { width: 7.5em; color: var(--turf); white-space: nowrap; font-weight: 800; }
+.olw-sec h3 { margin: 0 0 6px; padding-left: 10px; border-left: 4px solid var(--turf); font-size: 1rem; }
+.olw-sec p { margin: 4px 0; font-size: 0.92rem; line-height: 1.7; }
+.olw-sec .ol-h4 { font-size: 0.95rem; margin: 10px 0 4px; color: var(--ink); }
+.olw-sec .ol-li { padding-left: 1.1em; position: relative; }
+.olw-sec .ol-li::before { content: ""; position: absolute; left: 0.25em; top: 0.75em; width: 0.45em; height: 0.45em; border-radius: 50%; background: var(--turf); }
+.olw-sec .ol-note { font-size: 0.85rem; color: var(--ink-2); margin-left: 1.1em; }
+.olw-sec .ol-p.ind { padding-left: 1em; }
+.olw-img { display: block; width: 100%; height: auto; border-radius: 10px; margin-top: 8px; border: 1px solid var(--line); }
+
+/* スコア管理者・運営管理者：試合一覧の絞り込みと時刻の見出し、忘れ物 */
+.sc-filter { margin: 8px 0 0; }
+.sc-filter .chip-btn { min-height: 38px; }
+.sc-time-h { margin: 14px 2px 6px; font-weight: 900; font-size: 1.05rem; color: var(--ink); border-bottom: 2px solid var(--line); padding-bottom: 2px; }
+.sc-lost { display: grid; grid-template-columns: 96px 1fr; gap: 12px; align-items: start; }
+.sc-lost:not(:has(img)) { grid-template-columns: 1fr; }
+.sc-lost img { width: 96px; height: 96px; object-fit: cover; border-radius: 10px; }
+.sc-lost-b p { margin: 0 0 4px; font-weight: 700; }
+.sc-lost-b .btn { margin-top: 8px; }
+/* シートの上から開いた確認のポップアップは、シートより手前に出す */
+.sheet-back ~ .modal-back { z-index: 62; }
+/* タブは数に合わせて横一列に（運営管理者は3つ） */
+.sc-tabs { display: grid; grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }

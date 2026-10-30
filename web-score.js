@@ -1,15 +1,18 @@
-// スコア管理者の画面：結果の承認だけを行う（主にスマートフォン）
+// スコア管理者・運営管理者の画面（主にスマートフォン）
+//  スコア管理者：仮登録の結果の承認・修正・差し戻しと、結果の入力
+//  運営管理者　：上に加えて、確定済みの結果の修正・取り消しと、忘れ物の登録・返却済みの処理
 import { api } from './web-api.js';
-import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
 
 export async function scoreApp(root, me) {
-  const st = { tid: store.get('score:tid'), catId: null, tab: 'pending', data: null, rev: null, stop: null };
+  const st = { tid: store.get('score:tid'), catId: null, tab: 'pending', data: null, rev: null, stop: null, filter: 'all', court: 'all' };
+  const isOp = me.role === 'operator'; // 運営管理者
 
   const header = () => h('header', { class: 'site-head sc-head' }, h('div', { class: 'wrap' },
-    h('div', { class: 'sc-who' }, h('strong', null, '結果の承認'), h('small', null, `${me.name}（${me.region || me.parentName || ''}）`)),
+    h('div', { class: 'sc-who' }, h('strong', null, isOp ? '運営（結果・忘れ物）' : '結果の承認'), h('small', null, `${me.name}（${isOp ? '運営管理者・' : ''}${me.region || me.parentName || ''}）`)),
     h('span', { class: 'spacer' }),
     h('a', { class: 'sc-mini', href: MANUALS.scorer.href, target: '_blank', rel: 'noopener', style: { textDecoration: 'none' } }, '使い方'),
     h('button', { class: 'sc-mini', type: 'button', onclick: changePassword }, 'パスワード変更'),
@@ -82,10 +85,11 @@ export async function scoreApp(root, me) {
           c.name, n ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, n) : null);
       })) : null,
       h('div', { class: 'sc-tabs', role: 'tablist' },
-        [['pending', `承認待ち（${cat ? cat.matches.filter((m) => m.status === 'provisional').length : 0}）`], ['all', '試合一覧']].map(([k, l]) =>
+        [['pending', `承認待ち（${cat ? cat.matches.filter((m) => m.status === 'provisional').length : 0}）`], ['all', '試合一覧'],
+          isOp ? ['lost', `忘れ物（${(t.lost || []).length}）`] : null].filter(Boolean).map(([k, l]) =>
           h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), onclick: () => { st.tab = k; draw(); } }, l))),
       !cat ? h('p', { class: 'empty' }, 'カテゴリがありません')
-        : st.tab === 'pending' ? pendingView(t, cat) : allView(t, cat),
+        : st.tab === 'pending' ? pendingView(t, cat) : st.tab === 'lost' && isOp ? lostView(t) : allView(t, cat),
       h('p', { class: 'sc-foot muted small' }, `この大会の承認待ち：全${pendAll}件　新しい仮登録は「更新」を押すと表示されます`),
       refreshButton(async () => { const r = await refresh(); return r === 'quiet' ? true : r; })));
   }
@@ -126,22 +130,77 @@ export async function scoreApp(root, me) {
           } }, '差し戻し')))));
   }
 
-  // 試合一覧（未登録の試合の入力にも使う）
+  // 試合一覧（未登録の試合の入力にも使う）。状態とコートで絞り込み、時刻ごとにまとめる
   function allView(t, cat) {
     const cache = cacheOf(cat);
-    const list = [...cat.matches].sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b));
-    if (!list.length) return h('p', { class: 'empty' }, '日程はまだありません');
+    const all = [...cat.matches].sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b) || a.court - b.court);
+    if (!all.length) return h('p', { class: 'empty' }, '日程はまだありません');
     const LBL = { none: '未登録', provisional: '承認待ち', confirmed: '確定' };
-    return h('div', { class: 'sc-all' }, list.map((m) => {
-      const ready = m.home_team_id && m.away_team_id;
-      const can = ready && m.status !== 'confirmed';
-      return h('button', { class: `sc-row ${m.status}`, type: 'button', disabled: !can, onclick: () => editor(t, cat, m) },
-        h('span', { class: 'sc-rtime' }, toHHMM(m.start_min), h('small', null, courtName(cat.config, m.court))),
-        h('span', { class: 'sc-rteams' },
-          h('span', null, sideInfo(m, 'home', cat, cache).text), h('span', null, sideInfo(m, 'away', cat, cache).text)),
-        h('span', { class: 'sc-rscore' }, m.home_score != null ? `${m.home_score} - ${m.away_score}` : ''),
-        h('span', { class: `sc-rstat ${m.status}` }, ready ? LBL[m.status] : '対戦未定'));
-    }));
+    const courts = [...new Set(all.map((m) => m.court))].sort((a, b) => a - b);
+    const count = (k) => all.filter((m) => (k === 'all' || m.status === k) && (st.court === 'all' || m.court === st.court)).length;
+    const list = all.filter((m) => (st.filter === 'all' || m.status === st.filter) && (st.court === 'all' || m.court === st.court));
+    const groups = [];
+    for (const m of list) {
+      const key = `${dayOf(cat.config, m.slot)}-${m.start_min}`;
+      const g = groups[groups.length - 1];
+      if (g && g.key === key) g.items.push(m); else groups.push({ key, m, items: [m] });
+    }
+    return h('div', null,
+      h('div', { class: 'chips sc-filter' }, [['all', 'すべて'], ['none', '未登録'], ['provisional', '承認待ち'], ['confirmed', '確定']].map(([k, l]) =>
+        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.filter === k), onclick: () => { st.filter = k; draw(); } }, `${l}（${count(k)}）`))),
+      courts.length > 1 ? h('div', { class: 'chips sc-filter' }, [['all', '全コート'], ...courts.map((c) => [c, courtName(cat.config, c)])].map(([k, l]) =>
+        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.court === k), onclick: () => { st.court = k; draw(); } }, l))) : null,
+      !list.length ? h('p', { class: 'empty' }, '該当する試合はありません')
+        : h('div', { class: 'sc-all' }, groups.map((g) => [
+          h('div', { class: 'sc-time-h' }, `${dayTotal(cat.config) > 1 ? `${dayLabel(cat, dayOf(cat.config, g.m.slot), t, true)} ` : ''}${toHHMM(g.m.start_min)}`),
+          g.items.map((m) => {
+            const ready = m.home_team_id && m.away_team_id;
+            const can = ready && (m.status !== 'confirmed' || isOp);
+            return h('button', { class: `sc-row ${m.status}`, type: 'button', disabled: !can, onclick: () => editor(t, cat, m) },
+              h('span', { class: 'sc-rtime' }, courtName(cat.config, m.court), h('small', null, m.stage === 'league' ? `${m.group_label}組` : '')),
+              h('span', { class: 'sc-rteams' },
+                h('span', null, sideInfo(m, 'home', cat, cache).text), h('span', null, sideInfo(m, 'away', cat, cache).text)),
+              h('span', { class: 'sc-rscore' }, m.home_score != null ? `${m.home_score} - ${m.away_score}` : ''),
+              h('span', { class: `sc-rstat ${m.status}` }, ready ? LBL[m.status] : '対戦未定'));
+          })])));
+  }
+
+  // 忘れ物（運営管理者）：写真と内容を登録し、持ち主が見つかったら返却済みにする
+  function lostView(t) {
+    const items = t.lost || [];
+    return h('div', null,
+      h('button', { class: 'btn btn-primary btn-block sc-bulk', type: 'button', onclick: () => addLost(t) }, '＋ 忘れ物を登録'),
+      !items.length ? h('p', { class: 'empty' }, 'お知らせ中の忘れ物はありません。登録すると、保護者の閲覧ページに表示されます。')
+        : items.map((it) => h('article', { class: 'sc-card sc-lost' },
+          it.img ? h('img', { src: it.img, alt: '', loading: 'lazy' }) : null,
+          h('div', { class: 'sc-lost-b' }, h('p', null, it.note), h('small', { class: 'muted' }, `登録：${formatUpdated(it.created_at)}`),
+            h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+              if (!(await confirmDialog('返却済みにします', `「${it.note}」を返却済みにして、閲覧ページのお知らせから外します。`, '返却済みにする'))) return;
+              if (await run(() => api('PATCH', `/api/admin/lost/${it.id}`, { status: 'returned' }), '返却済みにしました')) reload();
+            } }, '返却済みにする')))),
+      h('p', { class: 'muted small' }, '登録した忘れ物は、保護者の閲覧ページの上部にお知らせとして表示されます。'));
+  }
+
+  function addLost(t) {
+    const f = { note: '', image: null };
+    const body = h('div');
+    const draw3 = () => mount(body, h('div', { class: 'stack' },
+      h('label', { class: 'field' }, h('span', null, '写真（任意）'),
+        h('input', { type: 'file', accept: 'image/*', capture: 'environment', onchange: async (e) => {
+          const file = e.target.files && e.target.files[0]; if (!file) return;
+          const v = await run(() => resizeImage(file, 800)); if (v) { f.image = v; draw3(); }
+        } })),
+      f.image ? h('img', { src: f.image, alt: '', style: { maxWidth: '100%', borderRadius: '10px' } }) : null,
+      h('label', { class: 'field' }, h('span', null, '内容・見つかった場所'),
+        h('textarea', { rows: 3, placeholder: '例：青い水筒（名前なし） Aコート ゴール裏', oninput: (e) => { f.note = e.target.value; } }, f.note)),
+      h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async () => {
+        if (!f.note.trim()) return toast('内容を入力してください', true);
+        if (await run(() => api('POST', `/api/admin/tournaments/${t.id}/lost`, { note: f.note.trim(), image: f.image }), '忘れ物を登録しました')) {
+          document.querySelector('.sheet-back')?.remove(); reload();
+        }
+      } }, 'この内容で登録')));
+    draw3();
+    sheet({ title: '忘れ物を登録', content: body });
   }
 
   // スコアの入力・修正（＋−で数える）して承認
@@ -161,14 +220,20 @@ export async function scoreApp(root, me) {
       step('a', sideInfo(m, 'away', cat, cache).text),
       ko && v.h === v.a ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のときはPK戦の結果'),
         step('hp', `${sideInfo(m, 'home', cat, cache).text}（PK）`), step('ap', `${sideInfo(m, 'away', cat, cache).text}（PK）`)) : null,
+      m.status === 'confirmed' ? h('p', { class: 'notice', style: { margin: 0 } }, `確定済みの結果（${m.home_score} - ${m.away_score}）を修正します。順位やトーナメントの組み合わせも自動で計算し直されます。`) : null,
       h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async () => {
         const tie = ko && v.h === v.a;
         if (tie && v.hp === v.ap) return toast('PK戦の結果で勝敗が決まるように入力してください', true);
+        if (m.status === 'confirmed' && !(await confirmDialog('確定済みの結果を修正します', `${m.home_score} - ${m.away_score} → ${v.h} - ${v.a}${tie ? `（PK ${v.hp} - ${v.ap}）` : ''} に修正します。`, '修正する'))) return;
         const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { home_score: v.h, away_score: v.a, home_pk: tie ? v.hp : null, away_pk: tie ? v.ap : null, confirm: true }), 'この結果で承認しました');
         if (r) { document.querySelector('.sheet-back')?.remove(); reload(); }
-      } }, 'この結果で承認（確定）')));
+      } }, m.status === 'confirmed' ? 'この結果に修正（確定）' : 'この結果で承認（確定）'),
+      isOp && m.status !== 'none' ? h('button', { class: 'btn btn-ghost btn-block', type: 'button', onclick: async () => {
+        if (!(await confirmDialog('結果を取り消します', 'この試合の結果を取り消して「未登録」に戻します。', '未登録に戻す', true))) return;
+        if (await run(() => api('POST', `/api/admin/matches/${m.id}/clear`), '未登録に戻しました')) { document.querySelector('.sheet-back')?.remove(); reload(); }
+      } }, '結果を取り消して未登録に戻す') : null));
     draw2();
-    sheet({ title: m.status === 'provisional' ? '修正して承認' : '結果を入力して確定', content: body });
+    sheet({ title: m.status === 'confirmed' ? '確定済みの結果を修正' : m.status === 'provisional' ? '修正して承認' : '結果を入力して確定', content: body });
   }
 
   function changePassword() {

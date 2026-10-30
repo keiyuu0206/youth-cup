@@ -17,9 +17,9 @@ import WEB_QR from './web-qr.js';
 import WEB_XLSX from './web-xlsx.js';
 import WEB_PAMPHLET from './web-pamphlet.js';
 import WEB_SCORE from './web-score.js';
-import { normalizeConfig, matchLength } from './time.js';
+import { normalizeConfig, matchLength, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
-import { generateCategory, applyTimes, planDelay, scheduleWarnings } from './schedule.js';
+import { generateCategory, applyTimes, planDelay, scheduleWarnings, lenOfSlots, gapOfSlots } from './schedule.js';
 import { evaluateCategory } from './standings.js';
 import { issueAdmin, readAdmin, hashPassword, verifyPassword, issueRelative, isRelative, rateLimit, clearRateLimit, safeEqual, cookie } from './auth.js';
 
@@ -125,6 +125,13 @@ async function ensureSchema(db) {
       db.prepare('CREATE TABLE IF NOT EXISTS presets (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)'),
     ]);
   }
+  // 当日の時間の調整の履歴（「直前の調整を元に戻す」用）。無いときだけ追加する（既存の表は変更しない）
+  if (!tables.includes('time_history')) {
+    await db.batch([
+      db.prepare('CREATE TABLE IF NOT EXISTS time_history (id TEXT PRIMARY KEY, category_id TEXT NOT NULL, label TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_time_history_category ON time_history(category_id)'),
+    ]);
+  }
   if (!tables.includes('sponsors') || !tables.includes('sponsor_clicks')) {
     await db.batch([
       db.prepare(`CREATE TABLE IF NOT EXISTS sponsors (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
@@ -199,8 +206,8 @@ async function currentUser(req, env, db) {
   const u = await db.prepare('SELECT * FROM users WHERE id = ?').bind(a.uid).first();
   if (!u || !u.active || u.session_ver !== a.ver) return null;
   const me = { id: u.id, role: u.role, name: u.name, region: u.region || '', login_id: u.login_id };
-  if (u.role === 'scorer') {
-    // 発行した管理者が停止・削除されていたら使えない
+  if (u.role === 'scorer' || u.role === 'operator') {
+    // スコア管理者・運営管理者：発行した管理者が停止・削除されていたら使えない
     let parentRole = 'super';
     if (u.parent_id && u.parent_id !== 'root') {
       const p = await db.prepare('SELECT role, active, region, name FROM users WHERE id = ?').bind(u.parent_id).first();
@@ -216,11 +223,13 @@ async function currentUser(req, env, db) {
   return me;
 }
 const isSuper = (user) => user && user.role === 'super';
+// 運営管理者が使える管理者用の操作（忘れ物の登録・変更・削除）。大会の設定・組み合わせ・日程は変更できない
+const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['PATCH', /^\/api\/admin\/lost\/[^/]+$/], ['DELETE', /^\/api\/admin\/lost\/[^/]+$/]];
 // 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
 const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
-  if (user.role === 'scorer') {
-    // スコア管理者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
+  if (user.role === 'scorer' || user.role === 'operator') {
+    // スコア管理者・運営管理者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
     const parentOk = user.parentRole === 'super' || (t.owner_id && t.owner_id === user.parent_id);
     return parentOk && (!user.scope || !user.scope.length || user.scope.includes(t.id));
   }
@@ -240,7 +249,8 @@ async function checkScope(db, user, ids) {
   for (const id of list) await getTournament(db, id, user);
   return list;
 }
-const canManageScorer = (user, sc) => sc && sc.role === 'scorer' && (isSuper(user) || sc.parent_id === user.id);
+const isStaffRole = (role) => role === 'scorer' || role === 'operator'; // スコア管理者・運営管理者
+const canManageScorer = (user, sc) => sc && isStaffRole(sc.role) && (isSuper(user) || sc.parent_id === user.id);
 
 // ---------- 読み込み ----------
 
@@ -454,12 +464,24 @@ function stripConfig(cfg) {
   return rest;
 }
 
+// 閲覧ページに出す大会要項（作成されていなければ null。主催者だけのメモなどは無いので、そのまま表示用に整える）
+function publicOutline(o) {
+  if (!o || typeof o !== 'object') return null;
+  const str = (v, n) => String(v == null ? '' : v).slice(0, n);
+  return {
+    title: str(o.title, 120), subtitle: str(o.subtitle, 120), catch: str(o.catch, 200),
+    info: (Array.isArray(o.info) ? o.info : []).slice(0, 30).map((r) => ({ label: str(r.label, 40), value: str(r.value, 1000), auto: str(r.auto, 20) })),
+    sections: (Array.isArray(o.sections) ? o.sections : []).slice(0, 40).map((x) => ({ title: str(x.title, 80), auto: str(x.auto, 20), body: str(x.body, 6000),
+      images: (Array.isArray(x.images) ? x.images : []).slice(0, 10).map((i) => ({ id: str(i.id, 64), name: str(i.name, 80) })).filter((i) => /^[\w-]+$/.test(i.id)) })),
+  };
+}
+
 async function publicPayload(db, t, level) {
   const cats = await loadFull(db, t);
   const sponsors = publicSponsors(await listSponsors(db, t.id));
   const settings = readSettings(t);
   return {
-    tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings) },
+    tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline) },
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
@@ -600,6 +622,9 @@ export default {
           user = await currentUser(req, env, env.DB);
           if (!user) fail(401, 'ログインしてください');
           if (r.auth === 'admin' && user.role === 'scorer') fail(403, 'スコア管理者は、結果の承認だけを行えます');
+          if (r.auth === 'admin' && user.role === 'operator' && !OPERATOR_ADMIN.some(([mt, re]) => mt === req.method && re.test(url.pathname))) {
+            fail(403, '運営管理者は、結果の確認・修正と忘れ物の登録だけを行えます');
+          }
           // 閲覧専用アカウント：全体管理者と同じ範囲を見られるが、変更は自分のパスワードだけ。アカウント情報は見せない
           if (user.role === 'viewer') {
             if (req.method !== 'GET' && url.pathname !== '/api/admin/password') fail(403, '閲覧専用のアカウントでは変更できません');
@@ -672,9 +697,9 @@ route('POST', '/api/admin/password', async ({ req, env, db, user }) => {
 
 route('GET', '/api/admin/scorers', async ({ db, user }) => {
   const r = isSuper(user)
-    ? await db.prepare(`SELECT s.id, s.login_id, s.name, s.active, s.scope, s.parent_id, s.last_login_at, s.created_at, p.name AS parent_name, p.region AS parent_region
-        FROM users s LEFT JOIN users p ON p.id = s.parent_id WHERE s.role = 'scorer' ORDER BY p.region, s.name`).all()
-    : await db.prepare("SELECT id, login_id, name, active, scope, parent_id, last_login_at, created_at FROM users WHERE role = 'scorer' AND parent_id = ? ORDER BY name").bind(user.id).all();
+    ? await db.prepare(`SELECT s.id, s.login_id, s.name, s.role, s.active, s.scope, s.parent_id, s.last_login_at, s.created_at, p.name AS parent_name, p.region AS parent_region
+        FROM users s LEFT JOIN users p ON p.id = s.parent_id WHERE s.role IN ('scorer', 'operator') ORDER BY p.region, s.name`).all()
+    : await db.prepare("SELECT id, login_id, name, role, active, scope, parent_id, last_login_at, created_at FROM users WHERE role IN ('scorer', 'operator') AND parent_id = ? ORDER BY name").bind(user.id).all();
   return json({ scorers: r.results.map((x) => ({ ...x, scope: JSON.parse(x.scope || '[]'), parent_name: x.parent_id === 'root' ? '全体管理者' : x.parent_name || '' })) });
 }, 'admin');
 
@@ -689,8 +714,8 @@ route('POST', '/api/admin/scorers', async ({ req, env, db, user }) => {
   const h = await hashPassword(checkPassword(b.password));
   const id = uid();
   await db.prepare(`INSERT INTO users (id, login_id, name, region, role, pass_hash, pass_salt, iterations, active, session_ver, parent_id, scope, created_at, updated_at)
-    VALUES (?, ?, ?, NULL, 'scorer', ?, ?, ?, 1, 1, ?, ?, ?, ?)`)
-    .bind(id, loginId, name, h.hash, h.salt, h.iterations, user.id === 'root' ? 'root' : user.id, JSON.stringify(scope), now(), now()).run();
+    VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`)
+    .bind(id, loginId, name, b.role === 'operator' ? 'operator' : 'scorer', h.hash, h.salt, h.iterations, user.id === 'root' ? 'root' : user.id, JSON.stringify(scope), now(), now()).run();
   return json({ ok: true, id });
 }, 'admin');
 
@@ -756,7 +781,7 @@ route('GET', '/api/admin/users', async ({ db, user }) => {
     (SELECT COUNT(*) FROM tournaments t WHERE t.owner_id = @OWNER@ AND t.status IN ('published', 'live')) AS active_now,
     (SELECT MAX(t.date) FROM tournaments t WHERE t.owner_id = @OWNER@) AS last_date,
     (SELECT COUNT(*) FROM teams tm JOIN categories c ON c.id = tm.category_id JOIN tournaments t ON t.id = c.tournament_id WHERE t.owner_id = @OWNER@) AS teams`;
-  const r = await db.prepare(`SELECT u.id, u.login_id, u.name, u.region, u.role, u.active, u.created_at, u.last_login_at, ${stats.replaceAll('@OWNER@', 'u.id')} FROM users u WHERE u.role != 'scorer' ORDER BY u.region, u.name`)
+  const r = await db.prepare(`SELECT u.id, u.login_id, u.name, u.region, u.role, u.active, u.created_at, u.last_login_at, ${stats.replaceAll('@OWNER@', 'u.id')} FROM users u WHERE u.role NOT IN ('scorer', 'operator') ORDER BY u.region, u.name`)
     .bind(year).all();
   // 全体管理者（既存の大会を含む）
   const rootStats = await db.prepare(`SELECT ${stats.replaceAll('t.owner_id = @OWNER@', "(t.owner_id IS NULL OR t.owner_id = 'root')")}`).bind(year).first();
@@ -795,7 +820,7 @@ route('PATCH', '/api/admin/users/:uid', async ({ req, db, params, user }) => {
   await db.prepare('UPDATE users SET name = ?, region = ?, role = ?, active = ?, pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = ?, updated_at = ? WHERE id = ?').bind(
     b.name !== undefined ? clip(b.name, 60) || u.name : u.name,
     b.region !== undefined ? clip(b.region, 40) || null : u.region,
-    ['super', 'region', 'viewer'].includes(b.role) && u.role !== 'scorer' ? b.role : u.role,
+    ['super', 'region', 'viewer'].includes(b.role) && !isStaffRole(u.role) ? b.role : u.role,
     active, hash, salt, iter, ver, now(), u.id).run();
   return json({ ok: true });
 }, 'admin');
@@ -992,14 +1017,14 @@ route('PATCH', '/api/admin/categories/:cid', async ({ req, db, params, user, url
   await db.prepare('UPDATE categories SET name = ?, config = ? WHERE id = ?').bind(b.name ? clip(b.name, 20) : c.name, JSON.stringify(cfg), c.id).run();
   // 準備中なら、開始時刻などの変更を全コートの全試合へ一括反映
   const timingChanged = TIMING_KEYS.some((k) => JSON.stringify(cfg[k]) !== JSON.stringify(c.config[k]));
-  if (timingChanged && editable(t)) {
+  if (timingChanged && editable(t) && !b.keepTimes) {
     const { matches } = await loadCategoryData(db, c.id);
     applyTimes(cfg, matches);
     await batchAll(db, matches.map((m) => db.prepare('UPDATE matches SET start_min = ?, session = ?, time_changed = 0 WHERE id = ?').bind(m.start_min, m.session, m.id)));
   }
   await syncKnockout(db, { ...c, config: cfg });
   await bump(db, t.id);
-  return json({ ok: true, retimed: timingChanged && editable(t) });
+  return json({ ok: true, retimed: timingChanged && editable(t) && !b.keepTimes, timingChanged });
 }, 'admin');
 
 route('DELETE', '/api/admin/categories/:cid', async ({ db, params, user, url }) => {
@@ -1175,6 +1200,127 @@ route('POST', '/api/admin/categories/:cid/delay', async ({ req, db, params, user
   return json({ ok: true, changed: plan.changes.length, warnings: plan.warnings });
 }, 'admin');
 
+// ---------- 管理者: 時間の調整（雨天・遅れ・試合時間の変更など、当日のイレギュラー） ----------
+// 結果が入った試合は動かさない。反映の前に変更内容と警告を確認でき、反映ごとに変更前の状態を保存して元に戻せる
+
+const intIn = (v, lo, hi) => { const n = Math.trunc(Number(v)); return Number.isFinite(n) && n >= lo && n <= hi ? n : null; };
+
+function planRetime(cfg, matches, b) {
+  const breaks = (cfg.dayBreakSlots || []).slice();
+  const dayCount = Math.max(1, cfg.dayCount || 1);
+  const day = intIn(b.day, 0, dayCount - 1);
+  if (day == null) fail(400, '日を選んでください');
+  const from = intIn(b.from, 0, 1440);
+  if (from == null) fail(400, '対象の開始時刻を選んでください');
+  const dcfg = { ...cfg, dayBreakSlots: breaks };
+  const targets = matches.filter((m) => dayOf(dcfg, m.slot) === day && m.start_min >= from && m.status === 'none');
+  if (!targets.length) fail(409, '対象の試合がありません（結果が入った試合は動かせません）');
+  const dl = dayCount > 1 ? `${day + 1}日目 ` : '';
+  let newBreaks = breaks;
+  let cfgPatch = null;
+  let label = '';
+  if (b.op === 'shift') {
+    const minutes = intIn(b.minutes, -600, 600);
+    if (!minutes) fail(400, 'ずらす時間を分で入力してください（-600〜600）');
+    for (const m of targets) m.start_min += minutes;
+    label = `${dl}${hhmm(from)}以降の試合を${minutes > 0 ? `${minutes}分遅らせる` : `${-minutes}分早める`}（全コート）`;
+  } else if (b.op === 'repack') {
+    const periods = [1, 2, 3].includes(Number(b.periods)) ? Number(b.periods) : 2;
+    const half = intIn(b.halfMinutes, 1, 60);
+    const ht = periods > 1 ? intIn(b.halftimeMinutes, 0, 30) : 0;
+    const iv = intIn(b.intervalMinutes, 0, 120);
+    const start = intIn(b.start, 0, 1439);
+    if (half == null || ht == null || iv == null || start == null) fail(400, '試合時間・試合間隔・開始時刻を正しく入力してください');
+    const len = periods * half + (periods - 1) * ht;
+    const slots = [...new Set(targets.map((m) => m.slot))].sort((x, y) => x - y);
+    for (const m of targets) m.start_min = start + slots.indexOf(m.slot) * (len + iv);
+    const lenText = periods === 1 ? `${half}分` : periods === 3 ? `${half}分×3` : `${half}分ハーフ`;
+    label = `${dl}${hhmm(from)}以降の試合を${lenText}・間隔${iv}分で組み直し（${hhmm(start)}開始）`;
+    if (b.saveConfig) {
+      const timing = { periods, halfMinutes: half, halftimeMinutes: periods > 1 ? ht : cfg.halftimeMinutes };
+      const koOnly = targets.every((m) => m.stage === 'knockout');
+      cfgPatch = koOnly && cfg.koTiming && cfg.koTiming.enabled ? { koTiming: { ...cfg.koTiming, ...timing } } : { ...timing, intervalMinutes: iv };
+    }
+  } else if (b.op === 'moveday') {
+    if (day >= dayCount - 1 || breaks[day] == null) fail(400, '最終日の試合は翌日に移せません');
+    const B = breaks[day];
+    if (matches.some((m) => dayOf(dcfg, m.slot) === day + 1 && m.status !== 'none')) fail(409, '翌日の試合にすでに結果が入っているため、移せません');
+    const S = [...new Set(targets.map((m) => m.slot))].sort((x, y) => x - y);
+    const k = S.length;
+    const moved = new Set(targets);
+    for (const m of matches) if (!moved.has(m) && m.slot >= B) m.slot += k;
+    for (const m of targets) m.slot = B + S.indexOf(m.slot);
+    newBreaks = breaks.map((x, i) => (i > day ? x + k : x));
+    const ncfg = { ...cfg, dayBreakSlots: newBreaks };
+    const list = matches.filter((m) => dayOf(ncfg, m.slot) === day + 1);
+    const end = newBreaks[day + 1] != null ? newBreaks[day + 1] : Math.max(...matches.map((m) => m.slot)) + 1;
+    const times = slotTimes(dayConfig(ncfg, day + 1), end - B, lenOfSlots(ncfg, list, B), gapOfSlots(ncfg, list, B));
+    for (const m of list) { const x = times[m.slot - B]; if (x) { m.start_min = x.start; m.session = x.session; } }
+    label = `${dl}${hhmm(from)}以降の試合（${targets.length}試合）を${day + 2}日目の最初に移す`;
+  } else fail(400, '調整の種類を選んでください');
+  if (matches.some((m) => m.start_min < 0 || m.start_min > 24 * 60)) fail(400, '時刻が0:00〜24:00の範囲を超えます');
+  return { label, newBreaks, cfgPatch, day };
+}
+
+route('POST', '/api/admin/categories/:cid/retime', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  const b = await body(req);
+  const { teams, matches } = await loadCategoryData(db, c.id);
+  const before = new Map(matches.map((m) => [m.id, { slot: m.slot, start_min: m.start_min, session: m.session, time_changed: m.time_changed }]));
+  const { label, newBreaks, cfgPatch } = planRetime(c.config, matches, b);
+  const ncfg = { ...c.config, dayBreakSlots: newBreaks, ...(cfgPatch || {}) };
+  const names = Object.fromEntries(teams.map((x) => [x.id, x.name]));
+  const changed = matches.filter((m) => { const o = before.get(m.id); return o.slot !== m.slot || o.start_min !== m.start_min; });
+  const warnings = scheduleWarnings(ncfg, matches, (id) => names[id] || '未定');
+  const changes = changed.map((m) => {
+    const o = before.get(m.id);
+    return { id: m.id, label: m.label, court: m.court, home: names[m.home_team_id] || null, away: names[m.away_team_id] || null,
+      beforeDay: dayOf(c.config, o.slot), before: o.start_min, afterDay: dayOf(ncfg, m.slot), after: m.start_min };
+  }).sort((x, y) => x.afterDay - y.afterDay || x.after - y.after || x.court - y.court);
+  if (b.dryRun) return json({ label, changes, warnings });
+  if (!changed.length) fail(409, '変更される試合がありません');
+  // 変更前の状態を保存（元に戻す用）
+  const snap = {
+    matches: changed.map((m) => ({ id: m.id, ...before.get(m.id) })),
+    dayBreakSlots: c.config.dayBreakSlots || [],
+    config: cfgPatch ? Object.fromEntries(Object.keys(cfgPatch).map((k) => [k, c.config[k]])) : null,
+  };
+  const stmts = [db.prepare('INSERT INTO time_history (id, category_id, label, data, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), c.id, label, JSON.stringify(snap), now())];
+  for (const m of changed) stmts.push(db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = 1 WHERE id = ?').bind(m.slot, m.start_min, m.session, m.id));
+  if (cfgPatch || JSON.stringify(newBreaks) !== JSON.stringify(c.config.dayBreakSlots || [])) {
+    stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(normalizeConfig(ncfg)), c.id));
+  }
+  await batchAll(db, stmts);
+  // 履歴は新しい20件まで
+  await db.prepare('DELETE FROM time_history WHERE category_id = ? AND id NOT IN (SELECT id FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 20)').bind(c.id, c.id).run();
+  await bump(db, t.id);
+  return json({ ok: true, label, changed: changed.length, warnings });
+}, 'admin');
+
+route('GET', '/api/admin/categories/:cid/retime/history', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const r = await db.prepare('SELECT id, label, created_at FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 5').bind(c.id).all();
+  return json({ history: r.results });
+}, 'admin');
+
+// 直前の調整を元に戻す（時刻・日・設定を、調整の前の状態に。結果はそのまま）
+route('POST', '/api/admin/categories/:cid/retime/undo', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  const h = await db.prepare('SELECT * FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 1').bind(c.id).first();
+  if (!h) fail(404, '元に戻せる調整がありません');
+  const snap = JSON.parse(h.data);
+  const stmts = (snap.matches || []).map((m) => db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = ? WHERE id = ? AND category_id = ?')
+    .bind(m.slot, m.start_min, m.session, m.time_changed || 0, m.id, c.id));
+  const cfg = { ...c.config, dayBreakSlots: snap.dayBreakSlots || [], ...(snap.config || {}) };
+  stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(normalizeConfig(cfg)), c.id));
+  stmts.push(db.prepare('DELETE FROM time_history WHERE id = ?').bind(h.id));
+  await batchAll(db, stmts);
+  await bump(db, t.id);
+  return json({ ok: true, label: h.label });
+}, 'admin');
+
 // ---------- 管理者: 結果 ----------
 
 function validateScore(m, b, cfg) {
@@ -1209,7 +1355,7 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user })
   const { m, c, t } = await getMatchCtx(db, params.id, user);
   // スコア管理者は承認まで。確定済みの結果の書き換えは本部（管理者）だけ
   if (user.role === 'scorer' && m.status === 'confirmed') fail(403, '確定済みの結果は変更できません。修正が必要な場合は本部（管理者）に連絡してください');
-  if (user.role === 'scorer' && t.status === 'draft') fail(403, '準備中の大会の結果は登録できません');
+  if (isStaffRole(user.role) && t.status === 'draft') fail(403, '準備中の大会の結果は登録できません');
   if (!m.home_team_id || !m.away_team_id) fail(409, '対戦チームが決まっていません');
   const b = await body(req);
   const s = validateScore(m, b, c.config);
@@ -1219,7 +1365,7 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user })
   const corrected = m.status === 'confirmed' ? 1 : m.corrected;
   await db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = ?, status = ?, corrected = ?,
     updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`)
-    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : '本部', now(), m.id).run();
+    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : user.role === 'operator' ? `運営管理者（${user.name}）` : '本部', now(), m.id).run();
   await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true });
@@ -1254,6 +1400,8 @@ route('POST', '/api/admin/matches/:id/reopen', async ({ db, params, user }) => {
 
 route('POST', '/api/admin/matches/:id/clear', async ({ db, params, user }) => {
   const { m, c, t } = await getMatchCtx(db, params.id, user);
+  if (user.role === 'scorer' && m.status === 'confirmed') fail(403, '確定済みの結果は差し戻せません。修正が必要な場合は本部（管理者）に連絡してください');
+  if (isStaffRole(user.role) && t.status === 'draft') fail(403, '準備中の大会の結果は変更できません');
   await db.prepare(`UPDATE matches SET home_score = NULL, away_score = NULL, home_pk = NULL, away_pk = NULL, forfeit = NULL,
     status = 'none', updated_by = NULL, updated_at = NULL, version = version + 1 WHERE id = ?`).bind(m.id).run();
   await syncKnockout(db, c);

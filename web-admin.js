@@ -372,7 +372,7 @@ export async function admin(root, path, navigate) {
   ME = me.user;
   window.__ycRole = ME.role;
   // スコア管理者は、結果の承認だけを行う専用画面へ
-  if (ME.role === 'scorer') return (await import('./web-score.js')).scoreApp(root, ME);
+  if (ME.role === 'scorer' || ME.role === 'operator') return (await import('./web-score.js')).scoreApp(root, ME);
   if (path.startsWith('/admin/scorers')) return isViewer() ? navigate('/admin') : scorersView(root, navigate);
   if (path.startsWith('/admin/accounts')) return isSuperUser() ? accountsView(root, navigate) : navigate('/admin');
   const m = path.match(/^\/admin\/t\/([^/]+)/);
@@ -517,28 +517,37 @@ async function scorersView(root, navigate) {
     tournaments.length ? h('div', { class: 'scope-list' }, tournaments.map((t) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: f.tournament_ids.includes(t.id), onchange: (e) => { f.tournament_ids = e.target.checked ? [...f.tournament_ids, t.id] : f.tournament_ids.filter((x) => x !== t.id); } }),
       `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`))) : h('p', { class: 'muted small' }, '大会がまだありません'));
-  const issued = (loginId, pw) => {
-    const text = `大会運営アプリのスコア管理者アカウントです。\n結果の承認だけを行えます（スマートフォンで使えます）。\n\nログイン画面：${location.origin}/admin\nログインID：${loginId}\nパスワード：${pw}\n\nログイン後、右上の「パスワード変更」から変更してください。`;
+  const ROLE = { scorer: 'スコア管理者', operator: '運営管理者' };
+  const ROLE_DESC = {
+    scorer: '関係者が仮登録した結果の承認・修正・差し戻しと、結果の入力だけを行えます。設定・チーム・日程などは変更できません。',
+    operator: 'スコア管理者の権限に加えて、確定済みの結果の修正と、忘れ物の登録・返却済みの処理を行えます。大会の設定・組み合わせ・日程・時刻は変更できません。',
+  };
+  const issued = (loginId, pw, role = 'scorer') => {
+    const text = `大会運営アプリの${ROLE[role]}アカウントです。\n${role === 'operator' ? '結果の確認・修正と、忘れ物の登録を行えます' : '結果の承認だけを行えます'}（スマートフォンで使えます）。\n\nログイン画面：${location.origin}/admin\nログインID：${loginId}\nパスワード：${pw}\n\nログイン後、右上の「パスワード変更」から変更してください。`;
     modal({ title: '発行しました', content: h('div', { class: 'stack' }, h('pre', { class: 'issued' }, text), h('p', { class: 'muted small', style: { margin: 0 } }, 'この画面を閉じるとパスワードは表示できません。')),
       actions: [{ label: '閉じる', kind: 'btn-ghost' }, { label: '案内文をコピー', kind: 'btn-primary', onClick: async () => { await copyText(text); toast('コピーしました'); return true; } }] });
   };
   const edit = (sc) => {
-    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? [...(sc.scope || [])] : [] };
+    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? [...(sc.scope || [])] : [], role: sc ? sc.role || 'scorer' : 'scorer' };
     const pw = h('input', { type: 'text', value: f.password, oninput: (e) => { f.password = e.target.value; } });
+    const desc = h('p', { class: 'muted small', style: { margin: 0 } }, ROLE_DESC[f.role]);
     modal({
-      title: sc ? 'スコア管理者を編集' : 'スコア管理者を発行',
+      title: sc ? `${ROLE[f.role]}を編集` : 'スコア管理者・運営管理者を発行',
       content: h('div', { class: 'stack' },
+        sc ? null : h('div', null, h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '権限'),
+          h('div', { class: 'chips' }, Object.entries(ROLE).map(([k, l]) => h('label', { class: 'check' },
+            h('input', { type: 'radio', name: 'staff-role', checked: f.role === k, onchange: () => { f.role = k; desc.textContent = ROLE_DESC[k]; } }), l)))),
         sc ? null : h('label', { class: 'field' }, h('span', null, 'ログインID（半角英小文字・数字）'), h('input', { type: 'text', autocapitalize: 'none', placeholder: '例: shizuoka-score1', oninput: (e) => { f.login_id = e.target.value; } })),
         h('label', { class: 'field' }, h('span', null, '名前'), h('input', { type: 'text', value: f.name, placeholder: '例: 本部 結果担当 佐藤', oninput: (e) => { f.name = e.target.value; } })),
         sc ? null : h('div', null, h('label', { class: 'field' }, h('span', null, '初期パスワード（10文字以上）'), pw),
           h('button', { class: 'link-btn', type: 'button', onclick: () => { f.password = genPassword(); pw.value = f.password; } }, '別のパスワードを作る')),
         scopePicker(f),
-        h('p', { class: 'muted small', style: { margin: 0 } }, 'スコア管理者は、関係者が仮登録した結果の承認・修正・差し戻しと、結果の入力だけを行えます。設定・チーム・日程などは変更できません。')),
+        desc),
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: sc ? '保存' : '発行する', kind: 'btn-primary', onClick: async () => {
         const res = sc ? await run(() => api('PATCH', `/api/admin/scorers/${sc.id}`, { name: f.name, tournament_ids: f.tournament_ids }), '保存しました')
           : await run(() => api('POST', '/api/admin/scorers', f));
         if (!res) return true;
-        if (!sc) issued(f.login_id.trim().toLowerCase(), f.password);
+        if (!sc) issued(f.login_id.trim().toLowerCase(), f.password, f.role);
         reload();
       } }],
     });
@@ -550,20 +559,23 @@ async function scorersView(root, navigate) {
       h('p', { class: 'muted small', style: { margin: 0 } }, '再設定すると、この管理者はすべての端末でログアウトされます。')),
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '再設定する', kind: 'btn-primary', onClick: async () => {
         if (!(await run(() => api('PATCH', `/api/admin/scorers/${sc.id}`, { password: f.password })))) return true;
-        issued(sc.login_id, f.password);
+        issued(sc.login_id, f.password, sc.role || 'scorer');
       } }] });
   };
   mount(root,
-    adminHeader('スコア管理者', navigate, true),
+    adminHeader('スコア管理者・運営管理者', navigate, true),
     h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
       h('section', { class: 'panel' },
-        h('div', { class: 'row' }, h('h2', { style: { margin: 0 } }, 'スコア管理者'), h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => edit(null) }, '＋ スコア管理者を発行')),
-        h('p', { class: 'muted small' }, '結果の承認だけを行えるアカウントです。大会当日に本部の結果担当の方へ渡すと、スマートフォンで関係者の仮登録を確認して承認できます。'),
+        h('div', { class: 'row' }, h('h2', { style: { margin: 0 } }, 'スコア管理者・運営管理者'), h('span', { class: 'spacer' }),
+          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => edit(null) }, '＋ スコア管理者・運営管理者を発行')),
+        h('p', { class: 'muted small' }, '大会当日に本部の方へ渡すアカウントです。スマートフォンで、関係者が仮登録した結果を確認・承認できます。'),
+        h('ul', { class: 'muted small', style: { margin: '0 0 10px', paddingLeft: '1.2em' } },
+          h('li', null, h('b', null, 'スコア管理者：'), ROLE_DESC.scorer),
+          h('li', null, h('b', null, '運営管理者：'), ROLE_DESC.operator)),
         scorers.length ? h('div', { class: 'acc-list' }, scorers.map((sc) => h('article', { class: `acc-card${sc.active ? '' : ' off'}` },
           h('div', { class: 'acc-head' },
             h('div', null,
-              h('div', { class: 'acc-region' }, sc.name, sc.active ? null : h('span', { class: 'tag' }, '停止中')),
+              h('div', { class: 'acc-region' }, sc.name, h('span', { class: `tag${sc.role === 'operator' ? ' shared' : ''}` }, ROLE[sc.role] || 'スコア管理者'), sc.active ? null : h('span', { class: 'tag' }, '停止中')),
               h('div', { class: 'acc-name muted' }, `ID：${sc.login_id}${isSuperUser() ? `　発行：${sc.parent_region || sc.parent_name}` : ''}　最終ログイン：${fmt(sc.last_login_at)}`),
               h('div', { class: 'acc-name' }, `担当：${scopeText(sc)}`)),
             h('div', { class: 'row', style: { gap: '4px' } },
@@ -1381,8 +1393,31 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, '不戦勝のスコア（負け）'), h('input', { type: 'number', min: 0, max: 20, value: f.forfeitScore[1], oninput: (e) => { f.forfeitScore[1] = Number(e.target.value); } })))) : null,
       h('div', { class: 'row', style: { marginTop: '12px' } },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-          const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: { ...f, _touched: undefined } }));
-          if (r) { st.dirty = null; st.form = null; toast(r.retimed ? `${cat.name}の設定を保存し、全試合の開始時刻を再計算しました` : `${cat.name}の設定を保存しました`); await reload(); }
+          // 試合時間や開始時刻を変えたとき：当日の時間の調整が消えないように、時刻の扱いを選ぶ
+          const TIMING = ['startTime', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'koGapMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'extraDays', 'koTiming'];
+          const timingChanged = cat.matches.length && TIMING.some((k) => JSON.stringify(f[k]) !== JSON.stringify(cat.config[k]));
+          const manual = cat.matches.some((m) => m.time_changed);
+          let keepTimes = false;
+          if (timingChanged && manual && (t.status === 'draft' || t.status === 'published')) {
+            const choice = await new Promise((resolve) => modal({
+              title: '試合の時刻はどうしますか',
+              content: h('p', null, '「時間の調整」などで手で直した時刻があります。設定から全試合の開始時刻を計算し直すと、手で直した時刻は元に戻ります。'),
+              actions: [{ label: 'キャンセル', kind: 'btn-ghost', onClick: () => resolve(null) },
+                { label: '計算し直す', kind: '', onClick: () => resolve('retime') },
+                { label: '時刻はそのまま（設定だけ保存）', kind: 'btn-primary', onClick: () => resolve('keep') }],
+              onClose: () => resolve(null),
+            }));
+            if (!choice) return;
+            keepTimes = choice === 'keep';
+          }
+          const r = await run(() => api('PATCH', `/api/admin/categories/${cat.id}`, { name, config: { ...f, _touched: undefined }, keepTimes }));
+          if (r) {
+            st.dirty = null; st.form = null;
+            toast(r.retimed ? `${cat.name}の設定を保存し、全試合の開始時刻を再計算しました`
+              : r.timingChanged ? `${cat.name}の設定を保存しました。組み合わせ済みの試合の時刻は変わりません（時刻を変えるときは「組み分け・日程」の「時間の調整」を使ってください）`
+              : `${cat.name}の設定を保存しました`);
+            await reload();
+          }
         } }, `${cat.name}の設定を保存`),
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => saveTemplate(f) }, 'テンプレートとして保存'),
@@ -1509,6 +1544,7 @@ async function tournamentView(root, id, navigate) {
       const names = teamMap(cat);
       box.append(h('section', { class: 'panel' },
         h('div', { class: 'panel-head' }, h('h2', null, '現在の日程'), h('span', { class: 'spacer' }),
+          ro() ? null : h('button', { class: 'btn btn-sm btn-primary no-print', type: 'button', onclick: () => openRetime(cat) }, '時間の調整（雨天・遅れ・試合時間の変更）'),
           h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
           editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),
         editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。開始時刻を全体でずらすときは「設定」の第1試合の開始を変更してください。') : null,
@@ -1690,6 +1726,89 @@ async function tournamentView(root, id, navigate) {
   }
 
   // ----- 当日の遅延調整 -----
+
+  // 時間の調整：全コートをまとめてずらす／試合時間を変えて組み直す／終わらなかった試合を翌日に移す
+  async function openRetime(cat) {
+    const cfg = cat.config;
+    const days = dayTotal(cfg);
+    const unplayed = (d) => cat.matches.filter((m) => dayOf(cfg, m.slot) === d && m.status === 'none');
+    const timesOf = (d) => [...new Set(unplayed(d).map((m) => m.start_min))].sort((a, b) => a - b);
+    let dayNow = Array.from({ length: days }, (_, d) => d).find((d) => unplayed(d).length) ?? 0;
+    const f = {
+      op: 'shift', day: dayNow, from: timesOf(dayNow)[0] ?? 0, minutes: 15, start: timesOf(dayNow)[0] ?? 0,
+      periods: cfg.periods, halfMinutes: cfg.halfMinutes, halftimeMinutes: cfg.halftimeMinutes, intervalMinutes: cfg.intervalMinutes, saveConfig: true,
+    };
+    const hist = ((await run(() => api('GET', `/api/admin/categories/${cat.id}/retime/history`))) || { history: [] }).history;
+    const content = h('div');
+    const dlg = modal({ title: `時間の調整（${cat.name}）`, content });
+    const OPS = [
+      ['shift', 'まとめてずらす（全コート）', '雨で中断・再開、全体の繰り上げ・繰り下げ、2日目の開始時刻の変更など'],
+      ['repack', '試合時間を変えて組み直す', '途中から「15分ハーフ → 12分ハーフ」にするなど。以降の時刻を詰め直します'],
+      ['moveday', '終わらなかった試合を翌日に移す', '指定した時刻以降のまだ行っていない試合を、翌日の最初に入れます（翌日の試合は後ろにずれます）'],
+    ];
+    const num = (k, label, min, max) => h('label', { class: 'field' }, h('span', null, label),
+      h('input', { type: 'number', min, max, value: f[k], oninput: (e) => { f[k] = Number(e.target.value); } }));
+    const form = () => {
+      const times = timesOf(f.day);
+      mount(content,
+        hist.length ? h('div', { class: 'notice', style: { marginTop: 0 } }, h('div', null, h('b', null, '直前の調整：'), hist[0].label),
+          h('button', { class: 'btn btn-sm', type: 'button', style: { marginTop: '6px' }, onclick: undo }, '直前の調整を元に戻す')) : null,
+        h('div', { class: 'retime-ops' }, OPS.map(([k, l, d]) => (k === 'moveday' && days < 2) ? null : h('label', { class: `choice${f.op === k ? ' on' : ''}` },
+          h('input', { type: 'radio', name: 'retime-op', checked: f.op === k, onchange: () => { f.op = k; form(); } }), h('strong', null, l), h('span', null, d)))),
+        h('div', { class: 'grid-form', style: { marginTop: '10px' } },
+          days > 1 ? h('label', { class: 'field' }, h('span', null, '日'), h('select', { onchange: (e) => { f.day = Number(e.target.value); f.from = timesOf(f.day)[0] ?? 0; f.start = f.from; form(); } },
+            Array.from({ length: days }, (_, d) => h('option', { value: d, selected: f.day === d }, dayLabel(cat, d, data.tournament, true))))) : null,
+          h('label', { class: 'field' }, h('span', null, '対象（この時刻以降のまだ行っていない試合）'),
+            times.length ? h('select', { onchange: (e) => { f.from = Number(e.target.value); f.start = f.from; form(); } },
+              times.map((v) => h('option', { value: v, selected: f.from === v }, `${toHHMM(v)} 以降（${unplayed(f.day).filter((m) => m.start_min >= v).length}試合）`)))
+              : h('span', { class: 'muted small' }, 'この日はまだ行っていない試合がありません')),
+          f.op === 'shift' ? h('label', { class: 'field' }, h('span', null, 'ずらす時間（分・マイナスで前倒し）'),
+            h('input', { type: 'number', min: -600, max: 600, step: 5, value: f.minutes, oninput: (e) => { f.minutes = Number(e.target.value); } })) : null,
+          f.op === 'repack' ? [
+            h('label', { class: 'field' }, h('span', null, '最初の試合の開始'), h('input', { type: 'time', value: toHHMM(f.start), oninput: (e) => { if (e.target.value) f.start = fromHHMM(e.target.value); } })),
+            h('label', { class: 'field' }, h('span', null, '試合の形'), h('select', { onchange: (e) => { f.periods = Number(e.target.value); form(); } },
+              [[2, '前後半'], [1, 'ハーフなし'], [3, '3ピリオド']].map(([v, l]) => h('option', { value: v, selected: f.periods === v }, l)))),
+            num('halfMinutes', f.periods === 2 ? '前後半（各・分）' : f.periods === 3 ? '1ピリオド（分）' : '試合時間（分）', 1, 60),
+            f.periods > 1 ? num('halftimeMinutes', f.periods === 2 ? 'ハーフタイム（分）' : 'ピリオド間（分）', 0, 30) : null,
+            num('intervalMinutes', '試合間隔（分）', 0, 120),
+            h('label', { class: 'check', style: { gridColumn: '1 / -1' } }, h('input', { type: 'checkbox', checked: f.saveConfig, onchange: (e) => { f.saveConfig = e.target.checked; } }),
+              'この試合時間を設定にも反映する（パンフレットや要項の「試合時間」の表示に使われます）')] : null),
+        h('p', { class: 'muted small' }, '結果が入った試合は動きません。反映する前に、変更される試合と注意点を確認できます。反映した後も「直前の調整を元に戻す」で戻せます。'),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => dlg.close() }, 'キャンセル'),
+          h('button', { class: 'btn btn-primary', type: 'button', disabled: !times.length, onclick: preview }, '確認する')));
+    };
+    const payload = () => ({ op: f.op, day: f.day, from: f.from, minutes: f.minutes, start: f.start, periods: f.periods, halfMinutes: f.halfMinutes,
+      halftimeMinutes: f.halftimeMinutes, intervalMinutes: f.intervalMinutes, saveConfig: f.saveConfig });
+    const preview = async () => {
+      const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/retime`, { ...payload(), dryRun: true }));
+      if (!r) return;
+      const dl = (d) => (days > 1 ? `${d + 1}日目 ` : '');
+      mount(content,
+        h('p', { style: { marginTop: 0 } }, h('b', null, r.label)),
+        h('p', null, `${r.changes.length}試合の時刻が変わります。`),
+        h('div', { class: 'retime-list' }, h('table', { class: 'tbl' },
+          h('thead', null, h('tr', null, h('th', null, '変更前'), h('th', null, '変更後'), h('th', null, 'コート'), h('th', null, '試合'))),
+          h('tbody', null, r.changes.slice(0, 60).map((x) => h('tr', null,
+            h('td', null, `${dl(x.beforeDay)}${toHHMM(x.before)}`), h('td', null, h('b', null, `${dl(x.afterDay)}${toHHMM(x.after)}`)),
+            h('td', null, courtName(cfg, x.court)), h('td', null, x.home || x.away ? `${x.home || '未定'} - ${x.away || '未定'}` : x.label)))))),
+        r.changes.length > 60 ? h('p', { class: 'muted small' }, `ほか${r.changes.length - 60}試合`) : null,
+        warningsList(r.warnings),
+        h('div', { class: 'actions' },
+          h('button', { class: 'btn btn-ghost', type: 'button', onclick: form }, '戻る'),
+          h('button', { class: 'btn btn-primary', type: 'button', onclick: apply }, 'この内容で反映')));
+    };
+    const apply = async () => {
+      const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/retime`, payload()), '時刻を変更しました');
+      if (!r) return;
+      dlg.close(); await reload();
+    };
+    async function undo() {
+      if (!(await confirmDialog('直前の調整を元に戻します', `「${hist[0].label}」の前の状態に戻します。結果はそのまま残ります。`, '元に戻す'))) return;
+      if (await run(() => api('POST', `/api/admin/categories/${cat.id}/retime/undo`), '元に戻しました')) { dlg.close(); await reload(); }
+    }
+    form();
+  }
 
   function openDelay(cat, m) {
     const content = h('div');
