@@ -1550,6 +1550,132 @@ route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user 
   return json({ ok: true, id: nid, categories: cats.length, teams: teamCount, matches: matchCount });
 }, 'admin');
 
+// ---------- 管理者: バックアップ（読み出しだけ。データは変更しない）と復元（新しい大会として追加） ----------
+
+const BACKUP_FORMAT = 'infinex-backup';
+const BACKUP_VERSION = 1;
+const OMIT_TOURNAMENT = ['pin', 'pin_version', 'shared_with'];
+
+// 1つの大会のデータをまとめる
+async function tournamentBundle(db, t) {
+  const settings = readSettings(t);
+  const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ? ORDER BY sort, created_at').bind(t.id).all()).results;
+  const teams = [], matches = [];
+  for (const c of cats) {
+    teams.push(...(await db.prepare('SELECT * FROM teams WHERE category_id = ?').bind(c.id).all()).results);
+    matches.push(...(await db.prepare('SELECT * FROM matches WHERE category_id = ?').bind(c.id).all()).results);
+  }
+  const sponsors = (await db.prepare('SELECT * FROM sponsors WHERE tournament_id = ?').bind(t.id).all()).results;
+  const lost = (await db.prepare('SELECT * FROM lost_items WHERE tournament_id = ?').bind(t.id).all()).results;
+  const assets = [];
+  for (const id of [...new Set(outlineImageIds(settings.outline))].filter(Boolean)) {
+    const a = await db.prepare('SELECT id, image FROM assets WHERE id = ?').bind(id).first();
+    if (a) assets.push(a);
+  }
+  const tour = { ...t };
+  for (const k of OMIT_TOURNAMENT) delete tour[k];
+  return { tournament: tour, categories: cats, teams, matches, sponsors, lost_items: lost, assets };
+}
+
+const backupFile = (extra) => ({ format: BACKUP_FORMAT, version: BACKUP_VERSION, created_at: now(), ...extra });
+
+// この大会のバックアップ（大会の管理者・共有された地域管理者・閲覧専用）
+route('GET', '/api/admin/tournaments/:id/backup', async ({ db, params, user }) => {
+  const t = await getTournamentForRead(db, params.id, user);
+  return json(backupFile({ kind: 'tournament', tournaments: [await tournamentBundle(db, t)] }));
+}, 'admin');
+
+// 全データのバックアップ（全体管理者のみ。アカウントはパスワードを含めない）
+route('GET', '/api/admin/backup', async ({ db, user }) => {
+  mustSuper(user);
+  if (user.viewer) fail(403, '閲覧専用のアカウントでは、全データのバックアップは作成できません');
+  const ts = (await db.prepare('SELECT * FROM tournaments ORDER BY date DESC, created_at DESC').all()).results;
+  const tournaments = [];
+  for (const t of ts) tournaments.push(await tournamentBundle(db, t));
+  const templates = (await db.prepare('SELECT * FROM templates').all()).results;
+  const presets = (await db.prepare('SELECT * FROM presets').all()).results;
+  const presetAssets = (await db.prepare("SELECT id, owner, image FROM assets WHERE owner LIKE 'preset:%'").all()).results;
+  const users = (await db.prepare('SELECT id, login_id, name, region, role, active, scope, parent_id, created_at FROM users').all()).results;
+  return json(backupFile({ kind: 'all', tournaments, templates, presets, preset_assets: presetAssets, users }));
+}, 'admin');
+
+// 復元：バックアップの中の1つの大会を、新しい大会（準備中）として追加する。既存の大会は変更しない
+route('POST', '/api/admin/restore', async ({ req, db, user }) => {
+  const b = await body(req);
+  const bundle = b && b.bundle;
+  if (!bundle || typeof bundle !== 'object' || !bundle.tournament || !Array.isArray(bundle.categories)) fail(400, 'バックアップのファイルの形式が正しくありません');
+  const src = bundle.tournament;
+  const txt = (v, n) => (v == null ? null : String(v).slice(0, n));
+  const json1 = (v, fallback) => { try { return JSON.parse(v); } catch { return fallback; } };
+  const nid = uid();
+  // 要項の画像は新しいIDで追加し、要項の中の参照を付け替える
+  const settings = json1(src.settings || '{}', {}) || {};
+  const amap = {};
+  for (const a of Array.isArray(bundle.assets) ? bundle.assets : []) {
+    if (!a || typeof a.image !== 'string' || !/^data:image\//.test(a.image) || a.image.length > 3_000_000) continue;
+    const id = uid();
+    await db.prepare('INSERT INTO assets (id, owner, image, created_at) VALUES (?, ?, ?, ?)').bind(id, nid, a.image, now()).run();
+    amap[a.id] = id;
+  }
+  if (settings.outline) settings.outline = remapOutline(settings.outline, amap);
+  delete settings.shared;
+  const name = clip(b.name, 80) || `${txt(src.name, 70) || '大会'}（復元）`;
+  const logo = (() => { try { return checkLogo(src.logo); } catch { return null; } })();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(src.date || '') ? src.date : null;
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(src.end_date || '') ? src.end_date : null;
+  await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(nid, randomSlug(), name, date, end, txt(src.venue, 120), logo, src.show_logo ? 1 : 0, randomPin(), JSON.stringify(settings), user.id === 'root' ? null : user.id, now(), now()).run();
+  const stmts = [];
+  let teamCount = 0, matchCount = 0;
+  const teamsAll = Array.isArray(bundle.teams) ? bundle.teams : [];
+  const matchesAll = Array.isArray(bundle.matches) ? bundle.matches : [];
+  for (const c of bundle.categories.slice(0, 20)) {
+    if (!c || !c.id) continue;
+    const cid = uid();
+    const teams = teamsAll.filter((x) => x && x.category_id === c.id).slice(0, 300);
+    const tmap = Object.fromEntries(teams.map((x) => [x.id, uid()]));
+    const mapIds = (arr) => (Array.isArray(arr) ? arr : []).map((id) => tmap[id]).filter(Boolean);
+    const cfg = normalizeConfig(json1(c.config || '{}', {}) || {});
+    const ncfg = {
+      ...cfg,
+      lottery: Object.fromEntries(Object.entries(cfg.lottery || {}).map(([g, ids]) => [g, mapIds(ids)])),
+      grouping: {
+        fixed: Object.fromEntries(Object.entries((cfg.grouping || {}).fixed || {}).filter(([id]) => tmap[id]).map(([id, g]) => [tmap[id], g])),
+        separate: ((cfg.grouping || {}).separate || []).map(mapIds).filter((x) => x.length > 1),
+      },
+    };
+    stmts.push(db.prepare('INSERT INTO categories (id, tournament_id, name, sort, config, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(cid, nid, txt(c.name, 40) || 'カテゴリ', Number(c.sort) || 0, JSON.stringify(normalizeConfig(ncfg)), now()));
+    for (const x of teams) {
+      const tl = (() => { try { return checkLogo(x.logo); } catch { return null; } })();
+      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(tmap[x.id], cid, txt(x.name, 80) || 'チーム', txt(x.short_name, 40), txt(x.club, 80), tl, Number(x.sort) || 0, txt(x.group_label, 4)));
+      teamCount++;
+    }
+    for (const m of matchesAll.filter((x) => x && x.category_id === c.id).slice(0, 2000)) {
+      const v = { ...m };
+      v.home_team_id = m.home_team_id ? tmap[m.home_team_id] || null : null;
+      v.away_team_id = m.away_team_id ? tmap[m.away_team_id] || null : null;
+      stmts.push(db.prepare(`INSERT INTO matches (id, category_id, ${MATCH_COLS.join(', ')}) VALUES (?, ?, ${MATCH_COLS.map(() => '?').join(', ')})`)
+        .bind(uid(), cid, ...MATCH_COLS.map((k) => (v[k] === undefined ? null : v[k]))));
+      matchCount++;
+    }
+  }
+  for (const sp of (Array.isArray(bundle.sponsors) ? bundle.sponsors : []).slice(0, 30)) {
+    if (!sp || typeof sp.image !== 'string' || !/^data:image\//.test(sp.image) || sp.image.length > 3_000_000) continue;
+    stmts.push(db.prepare('INSERT INTO sponsors (id, tournament_id, name, url, image, sort, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(uid(), nid, txt(sp.name, 80) || '', /^https?:\/\//.test(sp.url || '') ? txt(sp.url, 500) : '', sp.image, Number(sp.sort) || 0, sp.active ? 1 : 0, now(), now()));
+  }
+  for (const li of (Array.isArray(bundle.lost_items) ? bundle.lost_items : []).slice(0, 100)) {
+    if (!li || !li.note) continue;
+    const img = typeof li.image === 'string' && /^data:image\//.test(li.image) && li.image.length < 3_000_000 ? li.image : null;
+    stmts.push(db.prepare('INSERT INTO lost_items (id, tournament_id, image, note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(uid(), nid, img, txt(li.note, 500), li.status === 'returned' ? 'returned' : 'open', li.created_at || now(), now()));
+  }
+  await batchAll(db, stmts);
+  return json({ ok: true, id: nid, name, categories: bundle.categories.length, teams: teamCount, matches: matchCount });
+}, 'admin');
+
 // ---------- 管理者: テンプレート ----------
 
 const TEMPLATE_KEYS = ['dayBreaks', 'koTiming', 'periods', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchEnabled', 'lunchStart', 'lunchMinutes', 'minLunchMinutes',

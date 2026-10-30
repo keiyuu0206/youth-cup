@@ -380,6 +380,62 @@ export async function admin(root, path, navigate) {
   return listView(root, navigate);
 }
 
+// ---------- バックアップ ----------
+
+// 今日の日時（ファイル名用）
+const stampNow = () => { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`; };
+const safeName = (s) => String(s || '').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+function saveJson(data, fileName) {
+  const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = h('a', { href: url, download: fileName });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+async function downloadBackup(path, fileName) {
+  const data = await run(() => api('GET', path));
+  if (!data) return;
+  saveJson(data, fileName);
+  toast(`バックアップを保存しました（大会 ${data.tournaments.length}件）`);
+}
+
+// バックアップのファイルから、大会を新しい大会として追加する
+function openRestore(navigate) {
+  const input = h('input', { type: 'file', accept: '.json,application/json', style: { display: 'none' } });
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) return;
+    let data;
+    try { data = JSON.parse(await file.text()); } catch { toast('ファイルを読み込めませんでした。バックアップのファイル（.json）を選んでください', true); return; }
+    if (!data || data.format !== 'infinex-backup' || !Array.isArray(data.tournaments) || !data.tournaments.length) { toast('INFINEXのバックアップのファイルではありません', true); return; }
+    const list = data.tournaments;
+    const f = { idx: 0, name: `${list[0].tournament.name}（復元）` };
+    const created = data.created_at ? new Date(data.created_at).toLocaleString('ja-JP') : '';
+    const body = h('div');
+    const draw = () => mount(body, h('div', { class: 'grid-form' },
+        h('p', { class: 'muted small', style: { margin: 0, gridColumn: '1 / -1' } }, `バックアップの作成日時：${created}`, h('br'),
+          '選んだ大会を、新しい大会（準備中）として追加します。今ある大会は変更されません。閲覧ページのURLとPINは新しくなります。'),
+        list.length > 1 ? h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, `復元する大会（${list.length}件）`),
+          h('select', { onchange: (e) => { f.idx = Number(e.target.value); f.name = `${list[f.idx].tournament.name}（復元）`; draw(); } },
+            list.map((b, i) => h('option', { value: i, selected: i === f.idx }, `${b.tournament.name}（${b.tournament.date || '日付なし'}・カテゴリ${b.categories.length}・チーム${b.teams.length}）`)))) : null,
+        h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '復元後の大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+        h('p', { class: 'small', style: { margin: 0, gridColumn: '1 / -1' } }, (() => { const b = list[f.idx]; return `カテゴリ ${b.categories.length}件・チーム ${b.teams.length}件・試合 ${b.matches.length}件（結果を含む）`; })())));
+    draw();
+    modal({
+      title: 'バックアップから復元',
+      content: body,
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '新しい大会として追加', kind: 'btn-primary', onClick: async () => {
+        const r = await run(() => api('POST', '/api/admin/restore', { bundle: list[f.idx], name: f.name.trim() }), '復元しました');
+        if (!r) return true;
+        navigate(`/admin/t/${r.id}`);
+      } }],
+    });
+  };
+  document.body.append(input);
+  input.click();
+}
+
 // マニュアルの一覧（権限に合わせて並べる）
 function openManuals() {
   const keys = isSuperUser() ? ['organizer', 'superadmin', 'scorer', 'team', 'parents']
@@ -712,6 +768,8 @@ async function listView(root, navigate) {
     adminHeader('大会運営', navigate, false),
     h('main', { class: 'wrap wide', style: { marginTop: '20px' } },
       h('div', { class: 'row' }, h('h2', { style: { fontSize: '1.3rem' } }, isSuperUser() || isViewer() ? '大会一覧（すべての地域）' : '大会一覧'), h('span', { class: 'spacer' }),
+        isSuperUser() ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => downloadBackup('/api/admin/backup', `INFINEX_全データ_backup_${stampNow()}.json`) }, '全データのバックアップ') : null,
+        isViewer() ? null : h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openRestore(navigate) }, 'バックアップから復元'),
         isViewer() ? h('span', { class: 'tag' }, '👁 閲覧専用') : h('button', { class: 'btn btn-primary', type: 'button', onclick: createDialog }, '＋ 大会を作成')),
       (isSuperUser() || isViewer()) && owners.length > 1 ? h('div', { class: 'chips', style: { marginTop: '8px' } },
         [['all', `すべて（${all.length}）`], ...owners.map(([k, l]) => [k, `${l}（${all.filter((t) => ownerKey(t) === k).length}）`])].map(([k, l]) =>
@@ -793,7 +851,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, readOnly(infoPanel(t)), outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel())),
+          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, readOnly(infoPanel(t)), outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
@@ -802,6 +860,16 @@ async function tournamentView(root, id, navigate) {
               h('button', { class: 'btn btn-sm', type: 'button', disabled: isLocked(), onclick: addCategory }, '＋ カテゴリを追加')),
             lockBanner(t),
             cat ? categoryView(t, cat, editable) : h('div', { class: 'panel empty', style: { marginTop: '12px' } }, 'カテゴリ（U7〜U12）を追加すると、チーム登録と日程作成ができます。')))));
+  }
+
+  // ----- バックアップ（この大会をファイルに保存） -----
+
+  function backupPanel(t) {
+    return h('section', { class: 'panel' },
+      h('h2', null, 'バックアップ'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, '設定・チーム・組み分け・日程・結果・要項・スポンサー・忘れ物を、1つのファイルに保存します。大会のデータは変更されません。'),
+      h('button', { class: 'btn btn-sm btn-block', type: 'button', onclick: () => downloadBackup(`/api/admin/tournaments/${id}/backup`, `${safeName(t.name)}_backup_${stampNow()}.json`) }, 'この大会をファイルに保存'),
+      h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, '戻すときは、大会一覧の［バックアップから復元］から、新しい大会として追加します。'));
   }
 
   // ----- 地域管理者への共有（全体管理者のみ） -----
