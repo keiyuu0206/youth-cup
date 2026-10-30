@@ -16,6 +16,7 @@ import WEB_OUTLINE from './web-outline.js';
 import WEB_QR from './web-qr.js';
 import WEB_XLSX from './web-xlsx.js';
 import WEB_PAMPHLET from './web-pamphlet.js';
+import WEB_POSTER from './web-poster.js';
 import WEB_SCORE from './web-score.js';
 import { normalizeConfig, matchLength, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
@@ -525,6 +526,7 @@ const STATIC = {
   '/web-qr.js': [WEB_QR, JS],
   '/web-xlsx.js': [WEB_XLSX, JS],
   '/web-pamphlet.js': [WEB_PAMPHLET, JS],
+  '/web-poster.js': [WEB_POSTER, JS],
   '/web-score.js': [WEB_SCORE, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
