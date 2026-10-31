@@ -1,6 +1,7 @@
 import { api } from './web-api.js';
 import { printParking } from './web-print.js';
 import { outlineWeb } from './web-outline.js';
+import { drawPoster, drawStandingsImage } from './web-poster.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
 
@@ -362,6 +363,32 @@ function snsMode(t, cat, ctx) {
     const confirmed = cat.matches.filter((m) => m.status === 'confirmed');
     const content = h('div', { class: 'sb' });
 
+    // 順位表・最終順位は、全チームが1枚に収まる画像を作って表示する（チーム名は折り返さない）
+    if (st.kind === 'standings' || st.kind === 'final') {
+      const img = h('img', { class: 'sns-img', alt: st.kind === 'final' ? '最終順位' : '順位表' });
+      const canvas = document.createElement('canvas');
+      const size = st.shape === 'story' ? 'story' : 'square';
+      const footer = `${formatDate(t.date)}　${t.venue || ''}`;
+      const job = st.kind === 'final'
+        ? drawPoster(canvas, t, cat, { kind: 'ranking', size, accent: 'lime', title: t.name, subtitle: `${cat.name} 最終結果`, footer, showTeamLogo: true, noWrap: true, myTeam: ctx.myTeam })
+        : drawStandingsImage(canvas, t, cat, { size, title: t.name, subtitle: `${cat.name} 順位表`, footer, myTeam: ctx.myTeam });
+      job.then(() => { img.src = canvas.toDataURL('image/png'); });
+      const save = () => canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = h('a', { href: url, download: `${t.name}_${cat.name}_${st.kind === 'final' ? '最終結果' : '順位表'}.png`.replace(/[\\/:*?"<>|\s]+/g, '_') });
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }, 'image/png');
+      mount(back,
+        h('div', { class: 'sns-bar' }, kinds.map(([k, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.kind === k), onclick: () => { st.kind = k; draw(); } }, label))),
+        h('div', { class: 'sns-bar' },
+          [['sq', '正方形'], ['story', 'ストーリー']].map(([k, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.shape === k), onclick: () => { st.shape = k; draw(); } }, label)),
+          h('button', { class: 'chip-btn', type: 'button', onclick: close }, '閉じる')),
+        h('div', { class: `sns-imgwrap ${st.shape}` }, img),
+        h('div', { class: 'sns-bar' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: save }, '画像を保存')),
+        h('p', { class: 'sns-hint' }, 'スマホでは、画像を長押しして保存することもできます'));
+      return;
+    }
     if (st.kind === 'standings') {
       for (const [g, s] of Object.entries(cat.standings).sort()) {
         content.append(h('div', { class: 'sg' }, `${g}組${s.complete ? '' : '（途中経過）'}`),

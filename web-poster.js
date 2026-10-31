@@ -9,6 +9,7 @@ const SIZES = {
   sns: { label: 'SNS用（縦 4:5）', w: 1080, h: 1350 },
   square: { label: '正方形（1:1）', w: 1080, h: 1080 },
   a4: { label: 'A4縦（印刷用）', w: 1654, h: 2339 },
+  story: { label: 'ストーリー（9:16）', w: 1080, h: 1920 },
 };
 const ACCENTS = { lime: ['ライム', '#c8ff3d'], red: ['赤', '#ff3b45'], gold: ['金', '#f5c542'], white: ['白', '#ffffff'] };
 const FONT = "'Noto Sans CJK JP', 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Meiryo', sans-serif";
@@ -91,6 +92,8 @@ export async function drawPoster(canvas, t, cat, o) {
   const cols = o.cols && o.cols !== 'auto' ? Number(o.cols) : n <= 12 ? 1 : n <= 44 ? 2 : 3;
   const perCol = Math.ceil(n / cols) || 1;
   const rowH = Math.min(78 * u, (bottom - top) / perCol);
+  // 縦に余裕があるときは、一覧を縦の中央に置く
+  const top2 = top + Math.max(0, ((bottom - top) - rowH * perCol) / 2) * 0.8;
   const colGap = 36 * u;
   const colW = (W - pad * 2 - colGap * (cols - 1)) / cols;
   const fs = Math.max(12 * u, Math.min(38 * u, rowH * 0.5));
@@ -98,7 +101,8 @@ export async function drawPoster(canvas, t, cat, o) {
   const logos = await Promise.all(rows.map((r) => (o.showTeamLogo ? loadImg(r.team.logo) : null)));
   rows.forEach((r, i) => {
     const c = Math.floor(i / perCol), k = i % perCol;
-    const x = pad + c * (colW + colGap), cy = top + k * rowH + rowH / 2;
+    const x = pad + c * (colW + colGap), cy = top2 + k * rowH + rowH / 2;
+    if (o.myTeam && r.team.id === o.myTeam) { ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(x, cy - rowH / 2 + 2, colW, rowH - 4); }
     // 区切りの線
     ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = Math.max(1, 1.5 * u);
     ctx.beginPath(); ctx.moveTo(x + noW * 0.6, cy + rowH / 2 - 1); ctx.lineTo(x + colW, cy + rowH / 2 - 1); ctx.stroke();
@@ -122,7 +126,7 @@ export async function drawPoster(canvas, t, cat, o) {
     const maxW = x + colW - nx - 4 * u;
     const nfs = fitFont(ctx, name, maxW, fs, 900, 10 * u);
     ctx.textAlign = 'left'; ctx.fillStyle = '#f2f2f2';
-    if (nfs < fs * 0.72 && rowH >= fs * 1.5) {
+    if (!o.noWrap && nfs < fs * 0.72 && rowH >= fs * 1.5) {
       // 1行だと小さくなりすぎる長い名前は、2行に分けて大きめに表示する
       const chars = [...name];
       let cut = Math.round(chars.length / 2);
@@ -143,10 +147,10 @@ export async function drawPoster(canvas, t, cat, o) {
 }
 
 // 結果一覧（ポスター）の画面
-export function openResultPoster(t, categories, catId) {
+export function openResultPoster(t, categories, catId, opts = {}) {
   const cat0 = categories.find((c) => c.id === catId) || categories[0];
   const o = {
-    catId: cat0.id, kind: (cat0.finalRanking || []).length ? 'ranking' : 'teams', size: 'sns', accent: 'lime', cols: 'auto',
+    catId: cat0.id, kind: opts.kind || ((cat0.finalRanking || []).length ? 'ranking' : 'teams'), size: 'sns', accent: 'lime', cols: 'auto',
     showLogo: false, showTeamLogo: true,
   };
   const defaults = () => {
@@ -405,7 +409,8 @@ export async function drawMatchPoster(canvas, t, cat, o, page = 0) {
 }
 
 // 試合結果（SNS画像）の画面
-export function openMatchPoster(t, categories, catId) {
+export function openMatchPoster(t, categories, catId, opts = {}) {
+  const canPhoto = opts.canPhoto !== false;
   const cats = categories.filter((c) => c.matches.length);
   if (!cats.length) { toast('日程がまだありません', true); return; }
   const accKeys = Object.keys(MATCH_ACCENTS);
@@ -484,6 +489,7 @@ export function openMatchPoster(t, categories, catId) {
       sel('1枚の試合数', 'perPage', [3, 4, 5, 6, 7, 8].map((n) => [n, `${n}試合`]), () => { o.page = 0; }),
       sel('アクセントの色', 'accent', Object.entries(MATCH_ACCENTS).map(([k, v]) => [k, v[0]])),
       txt('大会名', 'title'), txt('大きな文字（カテゴリ）', 'big'), txt('範囲の文字', 'scopeText'), txt('日付', 'dateText'),
+      !canPhoto ? h('p', { class: 'muted small', style: { margin: 0 } }, o.photoUrl ? `写真：大会の管理者が登録した写真を使います（${cat.name}）` : '写真：大会の管理者が登録すると、上部に表示されます') :
       h('div', { class: 'poster-photo' }, h('span', { class: 'small', style: { fontWeight: 700 } }, `写真（${cat.name}）`),
         h('div', { class: 'row', style: { gap: '6px' } },
           h('button', { class: 'btn btn-sm', type: 'button', onclick: pickPhoto }, o.photoUrl ? '写真を変更' : '写真を登録'),
@@ -525,4 +531,102 @@ export function openMatchPoster(t, categories, catId) {
     ],
   });
   redraw();
+}
+
+
+// ======================================================================
+// 順位表（SNS画像）：すべての組を1枚に収める。チーム名は折り返さず1行（長い名前は小さく）
+// ======================================================================
+export async function drawStandingsImage(canvas, t, cat, o = {}) {
+  const { w: W, h: H } = SIZES[o.size] || SIZES.square;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const accent = (ACCENTS[o.accent] || ACCENTS.lime)[1];
+  background(ctx, W, H);
+  const tm = teamMap(cat);
+  const groups = Object.entries(cat.standings || {}).sort(([a], [b]) => a.localeCompare(b));
+  // タイトル
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  const pad = 48;
+  const ts = fitFont(ctx, o.title || t.name, W - pad * 2, 64, 900, 22);
+  ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`; ctx.fillText(o.title || t.name, W / 2, 40 + ts);
+  const ss = fitFont(ctx, o.subtitle || `${cat.name} 順位表`, W - pad * 2, 38, 900, 16);
+  ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`; ctx.fillText(o.subtitle || `${cat.name} 順位表`, W / 2, 40 + ts + 18 + ss);
+  const top = 40 + ts + 18 + ss + 34, bottom = H - 56;
+  // 列の数：行の高さとチーム名の幅のつり合いが一番良いものを選ぶ
+  const HEAD = 1.5; // 組の見出しの高さ（行の何倍か）
+  let best = null;
+  for (let cols = 1; cols <= Math.min(4, Math.max(1, groups.length)); cols++) {
+    const per = Math.ceil(groups.length / cols);
+    const colsUnits = Array.from({ length: cols }, (_, c) => groups.slice(c * per, c * per + per).reduce((a, [, g]) => a + g.rows.length + HEAD + 0.6, 0));
+    const units = Math.max(...colsUnits);
+    const rowH = Math.min(64, (bottom - top) / units);
+    const colW = (W - pad * 2 - 28 * (cols - 1)) / cols;
+    const score = Math.min(rowH, colW / 11);
+    if (!best || score > best.score) best = { cols, per, rowH, colW, score };
+  }
+  const { cols, per, rowH, colW } = best;
+  const fs = Math.max(11, Math.min(30, rowH * 0.5));
+  const crestS = Math.min(rowH * 0.62, fs * 1.3);
+  const logos = {};
+  if (o.showTeamLogo !== false) await Promise.all(Object.values(tm).map(async (x) => { logos[x.id] = await loadImg(x.logo); }));
+  for (let c = 0; c < cols; c++) {
+    let y = top;
+    const x = pad + c * (colW + 28);
+    for (const [gname, g] of groups.slice(c * per, c * per + per)) {
+      // 組の見出し
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = accent; ctx.fillRect(x, y + 4, 6, rowH * HEAD - 12);
+      ctx.fillStyle = '#ffffff'; ctx.font = `900 ${fs * 1.05}px ${FONT}`;
+      ctx.fillText(`${gname}組${g.complete ? '' : '（途中経過）'}`, x + 16, y + rowH * HEAD / 2 - 2);
+      ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = `700 ${fs * 0.6}px ${FONT}`;
+      const cPts = x + colW - 6, cGd = cPts - fs * 2.6, cW = cGd - fs * 2.6;
+      ctx.fillText('勝点', cPts, y + rowH * HEAD / 2); ctx.fillText('得失', cGd, y + rowH * HEAD / 2); ctx.fillText('勝分敗', cW, y + rowH * HEAD / 2);
+      y += rowH * HEAD;
+      for (const r of g.rows) {
+        const cy = y + rowH / 2;
+        const mine = o.myTeam && r.teamId === o.myTeam;
+        if (mine) { ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(x, y + 1, colW, rowH - 2); }
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y + rowH - 1); ctx.lineTo(x + colW, y + rowH - 1); ctx.stroke();
+        ctx.textAlign = 'right'; ctx.fillStyle = g.complete && r.rank <= 3 ? accent : '#f2f2f2'; ctx.font = `900 ${fs}px ${FONT}`;
+        ctx.fillText(String(r.rank), x + fs * 1.4, cy);
+        let nx = x + fs * 1.4 + 12;
+        const team = tm[r.teamId];
+        if (o.showTeamLogo !== false) {
+          const im = team && logos[team.id];
+          if (im) { const k = Math.min(crestS / im.width, crestS / im.height); ctx.drawImage(im, nx + (crestS - im.width * k) / 2, cy - (im.height * k) / 2, im.width * k, im.height * k); }
+          else { ctx.fillStyle = '#2b2f2e'; ctx.beginPath(); ctx.arc(nx + crestS / 2, cy, crestS / 2, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#cfd5d2'; ctx.textAlign = 'center'; ctx.font = `800 ${crestS * 0.5}px ${FONT}`; ctx.fillText([...((team && (team.short_name || team.name)) || '-')][0], nx + crestS / 2, cy + 1); }
+          nx += crestS + 10;
+        }
+        // チーム名：折り返さず1行（入らないときは小さく）
+        const name = team ? team.name : '-';
+        const nfs = fitFont(ctx, name, cW - fs * 2.4 - nx, fs, 900, 9);
+        ctx.textAlign = 'left'; ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${nfs}px ${FONT}`; ctx.fillText(name, nx, cy + 1);
+        ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = `700 ${fs * 0.72}px ${FONT}`;
+        ctx.fillText(`${r.w}-${r.d}-${r.l}`, cW, cy + 1);
+        ctx.fillText(r.gd > 0 ? `+${r.gd}` : String(r.gd), cGd, cy + 1);
+        ctx.fillStyle = '#ffffff'; ctx.font = `900 ${fs}px ${FONT}`; ctx.fillText(String(r.pts), cPts, cy + 1);
+        y += rowH;
+      }
+      y += rowH * 0.6;
+    }
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 20px ${FONT}`;
+  ctx.fillText(o.footer || '', W / 2, H - 22);
+  return { cols };
+}
+
+// 管理画面・大会運営者の［SNS画像］：出力するものを選ぶ
+export function openSnsChooser(t, categories, catId, opts = {}) {
+  const pick = (fn) => () => { document.querySelector('.modal-back')?.remove(); fn(); };
+  modal({
+    title: 'SNS画像',
+    content: h('div', { class: 'stack' },
+      h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: pick(() => openMatchPoster(t, categories, catId, opts)) }, '試合結果（組ごと・回戦ごと）'),
+      h('p', { class: 'muted small', style: { margin: 0 } }, '予選リーグの組ごと、決勝トーナメントの1回戦・準決勝などの回戦ごとに、試合結果の画像を作ります。'),
+      h('button', { class: 'btn btn-block', type: 'button', onclick: pick(() => openResultPoster(t, categories, catId, { kind: 'ranking' })) }, '最終結果（順位の一覧）'),
+      h('button', { class: 'btn btn-block', type: 'button', onclick: pick(() => openResultPoster(t, categories, catId, { kind: 'teams' })) }, '参加チーム一覧'),
+      h('p', { class: 'muted small', style: { margin: 0 } }, '最終順位や参加チームを一覧にした画像（PDFも可）を作ります。')),
+    actions: [{ label: '閉じる', kind: 'btn-ghost' }],
+  });
 }

@@ -75,23 +75,18 @@ r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);
 cat = r.data.categories[0];
 expect(Math.min(...cat.matches.map((m) => m.start_min)) === firstBefore + 30, 'global shift +30');
 
-// 関係者
-r = await call('rel', 'POST', `/api/rel/${slug}/login`, { pin: '0000' === pin ? '1111' : '0000' });
-expect(r.status === 401, 'wrong pin rejected');
+// チーム関係者向けの結果の登録は終了（すべて 410）
 r = await call('rel', 'POST', `/api/rel/${slug}/login`, { pin });
-expect(r.status === 200, 'relative login');
+expect(r.status === 410, 'relative login closed', r.data);
 r = await call('rel', 'GET', `/api/rel/${slug}`);
-let rc = r.data.categories[0];
-const lm = rc.matches.find((m) => m.stage === 'league');
+expect(r.status === 410, 'relative page closed');
+r = await call('admin', 'GET', `/api/admin/tournaments/${tid}`);
+const lm = r.data.categories[0].matches.find((m) => m.stage === 'league');
 r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: lm.home_team_id, home_score: 2, away_score: 1, version: lm.version });
-expect(r.status === 200, 'relative provisional', r.data);
-r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: lm.away_team_id, home_score: 3, away_score: 1, version: lm.version });
-expect(r.status === 409 && r.data.match && r.data.match.home_score === 2, 'stale version conflict', r.data);
-const other = rc.teams.find((t) => t.id !== lm.home_team_id && t.id !== lm.away_team_id);
-r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: other.id, home_score: 0, away_score: 0, version: lm.version + 1 });
-expect(r.status === 403, 'other team cannot edit');
-r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: lm.away_team_id, home_score: 2, away_score: 2, version: lm.version + 1 });
-expect(r.status === 200, 'opponent edits provisional');
+expect(r.status === 410, 'relative provisional closed');
+// 本部が仮の結果を入れる（承認待ち）
+r = await call('admin', 'POST', `/api/admin/matches/${lm.id}/result`, { home_score: 2, away_score: 2 });
+expect(r.status === 200, 'admin provisional', r.data);
 r = await call('anon', 'GET', `/api/public/${slug}`);
 let pm = r.data.categories[0].matches.find((m) => m.id === lm.id);
 expect(pm.status === 'provisional' && pm.home_score === undefined, 'provisional score hidden from public', pm);
@@ -105,7 +100,7 @@ r = await call('anon', 'GET', `/api/public/${slug}`);
 pm = r.data.categories[0].matches.find((m) => m.id === lm.id);
 expect(pm.status === 'confirmed' && pm.home_score === 2 && pm.away_score === 2, 'confirmed visible');
 r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: lm.home_team_id, home_score: 5, away_score: 0, version: 99 });
-expect(r.status === 409, 'relative cannot edit confirmed');
+expect(r.status === 410, 'relative cannot edit (closed)');
 
 // 開催中にする → 組み合わせ変更不可
 await call('admin', 'PATCH', `/api/admin/tournaments/${tid}`, { status: 'live' });
@@ -178,15 +173,9 @@ r = await call('admin', 'GET', '/api/admin/templates');
 const tp = r.data.templates.find((x) => x.name === 'U10 2組クロス');
 expect(tp && tp.config.format === 'league_knockout' && !('lottery' in tp.config), 'template saved');
 
-// PIN再発行で関係者セッション無効化
-await call('admin', 'POST', `/api/admin/tournaments/${tid}/pin`);
-r = await call('rel', 'GET', `/api/rel/${slug}`);
-expect(r.status === 401, 'pin reissue invalidates session');
-
-// PINの総当たり制限
-let last;
-for (let i = 0; i < 6; i++) last = await call('x', 'POST', `/api/rel/${slug}/login`, { pin: 'zzzz' });
-expect(last.status === 429, 'pin rate limited', last);
+// 関係者の結果の登録ページは「終了しました」の案内（閲覧ページへ）
+const relPage = await fetch(B + '/r/' + slug, { headers: { 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' } });
+expect(relPage.status === 200, 'relative url still opens (closed notice)');
 
 // 静的ファイルとSPA
 const html = await fetch(B + '/t/' + slug, { headers: { 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' } });

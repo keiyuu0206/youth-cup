@@ -20,10 +20,18 @@ async function route() {
       const { viewer } = await import('./web-viewer.js');
       return await viewer(root, m[1]);
     }
+    // チーム関係者向けの結果の登録ページは終了（閲覧ページへ案内する）
     m = path.match(/^\/r\/([^/]+)$/);
     if (m) {
-      const { relative } = await import('./web-relative.js');
-      return await relative(root, m[1]);
+      const slug = m[1];
+      root.replaceChildren(Object.assign(document.createElement('main'), { className: 'wrap', innerHTML: '' }));
+      const main = root.firstChild;
+      main.style.cssText = 'padding:40px 20px;max-width:560px;margin:0 auto;line-height:1.8';
+      const h1 = document.createElement('h1'); h1.textContent = 'このページは終了しました'; h1.style.fontSize = '1.3rem';
+      const p = document.createElement('p'); p.textContent = '試合結果の登録は、大会本部で行います。試合の日程・結果は、閲覧ページでご覧ください。';
+      const a = document.createElement('a'); a.href = `/t/${encodeURIComponent(slug)}`; a.textContent = '閲覧ページを開く'; a.className = 'btn btn-primary';
+      main.append(h1, p, a);
+      return;
     }
     home();
   } catch (e) {

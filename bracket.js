@@ -99,7 +99,9 @@ class Builder {
         else if (!b) next.push(a);
         else {
           const final = size === 2;
-          const code = this.add({ home: a, away: b, label: name, level, base: offset + 1, bracket, place_w: final ? offset + 1 : null, place_l: final ? offset + 2 : null });
+          // 上位以外のトーナメントの決勝は、大会全体の順位が分かるように「決勝（9位決定戦）」とする
+          const label = final && offset ? `${name}（${offset + 1}位決定戦）` : name;
+          const code = this.add({ home: a, away: b, label, level, base: offset + 1, bracket, place_w: final ? offset + 1 : null, place_l: final ? offset + 2 : null });
           codes.push(code);
           next.push({ t: 'win', m: code });
         }
@@ -111,7 +113,7 @@ class Builder {
     }
     const byCode = (c) => this.matches.find((m) => m.code === c);
     if (mode === 'top3' && semis.length === 2) {
-      this.add({ home: { t: 'lose', m: semis[0] }, away: { t: 'lose', m: semis[1] }, label: L('3位決定戦'), level: level - 1, base: offset + 3, bracket, place_w: offset + 3, place_l: offset + 4 });
+      this.add({ home: { t: 'lose', m: semis[0] }, away: { t: 'lose', m: semis[1] }, label: L(`${offset + 3}位決定戦`), level: level - 1, base: offset + 3, bracket, place_w: offset + 3, place_l: offset + 4 });
     } else if (semis.length) {
       for (const c of semis) byCode(c).place_l = offset + 3;
     }
@@ -125,7 +127,7 @@ class Builder {
     if (!real.length) return;
     if (size === 2) {
       if (real.length === 2) {
-        this.add({ home: entrants[0], away: entrants[1], label: L(base === 1 ? '決勝' : `${base}位決定戦`), level, base: offset + base, bracket, place_w: offset + base, place_l: offset + base + 1 });
+        this.add({ home: entrants[0], away: entrants[1], label: L(base === 1 ? (offset ? `決勝（${offset + 1}位決定戦）` : '決勝') : `${offset + base}位決定戦`), level, base: offset + base, bracket, place_w: offset + base, place_l: offset + base + 1 });
       } else {
         this.assignPlace(real[0], offset + base);
       }

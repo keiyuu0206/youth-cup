@@ -1,5 +1,6 @@
 import { api, ApiError } from './web-api.js';
 const apiBase = api;
+import { openSnsChooser } from './web-poster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton } from './web-ui.js';
@@ -438,13 +439,13 @@ function openRestore(navigate) {
 
 // マニュアルの一覧（権限に合わせて並べる）
 function openManuals() {
-  const keys = isSuperUser() ? ['organizer', 'superadmin', 'scorer', 'team', 'parents']
-    : isViewer() ? ['organizer', 'parents'] : ['organizer', 'scorer', 'team', 'parents'];
+  const keys = isSuperUser() ? ['organizer', 'superadmin', 'scorer', 'parents']
+    : isViewer() ? ['organizer', 'parents'] : ['organizer', 'scorer', 'parents'];
   modal({
     title: '利用マニュアル（PDF）',
     content: h('div', { class: 'manual-list' }, keys.map((k) => h('a', { href: MANUALS[k].href, target: '_blank', rel: 'noopener' },
       h('strong', null, '📖 ', MANUALS[k].title), h('small', null, MANUALS[k].desc))),
-      h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, 'チーム関係者・スコア管理者・保護者のマニュアルは、それぞれの方に案内するときにもお使いください。')),
+      h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, '大会運営者・スコア管理者・保護者のマニュアルは、それぞれの方に案内するときにもお使いください。')),
     actions: [{ label: '閉じる', kind: 'btn-ghost' }],
   });
 }
@@ -500,7 +501,7 @@ function loginView(root, onDone) {
     h('label', { class: 'field' }, h('span', null, 'パスワード'), pw), err,
     h('button', { class: 'btn btn-primary btn-block', type: 'submit' }, 'ログイン'),
     h('p', { class: 'muted small', style: { margin: 0 } }, 'IDとパスワードは全体管理者から発行されます。わからない場合は全体管理者にお問い合わせください。'),
-    h('p', { class: 'manual-row', style: { margin: 0 } }, manualLink('organizer', '大会管理者マニュアル'), manualLink('scorer', 'スコア・運営管理者マニュアル'))));
+    h('p', { class: 'manual-row', style: { margin: 0 } }, manualLink('organizer', '大会管理者マニュアル'), manualLink('scorer', '大会運営者・スコア管理者マニュアル'))));
   (last ? pw : id).focus();
 }
 
@@ -517,13 +518,13 @@ async function scorersView(root, navigate) {
     tournaments.length ? h('div', { class: 'scope-list' }, tournaments.map((t) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: f.tournament_ids.includes(t.id), onchange: (e) => { f.tournament_ids = e.target.checked ? [...f.tournament_ids, t.id] : f.tournament_ids.filter((x) => x !== t.id); } }),
       `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`))) : h('p', { class: 'muted small' }, '大会がまだありません'));
-  const ROLE = { scorer: 'スコア管理者', operator: '運営管理者' };
+  const ROLE = { scorer: 'スコア管理者', operator: '大会運営者' };
   const ROLE_DESC = {
-    scorer: '関係者が仮登録した結果の承認・修正・差し戻しと、結果の入力だけを行えます。設定・チーム・日程などは変更できません。',
-    operator: 'スコア管理者の権限に加えて、確定済みの結果の修正と、忘れ物の登録・返却済みの処理を行えます。大会の設定・組み合わせ・日程・時刻は変更できません。',
+    scorer: 'スコア（試合結果）の登録に特化した権限です。結果の入力ができます。確定済みの結果の修正や、設定・チーム・日程の変更はできません。',
+    operator: 'スコアの登録・修正（確定済みの結果を含む）と、SNS画像（試合結果・結果一覧）の出力、忘れ物の登録ができます。大会の設定・組み合わせ・日程・時刻は変更できません。',
   };
   const issued = (loginId, pw, role = 'scorer') => {
-    const text = `大会運営アプリの${ROLE[role]}アカウントです。\n${role === 'operator' ? '結果の確認・修正と、忘れ物の登録を行えます' : '結果の承認だけを行えます'}（スマートフォンで使えます）。\n\nログイン画面：${location.origin}/admin\nログインID：${loginId}\nパスワード：${pw}\n\nログイン後、右上の「パスワード変更」から変更してください。`;
+    const text = `大会運営アプリの${ROLE[role]}アカウントです。\n${role === 'operator' ? 'スコアの登録・修正、SNS画像の出力、忘れ物の登録を行えます' : 'スコア（試合結果）の登録を行えます'}（スマートフォンで使えます）。\n\nログイン画面：${location.origin}/admin\nログインID：${loginId}\nパスワード：${pw}\n\nログイン後、右上の「パスワード変更」から変更してください。`;
     modal({ title: '発行しました', content: h('div', { class: 'stack' }, h('pre', { class: 'issued' }, text), h('p', { class: 'muted small', style: { margin: 0 } }, 'この画面を閉じるとパスワードは表示できません。')),
       actions: [{ label: '閉じる', kind: 'btn-ghost' }, { label: '案内文をコピー', kind: 'btn-primary', onClick: async () => { await copyText(text); toast('コピーしました'); return true; } }] });
   };
@@ -532,7 +533,7 @@ async function scorersView(root, navigate) {
     const pw = h('input', { type: 'text', value: f.password, oninput: (e) => { f.password = e.target.value; } });
     const desc = h('p', { class: 'muted small', style: { margin: 0 } }, ROLE_DESC[f.role]);
     modal({
-      title: sc ? `${ROLE[f.role]}を編集` : 'スコア管理者・運営管理者を発行',
+      title: sc ? `${ROLE[f.role]}を編集` : '大会運営者・スコア管理者を発行',
       content: h('div', { class: 'stack' },
         sc ? null : h('div', null, h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '権限'),
           h('div', { class: 'chips' }, Object.entries(ROLE).map(([k, l]) => h('label', { class: 'check' },
@@ -563,15 +564,15 @@ async function scorersView(root, navigate) {
       } }] });
   };
   mount(root,
-    adminHeader('スコア管理者・運営管理者', navigate, true),
+    adminHeader('大会運営者・スコア管理者', navigate, true),
     h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
       h('section', { class: 'panel' },
-        h('div', { class: 'row' }, h('h2', { style: { margin: 0 } }, 'スコア管理者・運営管理者'), h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => edit(null) }, '＋ スコア管理者・運営管理者を発行')),
-        h('p', { class: 'muted small' }, '大会当日に本部の方へ渡すアカウントです。スマートフォンで、関係者が仮登録した結果を確認・承認できます。'),
+        h('div', { class: 'row' }, h('h2', { style: { margin: 0 } }, '大会運営者・スコア管理者'), h('span', { class: 'spacer' }),
+          h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => edit(null) }, '＋ 大会運営者・スコア管理者を発行')),
+        h('p', { class: 'muted small' }, '大会当日に本部の方へ渡すアカウントです。スマートフォンで、試合結果の登録などができます。'),
         h('ul', { class: 'muted small', style: { margin: '0 0 10px', paddingLeft: '1.2em' } },
           h('li', null, h('b', null, 'スコア管理者：'), ROLE_DESC.scorer),
-          h('li', null, h('b', null, '運営管理者：'), ROLE_DESC.operator)),
+          h('li', null, h('b', null, '大会運営者：'), ROLE_DESC.operator)),
         scorers.length ? h('div', { class: 'acc-list' }, scorers.map((sc) => h('article', { class: `acc-card${sc.active ? '' : ' off'}` },
           h('div', { class: 'acc-head' },
             h('div', null,
@@ -863,7 +864,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, readOnly(infoPanel(t)), outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
+          h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
           h('div', null,
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
@@ -989,8 +990,7 @@ async function tournamentView(root, id, navigate) {
 
   function sharePanel(t) {
     const viewUrl = `${location.origin}/t/${t.slug}`;
-    const relUrl = `${location.origin}/r/${t.slug}`;
-    const lineText = `【${t.name}】\n結果の登録ページ\n${relUrl}\nPIN：${t.pin}\n\n試合結果（閲覧用）\n${viewUrl}`;
+    const lineText = `【${t.name}】\n試合の日程・結果はこちら\n${viewUrl}`;
     return h('section', { class: 'panel' },
       h('h2', { style: { marginBottom: '8px' } }, '共有'),
       h('div', { class: 'stack small' },
@@ -998,16 +998,7 @@ async function tournamentView(root, id, navigate) {
           t.status === 'draft' ? h('p', { class: 'muted', style: { margin: 0 } }, '「公開中」にすると見られるようになります') : null,
           h('div', { class: 'row' }, h('a', { href: viewUrl, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, viewUrl),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(viewUrl) }, 'コピー'))),
-        // 共有された大会では、保護者向けの閲覧ページだけ（結果の登録ページ・PINは主催者だけのもの）
-        t.readonly ? null : h('div', null, h('strong', null, '結果の登録ページ（チーム関係者向け）'),
-          h('div', { class: 'row' }, h('span', { style: { overflowWrap: 'anywhere' } }, relUrl), h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(relUrl) }, 'コピー'))),
-        t.readonly ? null : h('div', { class: 'row' }, h('strong', null, 'PIN'), h('span', { class: 'num', style: { fontSize: '1.8rem', fontWeight: 700, letterSpacing: '0.15em' } }, t.pin),
-          h('span', { class: 'spacer' }),
-          h('button', { class: 'btn btn-sm', type: 'button', disabled: ro(), onclick: async () => {
-            if (!(await confirmDialog('PINを再発行します', '今のPINでログインしている関係者は、新しいPINで入り直す必要があります。', '再発行する', true))) return;
-            if (await run(() => api('POST', `/api/admin/tournaments/${id}/pin`), 'PINを再発行しました')) await reload();
-          } }, '再発行')),
-        t.readonly ? null : h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
+        h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
   }
 
   function infoPanel(t) {
@@ -1016,9 +1007,7 @@ async function tournamentView(root, id, navigate) {
     const drawLogo = () => mount(preview, f.logo ? h('div', { class: 'row' }, h('img', { src: f.logo, alt: '大会ロゴ', width: 56, height: 56, style: { objectFit: 'contain', background: '#fff', borderRadius: '50%' } }),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.logo = null; drawLogo(); } }, 'ロゴを外す')) : h('span', { class: 'muted small' }, 'ロゴは未設定です'));
     drawLogo();
-    return h('details', { class: 'panel' },
-      h('summary', { style: { cursor: 'pointer', fontWeight: 700 } }, '大会情報を編集'),
-      h('div', { class: 'stack', style: { marginTop: '12px' } },
+    const form = h('div', { class: 'stack', style: { marginTop: '12px' } },
         h('label', { class: 'field' }, h('span', null, '大会名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
         h('div', { class: 'grid-form' },
           h('label', { class: 'field' }, h('span', null, '開始日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
@@ -1037,7 +1026,14 @@ async function tournamentView(root, id, navigate) {
         h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
           if (!(await confirmDialog('大会を削除します', `「${t.name}」のチーム・日程・結果がすべて消えます。元に戻せません。`, '削除する', true))) return;
           if (await run(() => api('DELETE', `/api/admin/tournaments/${id}`), '削除しました')) navigate('/admin');
-        } }, 'この大会を削除')));
+        } }, 'この大会を削除'));
+    form.hidden = true;
+    const period = [t.date, t.end_date && t.end_date !== t.date ? t.end_date : null].filter(Boolean).join(' 〜 ');
+    const btn = h('button', { class: 'btn btn-block', type: 'button', onclick: () => { form.hidden = !form.hidden; btn.textContent = form.hidden ? '大会情報を編集' : '閉じる'; } }, '大会情報を編集');
+    return h('section', { class: 'panel' },
+      h('h2', { style: { marginBottom: '6px' } }, '大会情報'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, [period || '日付未設定', t.venue].filter(Boolean).join('　')),
+      btn, form);
   }
 
   // ----- 日程の削除 -----
@@ -1259,6 +1255,7 @@ async function tournamentView(root, id, navigate) {
           h('span', { class: 'cat-bar-meta' }, `${FORMAT[cat.config.format] || ''}　${cat.teams.length}チーム`),
           h('span', { class: 'spacer' }),
           refreshInline(),
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openSnsChooser(data.tournament, data.categories, cat.id) }, 'SNS画像'),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
         h('div', { class: 'chips' }, subs.map(([k, label]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: async () => {

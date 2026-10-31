@@ -208,7 +208,7 @@ async function currentUser(req, env, db) {
   if (!u || !u.active || u.session_ver !== a.ver) return null;
   const me = { id: u.id, role: u.role, name: u.name, region: u.region || '', login_id: u.login_id };
   if (u.role === 'scorer' || u.role === 'operator') {
-    // スコア管理者・運営管理者：発行した管理者が停止・削除されていたら使えない
+    // スコア管理者・大会運営者：発行した管理者が停止・削除されていたら使えない
     let parentRole = 'super';
     if (u.parent_id && u.parent_id !== 'root') {
       const p = await db.prepare('SELECT role, active, region, name FROM users WHERE id = ?').bind(u.parent_id).first();
@@ -230,7 +230,7 @@ const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['
 const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
   if (user.role === 'scorer' || user.role === 'operator') {
-    // スコア管理者・運営管理者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
+    // スコア管理者・大会運営者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
     const parentOk = user.parentRole === 'super' || (t.owner_id && t.owner_id === user.parent_id);
     return parentOk && (!user.scope || !user.scope.length || user.scope.includes(t.id));
   }
@@ -250,13 +250,22 @@ async function checkScope(db, user, ids) {
   for (const id of list) await getTournament(db, id, user);
   return list;
 }
-const isStaffRole = (role) => role === 'scorer' || role === 'operator'; // スコア管理者・運営管理者
+const isStaffRole = (role) => role === 'scorer' || role === 'operator'; // スコア管理者・大会運営者
 const canManageScorer = (user, sc) => sc && isStaffRole(sc.role) && (isSuper(user) || sc.parent_id === user.id);
 
 // ---------- 読み込み ----------
 
+// 順位決定戦の名前は、試合が持っている「決まる順位（place_w）」に合わせて表示する。
+// 以前に作った日程では、下位トーナメントの試合が「3位決定戦」のようにトーナメントの中の順位で名付けられているため（データは書き換えない）
+function placeLabel(r) {
+  if (r.stage !== 'knockout' || r.place_w == null || typeof r.label !== 'string') return r.label;
+  const m = r.label.match(/(\d+)位決定戦/);
+  if (m && Number(m[1]) !== r.place_w) return r.label.replace(/\d+位決定戦/, `${r.place_w}位決定戦`);
+  if (r.place_w > 1 && /決勝$/.test(r.label) && !/準決勝$|準々決勝$/.test(r.label)) return `${r.label}（${r.place_w}位決定戦）`;
+  return r.label;
+}
 function parseMatch(r) {
-  return { ...r, home_ref: r.home_ref ? JSON.parse(r.home_ref) : null, away_ref: r.away_ref ? JSON.parse(r.away_ref) : null };
+  return { ...r, label: placeLabel(r), home_ref: r.home_ref ? JSON.parse(r.home_ref) : null, away_ref: r.away_ref ? JSON.parse(r.away_ref) : null };
 }
 
 async function getTournament(db, id, user) {
@@ -482,7 +491,9 @@ async function publicPayload(db, t, level) {
   const sponsors = publicSponsors(await listSponsors(db, t.id));
   const settings = readSettings(t);
   return {
-    tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline) },
+    tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline),
+      // 大会運営者・スコア管理者の画面（SNS画像）用：登録済みの写真
+      ...(level === 'relative' ? { settings: { snsPhotos: settings.snsPhotos || {} } } : {}) },
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
@@ -607,6 +618,8 @@ export default {
       }
     }
     if (!url.pathname.startsWith('/api/')) return serveStatic(req, url);
+    // チーム関係者向けの結果の登録（/api/rel/）は終了。データ（PINなど）は残し、操作だけを受け付けない
+    if (url.pathname.startsWith('/api/rel/')) return json({ error: 'チーム関係者向けの結果の登録は終了しました。試合結果は大会本部で登録します。' }, 410);
     try {
       if (!env.SESSION_SECRET || !env.ADMIN_PASSWORD) fail(500, 'サーバーの初期設定が完了していません（ADMIN_PASSWORD と SESSION_SECRET を設定してください）');
       await ensureSchema(env.DB);
@@ -625,7 +638,7 @@ export default {
           if (!user) fail(401, 'ログインしてください');
           if (r.auth === 'admin' && user.role === 'scorer') fail(403, 'スコア管理者は、結果の承認だけを行えます');
           if (r.auth === 'admin' && user.role === 'operator' && !OPERATOR_ADMIN.some(([mt, re]) => mt === req.method && re.test(url.pathname))) {
-            fail(403, '運営管理者は、結果の確認・修正と忘れ物の登録だけを行えます');
+            fail(403, '大会運営者は、スコアの登録・修正、SNS画像の出力、忘れ物の登録だけを行えます');
           }
           // 閲覧専用アカウント：全体管理者と同じ範囲を見られるが、変更は自分のパスワードだけ。アカウント情報は見せない
           if (user.role === 'viewer') {
@@ -1367,7 +1380,7 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user })
   const corrected = m.status === 'confirmed' ? 1 : m.corrected;
   await db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = ?, status = ?, corrected = ?,
     updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`)
-    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : user.role === 'operator' ? `運営管理者（${user.name}）` : '本部', now(), m.id).run();
+    .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : user.role === 'operator' ? `大会運営者（${user.name}）` : '本部', now(), m.id).run();
   await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true });

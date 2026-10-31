@@ -1299,3 +1299,8 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 .modal:has(.poster) { max-width: 980px; }
 .poster-photo { display: grid; gap: 6px; padding: 10px; border: 1.5px dashed var(--line); border-radius: 12px; }
 .poster-pager { padding-top: 4px; }
+
+/* 保護者の画面：SNS画像（順位表・最終順位）は作った画像を表示 */
+.sns-imgwrap { width: min(92vw, 520px); margin: 0 auto; }
+.sns-imgwrap.story { width: min(92vw, 380px); }
+.sns-img { display: block; width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.35); min-height: 120px; background: #111; }

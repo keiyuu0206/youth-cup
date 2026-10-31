@@ -179,10 +179,10 @@ test('決勝: 上位・下位トーナメントは順位が続きになる（下
   const r = norm(buildKnockout(lkCfg({ type: 'split', k: 2, mode: 'top3' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
   assert.equal(r.error, undefined);
   const upperFinal = r.matches.find((m) => m.label === '上位トーナメント 決勝');
-  const lowerFinal = r.matches.find((m) => m.label === '下位トーナメント 決勝');
+  const lowerFinal = r.matches.find((m) => m.label === '下位トーナメント 決勝（9位決定戦）');
   assert.equal(upperFinal.place_w, 1);
   assert.equal(lowerFinal.place_w, 9);
-  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 3位決定戦').place_w, 11);
+  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 11位決定戦').place_w, 11);
   // 下位はクロス方式（A3 対 B4）
   const low = firstRound(r.matches.filter((m) => m.bracket === '下位トーナメント'));
   assert.ok(low.some((m) => m.home_ref.g === 'A' && m.home_ref.r === 3 && m.away_ref.g === 'B' && m.away_ref.r === 4));
@@ -304,7 +304,7 @@ test('順位別トーナメント: 4組×4チームで1〜16位が決まる（2�
   const r = norm(buildKnockout(lkCfg({ type: 'byrank', mode: 'all' }), { format: 'league_knockout', groupSizes: { A: 4, B: 4, C: 4, D: 4 } }));
   assert.equal(r.error, undefined);
   assert.deepEqual(placesOf(r.matches), seq(16));
-  const final2 = r.matches.find((m) => m.bracket === '2位トーナメント' && m.label.endsWith('決勝'));
+  const final2 = r.matches.find((m) => m.bracket === '2位トーナメント' && /決勝（\d+位決定戦）$/.test(m.label));
   assert.equal(final2.place_w, 5);
   for (const m of r.matches.filter((x) => x.home_ref?.t === 'grp')) assert.equal(m.home_ref.r, m.away_ref.r);
 });
@@ -398,8 +398,8 @@ test('上位・中位・下位: 4組×6チーム（上位2・中位2）で、順
   assert.ok(mid.every((m) => [3, 4].includes(m.home_ref.r) && [3, 4].includes(m.away_ref.r)));
   assert.ok(mid.some((m) => m.home_ref.g === 'A' && m.home_ref.r === 3 && m.away_ref.g === 'B' && m.away_ref.r === 4));
   // 中位の優勝は9位、下位の優勝は17位
-  assert.equal(r.matches.find((m) => m.label === '中位トーナメント 決勝').place_w, 9);
-  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 決勝').place_w, 17);
+  assert.equal(r.matches.find((m) => m.label === '中位トーナメント 決勝（9位決定戦）').place_w, 9);
+  assert.equal(r.matches.find((m) => m.label === '下位トーナメント 決勝（17位決定戦）').place_w, 17);
 });
 
 test('上位・中位・下位: 中位の数を省略すると上位と同じ数になり、余った順位は下位へ', () => {
