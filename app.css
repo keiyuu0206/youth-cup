@@ -1297,3 +1297,5 @@ fieldset.lockable.ro:disabled * { cursor: default; }
 @media (max-width: 720px) { .poster { grid-template-columns: 1fr; } }
 .poster-print img { display: block; width: 210mm; height: 297mm; object-fit: contain; }
 .modal:has(.poster) { max-width: 980px; }
+.poster-photo { display: grid; gap: 6px; padding: 10px; border: 1.5px dashed var(--line); border-radius: 12px; }
+.poster-pager { padding-top: 4px; }
