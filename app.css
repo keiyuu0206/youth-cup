@@ -1500,3 +1500,47 @@ body.has-bottom-nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 11
 .sel-bar-t { display: flex; flex-direction: column; flex: 1 1 220px; min-width: 0; }
 .sel-bar-t small { color: var(--ink-2); font-size: 0.75rem; }
 .sel-bar-t strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ===== ダッシュボード（管理者・大会運営者） ===== */
+.dash { display: flex; flex-direction: column; gap: 14px; }
+.dash-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.dash-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.dash-card { background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.dash-card h3 { margin: 0; font-size: 0.85rem; letter-spacing: 0.04em; color: var(--ink-2); font-weight: 700; }
+.dash-big { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.dash-big b { font-family: var(--num); font-size: 2.6rem; font-weight: 650; letter-spacing: -0.05em; line-height: 1; }
+.dash-big span { font-weight: 700; }
+.dash-big small { color: var(--ink-2); margin-left: 6px; }
+.dash-bar { height: 8px; border-radius: 999px; background: var(--surface-3, #f0efee); overflow: hidden; }
+.dash-bar i { display: block; height: 100%; background: var(--ink); border-radius: 999px; }
+.dash-kv { display: flex; justify-content: space-between; gap: 10px; font-size: 0.88rem; border-top: 1px solid var(--line); padding-top: 8px; }
+.dash-kv span { color: var(--ink-2); flex: none; }
+.dash-kv b { text-align: right; min-width: 0; }
+.dash-rank { margin: 0; padding: 0; list-style: none; counter-reset: r; display: flex; flex-direction: column; gap: 4px; }
+.dash-rank li { counter-increment: r; display: flex; gap: 8px; align-items: center; font-size: 0.88rem; }
+.dash-rank li::before { content: counter(r); width: 22px; height: 22px; border-radius: 7px; background: var(--ink); color: var(--lime); display: inline-flex; align-items: center; justify-content: center; font-family: var(--num); font-weight: 650; font-size: 0.75rem; flex: none; }
+.dash-rank li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-courts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.dash-court { border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.dash-court-h { display: flex; justify-content: space-between; font-size: 0.85rem; }
+.dash-court-h span { color: var(--ink-2); }
+.dash-m { display: flex; gap: 8px; align-items: baseline; font-size: 0.85rem; min-width: 0; }
+.dash-m .num { font-weight: 650; flex: none; }
+.dash-m span:not(.num) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-m.sub { color: var(--ink-2); }
+.dash-m em { font-style: normal; font-size: 0.72rem; font-weight: 800; background: var(--lime); border-radius: 999px; padding: 1px 8px; flex: none; }
+.dash-m.wait { font-weight: 700; }
+.dash-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.dash-group-h { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px; }
+.dash-group-h span { color: var(--ink-2); }
+.dash-group table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+.dash-group td { padding: 4px 4px; border-top: 1px solid var(--line); }
+.dash-group td:nth-child(2) { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-group tr.wd td { color: var(--ink-3); text-decoration: line-through; }
+.dash-recent { display: flex; flex-direction: column; gap: 6px; }
+.dash-recent .dash-m b { flex: none; }
+.dash-card:has(.dash-courts), .dash-card:has(.dash-groups) { grid-column: 1 / -1; }
+.tag.live { background: var(--live-soft); color: #b91c1c; }
+.op-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.op-card { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: var(--ink); }
+.dash-group td.num { white-space: nowrap; text-align: right; }

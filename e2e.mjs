@@ -102,10 +102,10 @@ expect(pm.status === 'confirmed' && pm.home_score === 2 && pm.away_score === 2, 
 r = await call('rel', 'POST', `/api/rel/${slug}/matches/${lm.id}`, { teamId: lm.home_team_id, home_score: 5, away_score: 0, version: 99 });
 expect(r.status === 410, 'relative cannot edit (closed)');
 
-// 開催中にする → 組み合わせ変更不可
+// 開催中にする → 結果が入った試合は入れ替えられない（まだ行っていない試合どうしだけ入れ替えられる）
 await call('admin', 'PATCH', `/api/admin/tournaments/${tid}`, { status: 'live' });
 r = await call('admin', 'POST', `/api/admin/categories/${cid}/move`, { matchId: lm.id, slot: 0, court: 0 });
-expect(r.status === 423, 'move locked when live');
+expect(r.status === 409, 'move of played match blocked when live');
 r = await call('admin', 'POST', `/api/admin/categories/${cid}/move?unlock=1`, { matchId: lm.id, slot: 0, court: 0 });
 expect(r.status === 409, 'move blocked when live even if unlocked');
 

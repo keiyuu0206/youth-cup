@@ -15,6 +15,7 @@ export async function scoreApp(root, me) {
   const header = () => h('header', { class: 'site-head sc-head' }, h('div', { class: 'wrap' },
     h('div', { class: 'sc-who' }, h('strong', null, isOp ? '大会運営' : 'スコア登録'), h('small', null, `${me.name}（${isOp ? '大会運営者' : 'スコア管理者'}・${me.region || me.parentName || ''}）`)),
     h('span', { class: 'spacer' }),
+    isOp ? h('button', { class: 'sc-mini', type: 'button', onclick: () => { store.set('op:mobile', false); location.href = '/admin'; } }, 'パソコン表示') : null,
     h('a', { class: 'sc-mini', href: MANUALS.scorer.href, target: '_blank', rel: 'noopener', style: { textDecoration: 'none' } }, '使い方'),
     h('button', { class: 'sc-mini', type: 'button', onclick: changePassword }, 'パスワード変更'),
     h('button', { class: 'sc-mini', type: 'button', onclick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } }, 'ログアウト')));

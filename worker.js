@@ -225,7 +225,10 @@ async function currentUser(req, env, db) {
 }
 const isSuper = (user) => user && user.role === 'super';
 // 運営管理者が使える管理者用の操作（忘れ物の登録・変更・削除）。大会の設定・組み合わせ・日程は変更できない
-const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['PATCH', /^\/api\/admin\/lost\/[^/]+$/], ['DELETE', /^\/api\/admin\/lost\/[^/]+$/]];
+const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['PATCH', /^\/api\/admin\/lost\/[^/]+$/], ['DELETE', /^\/api\/admin\/lost\/[^/]+$/],
+  // 当日の運営：大会の画面の表示、時間の調整・元に戻す、時間をずらす、組み合わせ・左右の入れ替え、節の番号、チームの棄権
+  ['GET', /^\/api\/admin\/tournaments\/[^/]+$/], ['GET', /^\/api\/admin\/categories\/[^/]+\/retime\/history$/],
+  ['POST', /^\/api\/admin\/categories\/[^/]+\/(retime|retime\/undo|delay|move|renumber|withdraw)$/], ['POST', /^\/api\/admin\/matches\/[^/]+\/flip$/]];
 // 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
 const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
@@ -338,6 +341,20 @@ async function bump(db, tid, pub = true) {
 
 // 予選・トーナメントの結果から、まだ始まっていない試合のチームを差し替える
 async function syncKnockout(db, cat) {
+  for (let i = 0; i < 6; i++) {
+    await syncKnockoutOnce(db, cat);
+    // 棄権したチームがトーナメントの試合に入ったら、相手の不戦勝にする（続きの試合も決まるので繰り返す）
+    const t = await db.prepare('SELECT settings FROM tournaments WHERE id = ?').bind(cat.tournament_id).first();
+    const list = t ? withdrawnOf(readSettings(t), cat.id) : [];
+    if (!list.length) return;
+    const { teams, matches } = await loadCategoryData(db, cat.id);
+    const plan = forfeitPlan(cat, matches, list, null);
+    if (!plan.length) return;
+    const names = Object.fromEntries(teams.map((x) => [x.id, x.name]));
+    await batchAll(db, plan.map((x) => forfeitStmt(db, x, `棄権（${names[x.team] || ''}）`)));
+  }
+}
+async function syncKnockoutOnce(db, cat) {
   const { teams, matches } = await loadCategoryData(db, cat.id);
   const ev = evaluateCategory(cat.config, teams, matches);
   const stmts = ev.updates.map((u) =>
@@ -1178,9 +1195,10 @@ route('POST', '/api/admin/categories/:cid/generate', async ({ req, db, params, u
 route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user, url }) => {
   const c = await getCategory(db, params.cid, user);
   const t = await getTournament(db, c.tournament_id, user);
+  const b = await body(req);
+  if (t.status === 'live' || isStaffRole(user.role)) return liveSwap(db, c, t, b);
   mustUnlocked(t, url);
   mustBeEditable(t);
-  const b = await body(req);
   const { matches } = await loadCategoryData(db, c.id);
   const m = matches.find((x) => x.id === b.matchId);
   if (!m) fail(404, '試合が見つかりません');
@@ -1227,7 +1245,7 @@ async function saveFlips(db, c, label, ids) {
 // 1試合の左右を入れ替える（タップで反対に）
 route('POST', '/api/admin/matches/:id/flip', async ({ db, params, user }) => {
   const { m, c, t } = await getMatchCtx(db, params.id, user);
-  if (isStaffRole(user.role)) fail(403, '左右の入れ替えは大会の管理者が行います');
+  if (user.role === 'scorer') fail(403, '左右の入れ替えは大会の管理者・大会運営者が行います');
   await saveFlips(db, c, `左右の入れ替え（${m.label}）`, [m.id]);
   await syncKnockout(db, c);
   await bump(db, t.id);
@@ -1256,6 +1274,82 @@ route('POST', '/api/admin/categories/:cid/balance-left', async ({ db, params, us
   const n = await saveFlips(db, c, '左側の審判が均等になるように左右をそろえる', flips);
   if (n) { await syncKnockout(db, c); await bump(db, t.id); }
   return json({ ok: true, changed: n });
+}, 'admin');
+
+// 当日の組み合わせの入れ替え：まだ行っていない試合どうしの時刻・コートだけを入れ替える（ほかの試合の時刻は変えない）
+async function liveSwap(db, c, t, b) {
+  const { teams, matches } = await loadCategoryData(db, c.id);
+  const m = matches.find((x) => x.id === b.matchId);
+  if (!m) fail(404, '試合が見つかりません');
+  const slot = Math.max(0, Math.trunc(Number(b.slot)));
+  const court = Math.trunc(Number(b.court));
+  if (court < 0 || court >= c.config.courts) fail(400, 'コートの指定が正しくありません');
+  const other = matches.find((x) => x.slot === slot && x.court === court && x.id !== m.id);
+  if (m.status !== 'none' || (other && other.status !== 'none')) fail(409, '結果が入った試合は入れ替えられません（まだ行っていない試合どうしだけ入れ替えられます）');
+  const before = snapshotMatches(matches);
+  if (other) {
+    const tmp = { slot: m.slot, court: m.court, start_min: m.start_min, session: m.session };
+    Object.assign(m, { slot: other.slot, court: other.court, start_min: other.start_min, session: other.session, time_changed: 1 });
+    Object.assign(other, { ...tmp, time_changed: 1 });
+  } else {
+    const same = matches.find((x) => x.slot === slot && x.id !== m.id);
+    if (!same) fail(409, '移動先の時刻が分かりません。試合が入っている枠と入れ替えてください');
+    Object.assign(m, { slot, court, start_min: same.start_min, session: same.session, time_changed: 1 });
+  }
+  renumberLeague(matches, teams);
+  await saveMatchChanges(db, c, `試合の入れ替え（${m.label}${other ? ` ⇄ ${other.label}` : ''}）`, before, matches);
+  await bump(db, t.id);
+  return json({ ok: true, live: true });
+}
+
+// ---------- 当日の棄権・キャンセル ----------
+// 棄権したチームのまだ行っていない試合を、相手チームの不戦勝として確定する。
+// 棄権したチームは大会の設定（settings.withdrawn）に記録し、後で決まるトーナメントの試合にも自動で反映する
+const withdrawnOf = (settings, cid) => ((settings.withdrawn || {})[cid] || []);
+function forfeitPlan(c, matches, withdrawn, onlyTeam) {
+  const [w, l] = c.config.forfeitScore || [3, 0];
+  const out = [];
+  for (const m of matches) {
+    if (m.status === 'confirmed' || !m.home_team_id || !m.away_team_id) continue;
+    const hW = withdrawn.includes(m.home_team_id), aW = withdrawn.includes(m.away_team_id);
+    if (hW === aW) continue; // 両チームとも棄権・どちらも棄権でない試合は対象外
+    if (onlyTeam && m.home_team_id !== onlyTeam && m.away_team_id !== onlyTeam) continue;
+    const winner = hW ? 'away' : 'home';
+    out.push({ m, forfeit: winner, home: winner === 'home' ? w : l, away: winner === 'home' ? l : w, team: hW ? m.home_team_id : m.away_team_id });
+  }
+  return out;
+}
+const forfeitStmt = (db, x, by) => db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = NULL, away_pk = NULL, forfeit = ?, status = 'confirmed',
+  updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`).bind(x.home, x.away, x.forfeit, by, now(), x.m.id);
+
+route('POST', '/api/admin/categories/:cid/withdraw', async ({ req, db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  if (user.role === 'scorer') fail(403, '棄権の登録は大会の管理者・大会運営者が行います');
+  const b = await body(req);
+  const { teams, matches } = await loadCategoryData(db, c.id);
+  const team = teams.find((x) => x.id === b.teamId);
+  if (!team) fail(404, 'チームが見つかりません');
+  const settings = readSettings(t);
+  const list = withdrawnOf(settings, c.id);
+  if (list.includes(team.id) && !b.dryRun) fail(409, 'このチームはすでに棄権として登録されています');
+  const plan = forfeitPlan(c, matches, [...list, team.id], team.id);
+  const names = Object.fromEntries(teams.map((x) => [x.id, x.name]));
+  const preview = plan.map((x) => ({ id: x.m.id, label: x.m.label, start_min: x.m.start_min, court: x.m.court,
+    home: names[x.m.home_team_id], away: names[x.m.away_team_id], home_score: x.home, away_score: x.away, status: x.m.status }));
+  if (b.dryRun) return json({ team: team.name, changes: preview });
+  const by = `棄権（${team.name}）`;
+  const snap = { results: plan.map((x) => ({ id: x.m.id, home_score: x.m.home_score, away_score: x.m.away_score, home_pk: x.m.home_pk, away_pk: x.m.away_pk,
+    forfeit: x.m.forfeit, status: x.m.status, updated_by: x.m.updated_by })), withdraw: { teamId: team.id, by }, matches: [], dayBreakSlots: c.config.dayBreakSlots || [], config: null };
+  const next = { ...(settings.withdrawn || {}), [c.id]: [...list, team.id] };
+  await batchAll(db, [
+    db.prepare('INSERT INTO time_history (id, category_id, label, data, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), c.id, `${team.name}の棄権`, JSON.stringify(snap), now()),
+    db.prepare('UPDATE tournaments SET settings = ? WHERE id = ?').bind(JSON.stringify({ ...settings, withdrawn: next }), t.id),
+    ...plan.map((x) => forfeitStmt(db, x, by)),
+  ]);
+  await syncKnockout(db, c);
+  await bump(db, t.id);
+  return json({ ok: true, changed: plan.length });
 }, 'admin');
 
 // ---------- 日程の手直しの共通部品 ----------
@@ -1418,11 +1512,23 @@ route('POST', '/api/admin/categories/:cid/retime/undo', async ({ db, params, use
   const stmts = (snap.matches || []).map((m) => db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = ?, court = COALESCE(?, court), round = COALESCE(?, round), label = COALESCE(?, label) WHERE id = ? AND category_id = ?')
     .bind(m.slot, m.start_min, m.session, m.time_changed || 0, m.court ?? null, m.round ?? null, m.label ?? null, m.id, c.id));
   for (const fid of snap.flips || []) stmts.push(db.prepare(FLIP_SQL).bind(fid, c.id));
+  // 棄権の取り消し：その時点の結果に戻し、後から自動で不戦勝にした試合も未登録に戻す。棄権の記録から外す
+  for (const r of snap.results || []) stmts.push(db.prepare('UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = ?, status = ?, updated_by = ?, version = version + 1 WHERE id = ? AND category_id = ?')
+    .bind(r.home_score ?? null, r.away_score ?? null, r.home_pk ?? null, r.away_pk ?? null, r.forfeit ?? null, r.status || 'none', r.updated_by ?? null, r.id, c.id));
+  if (snap.withdraw) {
+    const ids = new Set((snap.results || []).map((r) => r.id));
+    const later = (await db.prepare('SELECT id FROM matches WHERE category_id = ? AND updated_by = ?').bind(c.id, snap.withdraw.by).all()).results.filter((r) => !ids.has(r.id));
+    for (const r of later) stmts.push(db.prepare("UPDATE matches SET home_score = NULL, away_score = NULL, home_pk = NULL, away_pk = NULL, forfeit = NULL, status = 'none', updated_by = NULL, version = version + 1 WHERE id = ?").bind(r.id));
+    const tt = await db.prepare('SELECT settings FROM tournaments WHERE id = ?').bind(t.id).first();
+    const se = readSettings(tt);
+    const next = { ...(se.withdrawn || {}), [c.id]: withdrawnOf(se, c.id).filter((x) => x !== snap.withdraw.teamId) };
+    stmts.push(db.prepare('UPDATE tournaments SET settings = ? WHERE id = ?').bind(JSON.stringify({ ...se, withdrawn: next }), t.id));
+  }
   const cfg = { ...c.config, dayBreakSlots: snap.dayBreakSlots || [], ...(snap.config || {}) };
   stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(normalizeConfig(cfg)), c.id));
   stmts.push(db.prepare('DELETE FROM time_history WHERE id = ?').bind(h.id));
   await batchAll(db, stmts);
-  if ((snap.flips || []).length) await syncKnockout(db, c);
+  if ((snap.flips || []).length || (snap.results || []).length || snap.withdraw) await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true, label: h.label });
 }, 'admin');
