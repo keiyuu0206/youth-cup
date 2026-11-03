@@ -861,7 +861,10 @@ async function tournamentView(root, id, navigate) {
     const mode = ((t.settings || {}).referee || {}).mode || 'none';
     const counts = cat && mode !== 'none' ? refereeCounts(cat) : {};
     const diffs = Object.values(counts).map((c) => Math.abs((mode === 'one' ? c.one : c.first) - c.played / 2));
-    const summary = diffs.length ? `${cat.name}：各チームの担当は試合数のほぼ半分${mode === 'halves' ? '（前半）' : ''}です（差は最大${Math.ceil(Math.max(...diffs))}回）` : '';
+    const maxDiff = diffs.length ? Math.ceil(Math.max(...diffs)) : 0;
+    const summary = !diffs.length ? '' : mode === 'left'
+      ? (maxDiff <= 1 ? `${cat.name}：左側（審判）の回数は、各チームとも試合数のほぼ半分です` : `${cat.name}：左側（審判）の回数に偏りがあります（試合数の半分との差が最大${maxDiff}回）。下のボタンで均等にそろえられます`)
+      : `${cat.name}：各チームの担当は試合数のほぼ半分${mode === 'halves' ? '（前半）' : ''}です（差は最大${maxDiff}回）`;
     return h('section', { class: 'panel' },
       h('h2', null, '審判の割り振り'),
       h('p', { class: 'muted small', style: { marginTop: 0 } }, '試合をする2チームのどちらかが審判を担当します。各チームの担当回数が均等になるよう自動で割り振り、日程・PDF・閲覧ページに「審」のマークを付けます。'),
@@ -869,7 +872,14 @@ async function tournamentView(root, id, navigate) {
         const v = e.target.value;
         if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { referee: { mode: v } } }), v === 'none' ? '審判のマークを表示しないようにしました' : '審判を割り振りました')) await reload();
       } }, Object.entries(REF_MODES).map(([k, l]) => h('option', { value: k, selected: mode === k }, l)))),
-      summary ? h('p', { class: 'small', style: { margin: '6px 0 0' } }, summary) : null);
+      summary ? h('p', { class: 'small', style: { margin: '6px 0 0' } }, summary) : null,
+      mode === 'left' && cat && !ro() ? [
+        h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, '左右は「組み分け・日程」の日程で試合をタップして選び、［⇄ 左右を入れ替える］で変えられます。'),
+        h('button', { class: 'btn btn-sm btn-block', type: 'button', style: { marginTop: '6px' }, onclick: async () => {
+          if (!(await confirmDialog('左右をそろえます', `${cat.name}の試合の左右を入れ替えて、左側（審判）の担当が各チームで均等になるようにします。結果が入っている試合は得点も一緒に入れ替えるので、勝敗や順位は変わりません。［↶ 1つ前に戻す］で元に戻せます。`, 'そろえる'))) return;
+          const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/balance-left`));
+          if (r) { toast(r.changed ? `${r.changed}試合の左右を入れ替えました` : 'すでに均等になっています'); if (r.changed) await reload(); }
+        } }, '左側の審判が均等になるように左右をそろえる')] : null);
   }
 
   // 大会の状況をひと目で：確定した試合・承認待ち・次の試合・予定との差（全カテゴリの合計）
@@ -1581,11 +1591,12 @@ async function tournamentView(root, id, navigate) {
           h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
           ro() ? null : h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => undoLast(cat) }, '↶ 1つ前に戻す'),
           editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),
-        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。入れ替えると、組ごとの「第◯節」の番号も時刻の順に振り直されます。間違えたときは［↶ 1つ前に戻す］を押してください。') : null,
+        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選ぶと、移動先の枠をタップして入れ替えたり、［⇄ 左右を入れ替える］で左右を反対にしたりできます。入れ替えると、組ごとの「第◯節」の番号も時刻の順に振り直されます。間違えたときは［↶ 1つ前に戻す］を押してください。') : null,
         !ro() && cat.matches.some((m) => m.stage === 'league') ? h('div', { class: 'row no-print', style: { marginBottom: '8px' } },
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => renumberRounds(cat) }, '節の番号を時刻の順にそろえる'),
           h('span', { class: 'muted small' }, '以前に入れ替えた日程で、「第◯節」が時刻の順になっていないときに使います')) : null,
         warningsList(cat.warnings),
+        selectedBar(cat),
         h('div', { class: 'table-wrap' }, scheduleGrid(cat, cat.matches, {
           editable,
           live: t.status === 'live',
@@ -1603,6 +1614,22 @@ async function tournamentView(root, id, navigate) {
         }))));
     }
     return box;
+  }
+
+  // 日程で試合を選んでいるとき：左右の入れ替え・選択の解除
+  function selectedBar(cat) {
+    const m = st.moveSel && cat.matches.find((x) => x.id === st.moveSel);
+    if (!m) return null;
+    const cache = { teams: teamMap(cat), codes: codeMap(cat) };
+    const hn = sideInfo(m, 'home', cat, cache).text, an = sideInfo(m, 'away', cat, cache).text;
+    return h('div', { class: 'sel-bar no-print' },
+      h('div', { class: 'sel-bar-t' }, h('small', null, `選択中：${m.label}`), h('strong', null, `${hn}  -  ${an}`)),
+      h('span', { class: 'muted small' }, '移動先の枠をタップすると入れ替わります'),
+      h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => {
+        const id2 = m.id; st.moveSel = null;
+        if (await run(() => api('POST', `/api/admin/matches/${id2}/flip`), '左右を入れ替えました（間違えたときは［↶ 1つ前に戻す］）')) await reload(); else render();
+      } }, '⇄ 左右を入れ替える'),
+      h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { st.moveSel = null; render(); } }, '選択を解除'));
   }
 
   // 1つ前に戻す：入れ替え・節の番号のそろえ・時間の調整を、直前の状態に戻す（結果はそのまま）

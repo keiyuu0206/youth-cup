@@ -283,7 +283,7 @@ function skeleton() {
 function refereeLegend() {
   const mode = refereeMode();
   if (mode === 'none') return null;
-  return h('p', { class: 'ref-legend' }, mode === 'one'
+  return h('p', { class: 'ref-legend' }, mode !== 'halves'
     ? [h('span', { class: 'ref-mark' }, '審'), '＝審判を担当するチーム']
     : [h('span', { class: 'ref-mark half' }, '前審'), '前半の審判　', h('span', { class: 'ref-mark half' }, '後審'), '後半の審判']);
 }

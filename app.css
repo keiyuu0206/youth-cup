@@ -1494,3 +1494,9 @@ body.has-bottom-nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 11
 .pd .ref-mark, .pp .ref-mark { height: 3.6mm; padding: 0 1.2mm; font-size: 6.5pt; margin: 0 0.8mm; background: #0c0a09; color: #fff; }
 .pd .ref-mark.half, .pp .ref-mark.half { background: #fff; color: #0c0a09; border: 0.25mm solid #0c0a09; }
 .myteam .ref-mark { background: var(--lime); color: var(--ink); }
+
+/* 日程で試合を選んでいるときの帯 */
+.sel-bar { position: sticky; top: 64px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; margin: 0 0 10px; border-radius: 16px; background: var(--lime-wash, #f4fdd9); border: 1.5px solid var(--ink); }
+.sel-bar-t { display: flex; flex-direction: column; flex: 1 1 220px; min-width: 0; }
+.sel-bar-t small { color: var(--ink-2); font-size: 0.75rem; }
+.sel-bar-t strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

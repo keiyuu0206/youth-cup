@@ -494,7 +494,7 @@ async function publicPayload(db, t, level) {
     tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline),
       // 大会運営者・スコア管理者の画面（SNS画像）用：登録済みの写真
       ...(level === 'relative' ? { settings: { snsPhotos: settings.snsPhotos || {} } } : {}),
-      referee: ['one', 'halves'].includes((settings.referee || {}).mode) ? settings.referee.mode : 'none' },
+      referee: ['one', 'halves', 'left'].includes((settings.referee || {}).mode) ? settings.referee.mode : 'none' },
     categories: cats.map((c) => ({
       ...c,
       config: stripConfig(c.config),
@@ -1212,6 +1212,52 @@ route('POST', '/api/admin/categories/:cid/renumber', async ({ db, params, user }
   return json({ ok: true, changed: n });
 }, 'admin');
 
+// 試合の左右（ホーム・アウェイ）を入れ替える。チーム・参照・得点・PKも一緒に入れ替えるので、勝敗・順位は変わらない
+const FLIP_SQL = 'UPDATE matches SET home_team_id = away_team_id, away_team_id = home_team_id, home_ref = away_ref, away_ref = home_ref, home_score = away_score, away_score = home_score, home_pk = away_pk, away_pk = home_pk WHERE id = ? AND category_id = ?';
+async function saveFlips(db, c, label, ids) {
+  if (!ids.length) return 0;
+  const snap = { flips: ids, matches: [], dayBreakSlots: c.config.dayBreakSlots || [], config: null };
+  const stmts = [db.prepare('INSERT INTO time_history (id, category_id, label, data, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), c.id, label, JSON.stringify(snap), now())];
+  for (const id of ids) stmts.push(db.prepare(FLIP_SQL).bind(id, c.id));
+  await batchAll(db, stmts);
+  await db.prepare('DELETE FROM time_history WHERE category_id = ? AND id NOT IN (SELECT id FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 20)').bind(c.id, c.id).run();
+  return ids.length;
+}
+
+// 1試合の左右を入れ替える（タップで反対に）
+route('POST', '/api/admin/matches/:id/flip', async ({ db, params, user }) => {
+  const { m, c, t } = await getMatchCtx(db, params.id, user);
+  if (isStaffRole(user.role)) fail(403, '左右の入れ替えは大会の管理者が行います');
+  await saveFlips(db, c, `左右の入れ替え（${m.label}）`, [m.id]);
+  await syncKnockout(db, c);
+  await bump(db, t.id);
+  return json({ ok: true });
+}, 'admin');
+
+// 「左側のチームが審判」の方式で、左側（審判）の担当が均等になるように左右をそろえる
+route('POST', '/api/admin/categories/:cid/balance-left', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  const { matches } = await loadCategoryData(db, c.id);
+  const list = matches.filter((m) => m.home_team_id && m.away_team_id)
+    .sort((a, b) => a.slot - b.slot || a.court - b.court || String(a.code || a.id).localeCompare(String(b.code || b.id)));
+  const duty = {}, played = {}, flips = [];
+  for (const m of list) {
+    const hId = m.home_team_id, aId = m.away_team_id;
+    const defH = (duty[hId] || 0) - (played[hId] || 0) / 2;
+    const defA = (duty[aId] || 0) - (played[aId] || 0) / 2;
+    let side;
+    // 迷ったとき（担当の少なさが同じとき）は、今の左右のまま（何度そろえても結果が変わらない）
+    if (defH < defA) side = 'home'; else if (defA < defH) side = 'away'; else side = 'home';
+    const ref = side === 'home' ? hId : aId;
+    duty[ref] = (duty[ref] || 0) + 1; played[hId] = (played[hId] || 0) + 1; played[aId] = (played[aId] || 0) + 1;
+    if (side === 'away') flips.push(m.id); // 審判にしたいチームが右側なら、左右を入れ替えて左側にする
+  }
+  const n = await saveFlips(db, c, '左側の審判が均等になるように左右をそろえる', flips);
+  if (n) { await syncKnockout(db, c); await bump(db, t.id); }
+  return json({ ok: true, changed: n });
+}, 'admin');
+
 // ---------- 日程の手直しの共通部品 ----------
 // 予選リーグの節の番号を、組ごとに時刻の順で振り直す（1節の試合数 = 組のチーム数 ÷ 2、端数切り捨て）
 function renumberLeague(matches, teams) {
@@ -1371,10 +1417,12 @@ route('POST', '/api/admin/categories/:cid/retime/undo', async ({ db, params, use
   const snap = JSON.parse(h.data);
   const stmts = (snap.matches || []).map((m) => db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = ?, court = COALESCE(?, court), round = COALESCE(?, round), label = COALESCE(?, label) WHERE id = ? AND category_id = ?')
     .bind(m.slot, m.start_min, m.session, m.time_changed || 0, m.court ?? null, m.round ?? null, m.label ?? null, m.id, c.id));
+  for (const fid of snap.flips || []) stmts.push(db.prepare(FLIP_SQL).bind(fid, c.id));
   const cfg = { ...c.config, dayBreakSlots: snap.dayBreakSlots || [], ...(snap.config || {}) };
   stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(normalizeConfig(cfg)), c.id));
   stmts.push(db.prepare('DELETE FROM time_history WHERE id = ?').bind(h.id));
   await batchAll(db, stmts);
+  if ((snap.flips || []).length) await syncKnockout(db, c);
   await bump(db, t.id);
   return json({ ok: true, label: h.label });
 }, 'admin');

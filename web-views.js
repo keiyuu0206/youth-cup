@@ -113,9 +113,9 @@ export function scoreEl(m, { showProvisional = false } = {}) {
 //   one    ：1試合を1チームが担当（マーク「審」）
 //   halves ：前半・後半を両チームで分担。どちらが前半かを均等に（マーク「前審」「後審」）
 let REF_MODE = 'none';
-export const setRefereeMode = (mode) => { REF_MODE = mode === 'one' || mode === 'halves' ? mode : 'none'; };
+export const setRefereeMode = (mode) => { REF_MODE = ['one', 'halves', 'left'].includes(mode) ? mode : 'none'; };
 export const refereeMode = () => REF_MODE;
-export const REF_MODES = { none: '表示しない', one: '1試合を1チームが担当（均等に割り振る）', halves: '前半・後半で分担（どちらが前半かを均等に）' };
+export const REF_MODES = { none: '表示しない', left: '一覧の左側（上側）のチームが担当', one: '1試合を1チームが担当（アプリが均等に割り振る）', halves: '前半・後半で分担（どちらが前半かを均等に）' };
 const REF_CACHE = new WeakMap();
 export function refereePlan(cat) {
   if (REF_MODE === 'none' || !cat || !cat.matches) return null;
@@ -124,6 +124,12 @@ export function refereePlan(cat) {
   const list = cat.matches.filter((m) => m.home_team_id && m.away_team_id)
     .sort((a, b) => a.slot - b.slot || a.court - b.court || String(a.code || a.id).localeCompare(String(b.code || b.id)));
   const duty = {}, played = {}, plan = {};
+  // 左側（ホーム）のチームが担当：組み合わせの左右がそのまま審判の割り当てになる（左右はタップで入れ替えられる）
+  if (REF_MODE === 'left') {
+    for (const m of list) plan[m.id] = { home: '審' };
+    REF_CACHE.set(cat, { mode: REF_MODE, plan });
+    return plan;
+  }
   let flip = false;
   for (const m of list) {
     const hId = m.home_team_id, aId = m.away_team_id;

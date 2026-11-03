@@ -249,7 +249,7 @@ function courtSheets(t, cat, opts, disp) {
       const list = usedCourts.slice(i, i + n);
       out.push(sheet(head(t, cat, '試合スケジュール', dayLabel(cat, d, t, true)),
         h('div', { class: `pp-courts n${n}` }, list.map(table), n === 2 && list.length === 1 ? h('div', { class: 'pp-court empty' }) : null),
-        refereeMode() === 'none' ? null : h('p', { class: 'pp-note' }, refereeMode() === 'one' ? '審：審判を担当するチーム（各チームの担当回数が均等になるよう割り振っています）' : '前審：前半の審判　後審：後半の審判（各チームの担当が均等になるよう割り振っています）')));
+        refereeMode() === 'none' ? null : h('p', { class: 'pp-note' }, refereeMode() === 'left' ? '審：審判を担当するチーム（対戦カードの左側のチーム）' : refereeMode() === 'one' ? '審：審判を担当するチーム（各チームの担当回数が均等になるよう割り振っています）' : '前審：前半の審判　後審：後半の審判（各チームの担当が均等になるよう割り振っています）')));
     }
   }
   return out;
