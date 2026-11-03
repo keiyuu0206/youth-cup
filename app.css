@@ -1486,3 +1486,11 @@ body.has-bottom-nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 11
 .myteam .mc-st.wait { background: var(--lime); color: var(--ink); }
 .myteam-cta { border: 1px dashed var(--ink-3); background: var(--surface); border-radius: 20px; }
 .myteam-cta .ico { color: var(--ink); background: var(--lime); border-radius: 999px; padding: 4px; width: 30px; height: 30px; }
+
+/* 審判のマーク */
+.ref-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; margin: 0 4px; padding: 0 6px; height: 18px; border-radius: 999px; background: var(--ink, #0c0a09); color: #fafaf9; font-size: 10.5px; font-weight: 800; letter-spacing: 0.02em; line-height: 1; vertical-align: 1px; white-space: nowrap; font-family: var(--font); }
+.ref-mark.half { background: transparent; color: var(--ink, #0c0a09); border: 1px solid currentColor; }
+.ref-legend { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; width: 100%; margin: 6px 2px 0; font-size: 0.78rem; color: var(--ink-2); }
+.pd .ref-mark, .pp .ref-mark { height: 3.6mm; padding: 0 1.2mm; font-size: 6.5pt; margin: 0 0.8mm; background: #0c0a09; color: #fff; }
+.pd .ref-mark.half, .pp .ref-mark.half { background: #fff; color: #0c0a09; border: 0.25mm solid #0c0a09; }
+.myteam .ref-mark { background: var(--lime); color: var(--ink); }

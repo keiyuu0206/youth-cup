@@ -107,6 +107,59 @@ export function scoreEl(m, { showProvisional = false } = {}) {
   return h('span', { class: 'mc-score' }, `${m.home_score} - ${m.away_score}`);
 }
 
+// ===== 審判の割り振り =====
+// 試合をする2チームのどちらかが審判を担当する。各チームの担当回数が均等になるよう、試合の順に割り振る。
+// 日程と組み合わせから毎回同じ結果を計算する（データベースには書き込まない）。
+//   one    ：1試合を1チームが担当（マーク「審」）
+//   halves ：前半・後半を両チームで分担。どちらが前半かを均等に（マーク「前審」「後審」）
+let REF_MODE = 'none';
+export const setRefereeMode = (mode) => { REF_MODE = mode === 'one' || mode === 'halves' ? mode : 'none'; };
+export const refereeMode = () => REF_MODE;
+export const REF_MODES = { none: '表示しない', one: '1試合を1チームが担当（均等に割り振る）', halves: '前半・後半で分担（どちらが前半かを均等に）' };
+const REF_CACHE = new WeakMap();
+export function refereePlan(cat) {
+  if (REF_MODE === 'none' || !cat || !cat.matches) return null;
+  const hit = REF_CACHE.get(cat);
+  if (hit && hit.mode === REF_MODE) return hit.plan;
+  const list = cat.matches.filter((m) => m.home_team_id && m.away_team_id)
+    .sort((a, b) => a.slot - b.slot || a.court - b.court || String(a.code || a.id).localeCompare(String(b.code || b.id)));
+  const duty = {}, played = {}, plan = {};
+  let flip = false;
+  for (const m of list) {
+    const hId = m.home_team_id, aId = m.away_team_id;
+    // それまでの試合だけを見て、試合数の半分に比べて担当が少ないほうを選ぶ（同じときは交互に）。
+    // 後の試合の情報を使わないので、トーナメントの組み合わせが決まっても、それまでの試合の審判は変わらない
+    const defH = (duty[hId] || 0) - (played[hId] || 0) / 2;
+    const defA = (duty[aId] || 0) - (played[aId] || 0) / 2;
+    let side;
+    if (defH < defA) side = 'home'; else if (defA < defH) side = 'away'; else { flip = !flip; side = flip ? 'home' : 'away'; }
+    duty[side === 'home' ? hId : aId] = (duty[side === 'home' ? hId : aId] || 0) + 1;
+    played[hId] = (played[hId] || 0) + 1; played[aId] = (played[aId] || 0) + 1;
+    plan[m.id] = REF_MODE === 'one' ? { [side]: '審' } : { [side]: '前審', [side === 'home' ? 'away' : 'home']: '後審' };
+  }
+  REF_CACHE.set(cat, { mode: REF_MODE, plan });
+  return plan;
+}
+// その試合・そのチームのマーク（'審'・'前審'・'後審'、無ければ空）
+export const refereeText = (cat, m, side) => { const p = refereePlan(cat); return (p && p[m.id] && p[m.id][side]) || ''; };
+export const refBadge = (cat, m, side) => { const t = refereeText(cat, m, side); return t ? h('span', { class: `ref-mark${t === '審' ? '' : ' half'}`, title: t === '審' ? '審判を担当' : t === '前審' ? '前半の審判を担当' : '後半の審判を担当' }, t) : null; };
+// チームごとの担当回数（割り振りの確認用）
+export function refereeCounts(cat) {
+  const p = refereePlan(cat) || {};
+  const out = {};
+  for (const m of cat.matches) {
+    if (!p[m.id]) continue;
+    for (const side of ['home', 'away']) {
+      const id = side === 'home' ? m.home_team_id : m.away_team_id;
+      const t = p[m.id][side];
+      out[id] = out[id] || { one: 0, first: 0, second: 0, played: 0 };
+      out[id].played++;
+      if (t) out[id][t === '審' ? 'one' : t === '前審' ? 'first' : 'second']++;
+    }
+  }
+  return out;
+}
+
 export function matchCard(m, cat, ctx) {
   const cache = ctx.cache || {};
   const st = statusOf(m, cat, ctx.tournament);
@@ -122,7 +175,7 @@ export function matchCard(m, cat, ctx) {
     const cls = w ? (w === side ? 'win' : 'lose') : '';
     return h('div', { class: `mc-row ${cls}` },
       crest(info.team, 28),
-      h('span', { class: `mc-name${info.placeholder ? ' ph' : ''}` }, info.text, id && id === ctx.myTeam ? icon('star') : null),
+      h('span', { class: `mc-name${info.placeholder ? ' ph' : ''}` }, info.text, refBadge(cat, m, side), id && id === ctx.myTeam ? icon('star') : null),
       h('span', { class: 'mc-score' }, score ?? '', pk != null ? h('small', null, `PK${pk}`) : null));
   };
 

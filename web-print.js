@@ -4,7 +4,7 @@ import { openResultPoster, openMatchPoster } from './web-poster.js';
 import { h, mount, modal, toast, formatDate, toHHMM } from './web-ui.js';
 import { qrDataUrl } from './web-qr.js';
 import { buildXlsx, downloadBlob } from './web-xlsx.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength, isRankLeague } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, dayDate, absMin, winnerSide, bracketView, bracketNames, TIEBREAK_LABEL, matchLength, isRankLeague, refBadge, refereeMode } from './web-views.js';
 
 const FORMAT_LABEL = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
 
@@ -531,7 +531,7 @@ function matchCell(cat, m, cache, opts, rowTime) {
     const info = sideInfo(m, side, cat, cache);
     return h('div', { class: `tr${w ? (w === side ? ' w' : ' l') : ''}` },
       logo(info.team),
-      info.placeholder ? h('span', { class: 'n ph' }, info.text) : fit(pickName(info.team, info.text, availMm), 'n'), scoreCells(m, side, blank));
+      info.placeholder ? h('span', { class: 'n ph' }, info.text) : fit(pickName(info.team, info.text, availMm), 'n'), refBadge(cat, m, side), scoreCells(m, side, blank));
   };
   return h('td', { class: `pd-cell${blank ? ' pd-blank' : ''}` },
     h('div', { class: 'lb' }, h('span', null, m.label), m.start_min !== rowTime ? h('span', null, toHHMM(m.start_min)) : (m.forfeit && !blank ? h('span', null, '不戦勝') : null)),
@@ -581,7 +581,7 @@ function scheduleSection(t, cat, opts) {
     h('tbody', null, ms.map((m, i) => {
       const first = i === 0 || ms[i - 1].start_min !== m.start_min;
       const listAvail = (188 - 81) / 2 - 3 - (opts.logos && cat.teams.some((x) => x.logo) ? 5.2 : 0);
-      const nm = (side) => { const info = sideInfo(m, side, cat, cache); return named(info.team, info.placeholder ? info.text : pickName(info.team, info.text, listAvail)); };
+      const nm = (side) => { const info = sideInfo(m, side, cat, cache); return [named(info.team, info.placeholder ? info.text : pickName(info.team, info.text, listAvail)), refBadge(cat, m, side)]; };
       if (first) listBand++;
       const w = !opts.blank && m.status === 'confirmed' ? winnerSide(m) : null;
       const sc = !opts.blank && m.status === 'confirmed' && m.home_score != null
@@ -686,7 +686,7 @@ function courtTables(t, cat, opts, { pageW = 188, big = false } = {}) {
           h('tbody', null, ms.map((m, i) => {
             const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
             const w = done ? winnerSide(m) : null;
-            const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, info.placeholder ? info.text : pickName(info.team, info.text, avail))); };
+            const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, info.placeholder ? info.text : pickName(info.team, info.text, avail)), refBadge(cat, m, side)); };
             return h('tr', { class: i % 2 ? 'band' : '' },
               h('td', { class: 'pd-time' }, toHHMM(m.start_min)), h('td', { class: 'sm' }, m.label),
               h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')),
@@ -785,7 +785,7 @@ function printPosting(t, cats, opts) {
             h('tbody', null, ms.map((m, i) => {
               const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
               const w = done ? winnerSide(m) : null;
-              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, pickName(info.team, info.text, 60))); };
+              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, pickName(info.team, info.text, 60)), refBadge(cat, m, side)); };
               return h('tr', { class: i % 2 ? 'band' : '' },
                 h('td', { class: 'pd-time' }, `${multi ? `${dayOf(cfg, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)}`), h('td', { class: 'c' }, courtName(cfg, m.court)),
                 h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')),
@@ -811,7 +811,7 @@ function printPosting(t, cats, opts) {
             h('tbody', null, ms.map((m, i) => {
               const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
               const w = done ? winnerSide(m) : null;
-              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, pickName(info.team, info.text, 60))); };
+              const nm = (side) => { const info = sideInfo(m, side, cat, cache); return h('span', { class: `pd-named${side === 'home' ? ' r' : ''}` }, named(info.team, pickName(info.team, info.text, 60)), refBadge(cat, m, side)); };
               return h('tr', { class: i % 2 ? 'band' : '' },
                 h('td', { class: 'pd-time' }, `${multi ? `${dayOf(cfg, m.slot) + 1}日目 ` : ''}${toHHMM(m.start_min)}`), h('td', { class: 'c' }, courtName(cfg, m.court)),
                 h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')),

@@ -4,7 +4,7 @@ import { openSnsChooser } from './web-poster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -826,6 +826,7 @@ async function tournamentView(root, id, navigate) {
     markFetched();
     if (res.unchanged) return false;
     data = res;
+    setRefereeMode(((data.tournament.settings || {}).referee || {}).mode);
     if (!data.categories.find((c) => c.id === st.catId)) st.catId = data.categories[0]?.id || null;
     return true;
   }
@@ -855,6 +856,22 @@ async function tournamentView(root, id, navigate) {
     return changed;
   }
 
+  // 審判の割り振り：方式を選ぶと、試合をする2チームのどちらかに均等に割り振り、一覧に「審」のマークを付ける（データは書き込まない）
+  function refereePanel(t, cat) {
+    const mode = ((t.settings || {}).referee || {}).mode || 'none';
+    const counts = cat && mode !== 'none' ? refereeCounts(cat) : {};
+    const diffs = Object.values(counts).map((c) => Math.abs((mode === 'one' ? c.one : c.first) - c.played / 2));
+    const summary = diffs.length ? `${cat.name}：各チームの担当は試合数のほぼ半分${mode === 'halves' ? '（前半）' : ''}です（差は最大${Math.ceil(Math.max(...diffs))}回）` : '';
+    return h('section', { class: 'panel' },
+      h('h2', null, '審判の割り振り'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, '試合をする2チームのどちらかが審判を担当します。各チームの担当回数が均等になるよう自動で割り振り、日程・PDF・閲覧ページに「審」のマークを付けます。'),
+      h('label', { class: 'field' }, h('span', null, '方式'), h('select', { onchange: async (e) => {
+        const v = e.target.value;
+        if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { referee: { mode: v } } }), v === 'none' ? '審判のマークを表示しないようにしました' : '審判を割り振りました')) await reload();
+      } }, Object.entries(REF_MODES).map(([k, l]) => h('option', { value: k, selected: mode === k }, l)))),
+      summary ? h('p', { class: 'small', style: { margin: '6px 0 0' } }, summary) : null);
+  }
+
   // 大会の状況をひと目で：確定した試合・承認待ち・次の試合・予定との差（全カテゴリの合計）
   function statsStrip(t) {
     const all = data.categories.flatMap((c) => c.matches.map((m) => ({ m, c })));
@@ -882,7 +899,7 @@ async function tournamentView(root, id, navigate) {
       adminHeader(t.name, navigate, true),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
+          h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), readOnly(refereePanel(t, cat)), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
           h('div', null,
             statsStrip(t),
             h('div', { class: 'row no-print' },
@@ -1942,9 +1959,9 @@ async function tournamentView(root, id, navigate) {
             m.corrected ? h('span', { class: 'tag' }, '修正済み') : null,
             m.ref_conflict ? h('span', { class: 'tag alert' }, '予選結果の変更で対戦チームが変わっています。結果を見直してください') : null),
           h('div', { class: 'rs' },
-            h('strong', { class: 'rn', style: { textAlign: 'right', color: home.placeholder ? 'var(--ink-2)' : null } }, home.text),
+            h('strong', { class: 'rn', style: { textAlign: 'right', color: home.placeholder ? 'var(--ink-2)' : null } }, refBadge(cat, m, 'home'), home.text),
             numIn('home_score', '', `${home.text}の得点`), h('span', null, '-'), numIn('away_score', '', `${away.text}の得点`),
-            h('strong', { class: 'rn', style: { color: away.placeholder ? 'var(--ink-2)' : null } }, away.text)),
+            h('strong', { class: 'rn', style: { color: away.placeholder ? 'var(--ink-2)' : null } }, away.text, refBadge(cat, m, 'away'))),
           isKo && tie && ready && !f.forfeit ? h('div', { class: 'rs small' }, h('span', null, 'PK'), numIn('home_pk', 'pk', 'PK（左）'), h('span', null, '-'), numIn('away_pk', 'pk', 'PK（右）')) : null,
           ready ? h('div', { class: 'rs' },
             editing ? h('select', { style: { width: 'auto', minHeight: '36px' }, 'aria-label': '不戦勝', onchange: (e) => { f.forfeit = e.target.value; draw(); } },

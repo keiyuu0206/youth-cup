@@ -4,7 +4,7 @@
 import { api } from './web-api.js';
 import { openMatchPoster, openResultPoster } from './web-poster.js';
 import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
 
@@ -59,6 +59,7 @@ export async function scoreApp(root, me) {
       markFetched();
       if (r.unchanged) return false;
       st.data = r; st.rev = r.rev;
+      setRefereeMode(r.tournament.referee);
       if (!st.catId || !r.categories.some((c) => c.id === st.catId)) st.catId = r.categories[0] && r.categories[0].id;
       return true;
     } catch (e) {
@@ -161,7 +162,7 @@ export async function scoreApp(root, me) {
             return h('button', { class: `sc-row ${m.status}`, type: 'button', disabled: !can, onclick: () => editor(t, cat, m) },
               h('span', { class: 'sc-rtime' }, courtName(cat.config, m.court), h('small', null, m.stage === 'league' ? `${m.group_label}組` : '')),
               h('span', { class: 'sc-rteams' },
-                h('span', null, sideInfo(m, 'home', cat, cache).text), h('span', null, sideInfo(m, 'away', cat, cache).text)),
+                h('span', null, sideInfo(m, 'home', cat, cache).text, refBadge(cat, m, 'home')), h('span', null, sideInfo(m, 'away', cat, cache).text, refBadge(cat, m, 'away'))),
               h('span', { class: 'sc-rscore' }, m.home_score != null ? `${m.home_score} - ${m.away_score}` : ''),
               h('span', { class: `sc-rstat ${m.status}` }, ready ? LBL[m.status] : '対戦未定'));
           })])));

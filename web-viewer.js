@@ -3,7 +3,7 @@ import { printParking } from './web-print.js';
 import { outlineWeb } from './web-outline.js';
 import { drawPoster, drawStandingsImage } from './web-poster.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton } from './web-ui.js';
-import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin } from './web-views.js';
+import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin, setRefereeMode, refereeMode } from './web-views.js';
 
 export async function viewer(root, slug) {
   let data = null;
@@ -29,6 +29,7 @@ export async function viewer(root, slug) {
     markFetched();
     if (res.unchanged) { updateStamp(); return false; }
     data = res;
+    setRefereeMode(data.tournament.referee);
     if (!data.categories.find((c) => c.id === st.catId)) st.catId = data.categories[0]?.id;
     if (!initial) render();
     return true;
@@ -160,7 +161,8 @@ export async function viewer(root, slug) {
         h('div', { class: 'chips', style: { flex: 1 } }, opts.map(([k, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.filter === k),
           onclick: () => { st.filter = k; store.set(`v:${slug}:filter`, k); renderBody(); } }, label))),
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'チーム名で検索', 'aria-pressed': String(st.searchOpen),
-          onclick: () => { st.searchOpen = !st.searchOpen; if (!st.searchOpen) st.query = ''; renderBody(); if (st.searchOpen) body.querySelector('.search input')?.focus(); } }, icon('search')));
+          onclick: () => { st.searchOpen = !st.searchOpen; if (!st.searchOpen) st.query = ''; renderBody(); if (st.searchOpen) body.querySelector('.search input')?.focus(); } }, icon('search')),
+        refereeLegend());
     }
 
     function searchBox() {
@@ -275,6 +277,15 @@ function skeleton() {
   return h('div', null,
     h('div', { class: 'hero' }, h('div', { class: 'wrap' }, h('div', { class: 'skel', style: { height: '28px', width: '70%', opacity: 0.4 } }), h('div', { class: 'skel', style: { height: '16px', width: '45%', marginTop: '14px', opacity: 0.4 } }))),
     h('div', { class: 'wrap' }, [0, 1, 2].map(() => h('div', { class: 'skel', style: { height: '120px', marginTop: '18px', borderRadius: '20px' } }))));
+}
+
+// 審判マークの凡例
+function refereeLegend() {
+  const mode = refereeMode();
+  if (mode === 'none') return null;
+  return h('p', { class: 'ref-legend' }, mode === 'one'
+    ? [h('span', { class: 'ref-mark' }, '審'), '＝審判を担当するチーム']
+    : [h('span', { class: 'ref-mark half' }, '前審'), '前半の審判　', h('span', { class: 'ref-mark half' }, '後審'), '後半の審判']);
 }
 
 function myTeamCard(cat, ctx, onPick) {

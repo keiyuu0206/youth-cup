@@ -3,7 +3,7 @@
 //  ・予選リーグ星取表（1ページに3組。自チームどうしのマスに大会ロゴ）
 //  ・決勝トーナメントのまとめ（トーナメント表・グループ一覧・試合番号・タイムテーブルを1枚に）
 import { h, toHHMM, formatDate } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, winnerSide, isRankLeague, matchLengthFor, TIEBREAK_LABEL } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, winnerSide, isRankLeague, matchLengthFor, TIEBREAK_LABEL, refBadge, refereeText, refereeMode } from './web-views.js';
 import { runPrint, periodText, qrBlock } from './web-print.js';
 import { defaultOutline, autoInfo, autoSection, richText, plainText } from './web-outline.js';
 
@@ -238,7 +238,7 @@ function courtSheets(t, cat, opts, disp) {
           if (!m) return h('tr', { class: 'free' }, h('td', null, `第${i + 1}試合`), h('td', { class: 'pp-tm' }, toHHMM(startOf(s))), h('td', { colspan: 4, class: 'c muted' }, '—'));
           const done = !opts.blank && m.status === 'confirmed' && m.home_score != null;
           const w = done ? winnerSide(m) : null;
-          const nm = (side) => sideInfo(m, side, cat, cache).text;
+          const nm = (side) => [sideInfo(m, side, cat, cache).text, refBadge(cat, m, side)];
           const tag = m.stage === 'league' ? `${m.group_label}組` : disp[m.code] || '';
           return h('tr', null, h('td', null, `第${i + 1}試合`, h('small', null, tag)), h('td', { class: 'pp-tm' }, toHHMM(m.start_min)),
             h('td', { class: `r${w === 'home' ? ' b' : ''}` }, nm('home')), h('td', { class: 'vs' }, 'vs'), h('td', { class: w === 'away' ? 'b' : '' }, nm('away')),
@@ -248,7 +248,8 @@ function courtSheets(t, cat, opts, disp) {
     for (let i = 0; i < usedCourts.length; i += n) {
       const list = usedCourts.slice(i, i + n);
       out.push(sheet(head(t, cat, '試合スケジュール', dayLabel(cat, d, t, true)),
-        h('div', { class: `pp-courts n${n}` }, list.map(table), n === 2 && list.length === 1 ? h('div', { class: 'pp-court empty' }) : null)));
+        h('div', { class: `pp-courts n${n}` }, list.map(table), n === 2 && list.length === 1 ? h('div', { class: 'pp-court empty' }) : null),
+        refereeMode() === 'none' ? null : h('p', { class: 'pp-note' }, refereeMode() === 'one' ? '審：審判を担当するチーム（各チームの担当回数が均等になるよう割り振っています）' : '前審：前半の審判　後審：後半の審判（各チームの担当が均等になるよう割り振っています）')));
     }
   }
   return out;
@@ -306,7 +307,7 @@ function timetableSheets(t, cat, opts) {
   const { secs, disp } = koSections(cat);
   const cache = { teams: teamMap(cat), codes: codeMap(cat) };
   const secIdx = (m) => { const s2 = secs.find((x) => (x.name || null) === (m.group_label || null) && (!!x.league === isRankLeague(m))); return s2 ? s2.idx : 0; };
-  const nm = (m, side) => { const info = sideInfo(m, side, cat, cache); return info.placeholder ? '' : info.team.short_name || info.team.name; };
+  const nm = (m, side) => { const info = sideInfo(m, side, cat, cache); if (info.placeholder) return ''; const r = refereeText(cat, m, side); return `${info.team.short_name || info.team.name}${r ? `【${r}】` : ''}`; };
   const out = [];
   for (let d = 0; d < dayTotal(cfg); d++) {
     const dayM = cat.matches.filter((m) => dayOf(cfg, m.slot) === d);
