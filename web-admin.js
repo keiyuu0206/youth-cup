@@ -451,7 +451,7 @@ function openManuals() {
 }
 
 function adminHeader(title, navigate, back) {
-  const ghost = { background: 'transparent', color: '#fff', borderColor: 'rgba(255,255,255,0.7)' };
+  const ghost = {}; // 新しいデザイン：白い上部に、ヘアラインのピル型のボタン
   return h('header', { class: 'site-head no-print' }, h('div', { class: 'wrap wide' },
     back ? h('a', { href: '/admin', onclick: async (e) => { e.preventDefault(); if (window.__leaveGuard && !(await window.__leaveGuard())) return; window.__leaveGuard = null; navigate('/admin'); } }, '← 大会一覧') : null,
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
@@ -855,6 +855,24 @@ async function tournamentView(root, id, navigate) {
     return changed;
   }
 
+  // 大会の状況をひと目で：確定した試合・承認待ち・次の試合・予定との差（全カテゴリの合計）
+  function statsStrip(t) {
+    const all = data.categories.flatMap((c) => c.matches.map((m) => ({ m, c })));
+    if (!all.length) return null;
+    const done = all.filter(({ m }) => m.status === 'confirmed').length;
+    const pend = all.filter(({ m }) => m.status === 'provisional').length;
+    const rest = all.filter(({ m }) => m.status === 'none' && m.home_team_id && m.away_team_id).sort((a, b) => absMin(a.c.config, a.m) - absMin(b.c.config, b.m));
+    const next = rest[0];
+    const delay = all.filter(({ m }) => m.time_changed).length;
+    const card = (label, value, sub, accent) => h('div', { class: `stat-card${accent ? ' accent' : ''}` },
+      h('span', { class: 'stat-label' }, label), h('span', { class: 'stat-value' }, value, sub ? h('small', null, sub) : null));
+    return h('div', { class: 'stat-strip no-print' },
+      card('確定した試合', String(done), ` / ${all.length}`),
+      card('承認待ち', String(pend), null, pend > 0),
+      card('次の試合', next ? toHHMM(next.m.start_min) : '—', next ? ` ${courtName(next.c.config, next.m.court)}` : null),
+      card('時刻を変えた試合', String(delay), null));
+  }
+
   function render() {
     const t = data.tournament;
     document.title = `${t.name} | 大会運営`;
@@ -866,6 +884,7 @@ async function tournamentView(root, id, navigate) {
         h('div', { class: 'admin-layout split' },
           h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
           h('div', null,
+            statsStrip(t),
             h('div', { class: 'row no-print' },
               h('div', { class: 'chips', style: { flex: 1 } },
                 data.categories.map((c, i) => h('button', { class: 'chip-btn cat-chip', type: 'button', 'aria-pressed': String(c.id === st.catId), style: `--cat:${catColor(i)}`,
@@ -1255,7 +1274,7 @@ async function tournamentView(root, id, navigate) {
           h('span', { class: 'cat-bar-meta' }, `${FORMAT[cat.config.format] || ''}　${cat.teams.length}チーム`),
           h('span', { class: 'spacer' }),
           refreshInline(),
-          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openSnsChooser(data.tournament, data.categories, cat.id) }, 'SNS画像'),
+          h('button', { class: 'btn btn-sm btn-accent', type: 'button', onclick: () => openSnsChooser(data.tournament, data.categories, cat.id) }, 'SNS画像'),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, icon('share'), 'PDFで出力')),
         h('div', { class: 'chips' }, subs.map(([k, label]) =>
           h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.sub === k), onclick: async () => {
