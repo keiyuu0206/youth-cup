@@ -1579,8 +1579,12 @@ async function tournamentView(root, id, navigate) {
         h('div', { class: 'panel-head' }, h('h2', null, '現在の日程'), h('span', { class: 'spacer' }),
           ro() ? null : h('button', { class: 'btn btn-sm btn-primary no-print', type: 'button', onclick: () => openRetime(cat) }, '時間の調整（雨天・遅れ・試合時間の変更）'),
           h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
+          ro() ? null : h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => undoLast(cat) }, '↶ 1つ前に戻す'),
           editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),
-        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。開始時刻を全体でずらすときは「設定」の第1試合の開始を変更してください。') : null,
+        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選び、移動先の枠をタップすると入れ替わります。入れ替えると、組ごとの「第◯節」の番号も時刻の順に振り直されます。間違えたときは［↶ 1つ前に戻す］を押してください。') : null,
+        !ro() && cat.matches.some((m) => m.stage === 'league') ? h('div', { class: 'row no-print', style: { marginBottom: '8px' } },
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => renumberRounds(cat) }, '節の番号を時刻の順にそろえる'),
+          h('span', { class: 'muted small' }, '以前に入れ替えた日程で、「第◯節」が時刻の順になっていないときに使います')) : null,
         warningsList(cat.warnings),
         h('div', { class: 'table-wrap' }, scheduleGrid(cat, cat.matches, {
           editable,
@@ -1592,13 +1596,29 @@ async function tournamentView(root, id, navigate) {
             if (m && m.id === st.moveSel) { st.moveSel = null; render(); return; }
             const matchId = st.moveSel;
             st.moveSel = null;
-            if (await run(() => api('POST', `/api/admin/categories/${cat.id}/move`, { matchId, slot, court }), '移動しました')) await reload();
+            if (await run(() => api('POST', `/api/admin/categories/${cat.id}/move`, { matchId, slot, court }), '入れ替えました（間違えたときは［↶ 1つ前に戻す］）')) await reload();
             else render();
           },
           names,
         }))));
     }
     return box;
+  }
+
+  // 1つ前に戻す：入れ替え・節の番号のそろえ・時間の調整を、直前の状態に戻す（結果はそのまま）
+  async function undoLast(cat) {
+    const r = await run(() => api('GET', `/api/admin/categories/${cat.id}/retime/history`));
+    const last = r && r.history && r.history[0];
+    if (!last) { toast('戻せる操作がありません', true); return; }
+    if (!(await confirmDialog('1つ前に戻します', `「${last.label}」の前の状態に戻します。試合の結果はそのまま残ります。`, '戻す'))) return;
+    if (await run(() => api('POST', `/api/admin/categories/${cat.id}/retime/undo`), '1つ前に戻しました')) await reload();
+  }
+  async function renumberRounds(cat) {
+    if (!(await confirmDialog('節の番号をそろえます', '予選リーグの「第◯節」の番号を、組ごとに時刻の順で振り直します（日程の時刻やコートは変わりません）。［↶ 1つ前に戻す］で元に戻せます。', 'そろえる'))) return;
+    const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/renumber`));
+    if (!r) return;
+    toast(r.changed ? `${r.changed}試合の節の番号をそろえました` : 'すでに時刻の順になっています');
+    if (r.changed) await reload();
   }
 
   function warningsList(ws) {

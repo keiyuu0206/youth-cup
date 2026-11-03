@@ -1187,14 +1187,56 @@ route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user,
   const slot = Math.max(0, Math.trunc(Number(b.slot)));
   const court = Math.trunc(Number(b.court));
   if (court < 0 || court >= c.config.courts) fail(400, 'コートの指定が正しくありません');
+  const { teams } = await loadCategoryData(db, c.id);
+  const before = snapshotMatches(matches);
   const other = matches.find((x) => x.slot === slot && x.court === court && x.id !== m.id);
   if (other) { other.slot = m.slot; other.court = m.court; }
   m.slot = slot; m.court = court;
   applyTimes(c.config, matches);
-  await batchAll(db, matches.map((x) => db.prepare('UPDATE matches SET slot = ?, court = ?, start_min = ?, session = ? WHERE id = ?').bind(x.slot, x.court, x.start_min, x.session, x.id)));
+  renumberLeague(matches, teams);
+  const label = `試合の入れ替え（${m.label}${other ? ` ⇄ ${other.label}` : ''}）`;
+  await saveMatchChanges(db, c, label, before, matches);
   await bump(db, t.id);
   return json({ ok: true });
 }, 'admin');
+
+// 節の番号を時刻の順にそろえる（入れ替え済みの日程用。変更前を保存して元に戻せる）
+route('POST', '/api/admin/categories/:cid/renumber', async ({ db, params, user }) => {
+  const c = await getCategory(db, params.cid, user);
+  const t = await getTournament(db, c.tournament_id, user);
+  const { teams, matches } = await loadCategoryData(db, c.id);
+  const before = snapshotMatches(matches);
+  renumberLeague(matches, teams);
+  const n = await saveMatchChanges(db, c, '節の番号を時刻の順にそろえる', before, matches);
+  if (n) await bump(db, t.id);
+  return json({ ok: true, changed: n });
+}, 'admin');
+
+// ---------- 日程の手直しの共通部品 ----------
+// 予選リーグの節の番号を、組ごとに時刻の順で振り直す（1節の試合数 = 組のチーム数 ÷ 2、端数切り捨て）
+function renumberLeague(matches, teams) {
+  const size = {};
+  for (const x of teams) if (x.group_label) size[x.group_label] = (size[x.group_label] || 0) + 1;
+  const groups = [...new Set(matches.filter((m) => m.stage === 'league').map((m) => m.group_label))];
+  for (const g of groups) {
+    const per = Math.max(1, Math.floor((size[g] || 2) / 2));
+    matches.filter((m) => m.stage === 'league' && m.group_label === g).sort((a, b) => a.slot - b.slot || a.court - b.court)
+      .forEach((m, i) => { m.round = Math.floor(i / per) + 1; m.label = `${g}組 第${m.round}節`; });
+  }
+}
+const snapshotMatches = (matches) => new Map(matches.map((m) => [m.id, { slot: m.slot, court: m.court, start_min: m.start_min, session: m.session, time_changed: m.time_changed, round: m.round, label: m.label }]));
+// 変わった試合だけを保存し、変更前を履歴に残す（「1つ前に戻す」用）。変わった試合の数を返す
+async function saveMatchChanges(db, c, label, before, matches) {
+  const keys = ['slot', 'court', 'start_min', 'session', 'round', 'label'];
+  const changed = matches.filter((m) => { const o = before.get(m.id); return o && keys.some((k) => o[k] !== m[k]); });
+  if (!changed.length) return 0;
+  const snap = { matches: changed.map((m) => ({ id: m.id, ...before.get(m.id) })), dayBreakSlots: c.config.dayBreakSlots || [], config: null };
+  const stmts = [db.prepare('INSERT INTO time_history (id, category_id, label, data, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid(), c.id, label, JSON.stringify(snap), now())];
+  for (const m of changed) stmts.push(db.prepare('UPDATE matches SET slot = ?, court = ?, start_min = ?, session = ?, round = ?, label = ? WHERE id = ?').bind(m.slot, m.court, m.start_min, m.session, m.round, m.label, m.id));
+  await batchAll(db, stmts);
+  await db.prepare('DELETE FROM time_history WHERE category_id = ? AND id NOT IN (SELECT id FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 20)').bind(c.id, c.id).run();
+  return changed.length;
+}
 
 // 当日の遅延調整（コート単位）
 route('POST', '/api/admin/categories/:cid/delay', async ({ req, db, params, user }) => {
@@ -1327,8 +1369,8 @@ route('POST', '/api/admin/categories/:cid/retime/undo', async ({ db, params, use
   const h = await db.prepare('SELECT * FROM time_history WHERE category_id = ? ORDER BY created_at DESC LIMIT 1').bind(c.id).first();
   if (!h) fail(404, '元に戻せる調整がありません');
   const snap = JSON.parse(h.data);
-  const stmts = (snap.matches || []).map((m) => db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = ? WHERE id = ? AND category_id = ?')
-    .bind(m.slot, m.start_min, m.session, m.time_changed || 0, m.id, c.id));
+  const stmts = (snap.matches || []).map((m) => db.prepare('UPDATE matches SET slot = ?, start_min = ?, session = ?, time_changed = ?, court = COALESCE(?, court), round = COALESCE(?, round), label = COALESCE(?, label) WHERE id = ? AND category_id = ?')
+    .bind(m.slot, m.start_min, m.session, m.time_changed || 0, m.court ?? null, m.round ?? null, m.label ?? null, m.id, c.id));
   const cfg = { ...c.config, dayBreakSlots: snap.dayBreakSlots || [], ...(snap.config || {}) };
   stmts.push(db.prepare('UPDATE categories SET config = ? WHERE id = ?').bind(JSON.stringify(normalizeConfig(cfg)), c.id));
   stmts.push(db.prepare('DELETE FROM time_history WHERE id = ?').bind(h.id));
