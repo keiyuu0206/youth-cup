@@ -66,7 +66,8 @@ function remember(key, text) {
   while (PAYLOAD_CACHE.size > 40) PAYLOAD_CACHE.delete(PAYLOAD_CACHE.keys().next().value); // 古いものから捨てる
 }
 const uid = () => crypto.randomUUID();
-const randomSlug = (n = 10) => {
+// 保護者向けのURL（/t/…）の文字列。今後作る大会は20文字（約100ビット）で、推測は事実上不可能。発行済みの大会（10文字）はそのまま使える
+const randomSlug = (n = 20) => {
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
   const bytes = crypto.getRandomValues(new Uint8Array(n));
   return Array.from(bytes, (b) => chars[b % chars.length]).join('');
