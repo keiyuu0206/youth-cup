@@ -16,7 +16,8 @@
   --wait-ink: #7a5600;
   --bib: #ffd60a;
   --bib-soft: #fff9d9;
-  --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  /* 日本語の字体：iPhone・Mac（ヒラギノ）、Android・Linux（Noto Sans CJK JP）、Windows（游ゴシック・メイリオ）の順に、確実に日本語の字体を選ぶ */
+  --font: -apple-system, BlinkMacSystemFont, "Noto Sans CJK JP", "Noto Sans JP", "Source Han Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", YuGothic, "Meiryo", "BIZ UDPGothic", sans-serif;
   --r-lg: 20px;
   --r-md: 14px;
   --r-sm: 10px;
@@ -1318,8 +1319,9 @@ fieldset.lockable.ro:disabled * { cursor: default; }
   --turf: #0c0a09; --turf-deep: #0c0a09; --turf-soft: #f5f5f4;
   --live: #e7000b; --live-soft: #fef2f2; --wait-soft: #ecfccb; --wait-ink: #3f5e00;
   --bib: #c8ff3d; --bib-soft: #f4fdd9;
-  --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
-  --num: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* 日本語の字体：Android・Linux（Noto Sans CJK JP）を先に。Mac・iPhone（ヒラギノ）、Windows（游ゴシック・メイリオ）も確実に日本語の字体を選ぶ */
+  --font: -apple-system, BlinkMacSystemFont, "Noto Sans CJK JP", "Noto Sans JP", "Source Han Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", YuGothic, "Meiryo", "BIZ UDPGothic", sans-serif;
+  --num: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK JP", "Noto Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
   --r-lg: 20px; --r-md: 14px; --r-sm: 10px;
   --shadow: 0 1px 2px rgba(12, 10, 9, 0.04);
   --shadow-float: 0 12px 32px rgba(12, 10, 9, 0.16);
@@ -1544,3 +1546,10 @@ body.has-bottom-nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 11
 .op-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
 .op-card { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: var(--ink); }
 .dash-group td.num { white-space: nowrap; text-align: right; }
+/* 駐車券：選んだチームのロゴ */
+.pk-team.has-logo { display: flex; align-items: center; justify-content: center; gap: 8mm; }
+.pk-team-logo { width: 34mm; height: 34mm; object-fit: contain; flex: none; }
+.pk-team.has-logo .pk-team-name { flex: 1 1 auto; min-width: 0; }
+.pk-team.has-logo .pk-team-fit > .t { text-align: left; }
+.pk-team.has-logo { padding: 0 6mm; }
+.pk-team.has-logo .pk-team-fit > .t { text-align: center; }
