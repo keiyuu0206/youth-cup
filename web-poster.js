@@ -62,6 +62,20 @@ function fitFont(ctx, text, maxW, size, weight = 900, min = 10) {
   return s;
 }
 
+// 描き直しが重なっても崩れないよう、見えないキャンバスで描き終えてから画面のキャンバスに写す
+function latestPainter(canvas) {
+  let gen = 0;
+  return async (drawFn) => {
+    const my = ++gen;
+    const off = document.createElement('canvas');
+    const r = await drawFn(off);
+    if (my !== gen) return null; // もっと新しい描き直しが始まっている
+    canvas.width = off.width; canvas.height = off.height;
+    canvas.getContext('2d').drawImage(off, 0, 0);
+    return r;
+  };
+}
+
 export async function drawPoster(canvas, t, cat, o) {
   const { w: W, h: H } = SIZES[o.size] || SIZES.sns;
   canvas.width = W; canvas.height = H;
@@ -76,12 +90,14 @@ export async function drawPoster(canvas, t, cat, o) {
   const tLogo = o.showLogo && t.logo ? await loadImg(t.logo) : null;
   if (tLogo) { const s = 92 * u; ctx.drawImage(tLogo, W / 2 - s / 2, y - 92 * u, s, s); y += 24 * u; }
   const ts = fitFont(ctx, o.title, W - pad * 2, 84 * u, 900, 24 * u);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`;
   ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 12 * u;
   ctx.fillText(o.title, W / 2, y + ts * 0.25); ctx.shadowBlur = 0;
   y += ts * 0.25 + 64 * u;
   if (o.subtitle) {
     const ss = fitFont(ctx, o.subtitle, W - pad * 2, 46 * u, 900, 18 * u);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`;
     ctx.fillText(o.subtitle, W / 2, y); y += 40 * u;
   }
@@ -163,9 +179,11 @@ export function openResultPoster(t, categories, catId, opts = {}) {
   const canvas = h('canvas', { class: 'poster-canvas' });
   const info = h('p', { class: 'muted small', style: { margin: 0 } });
   const body = h('div', { class: 'poster' });
+  const paint = latestPainter(canvas);
   const redraw = async () => {
     const cat = categories.find((c) => c.id === o.catId);
-    const r = await drawPoster(canvas, t, cat, o);
+    const r = await paint((c) => drawPoster(c, t, cat, o));
+    if (!r) return;
     info.textContent = r.rows ? `${r.rows}チーム・${r.cols}列で表示しています` : o.kind === 'ranking' ? 'まだ順位が決まっていません（試合の結果が確定すると、決まった順位から表示されます）' : 'チームがいません';
   };
   const sel = (label, key, opts, after) => h('label', { class: 'field' }, h('span', null, label), h('select', { onchange: (e) => { o[key] = e.target.value; if (after) after(); draw(); redraw(); } },
@@ -439,9 +457,11 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
   const info = h('p', { class: 'muted small', style: { margin: 0 } });
   const body = h('div', { class: 'poster' });
   let total = 1;
+  const paint = latestPainter(canvas);
   const redraw = async () => {
     const cat = cats.find((c) => c.id === o.catId);
-    const r = await drawMatchPoster(canvas, t, cat, o, o.page);
+    const r = await paint((c) => drawMatchPoster(c, t, cat, o, o.page));
+    if (!r) return;
     total = r.pages;
     info.textContent = `${r.count}試合・${r.pages}枚（1枚に${o.perPage}試合まで）`;
     draw(true);

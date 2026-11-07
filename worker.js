@@ -1575,7 +1575,12 @@ route('POST', '/api/admin/matches/:id/result', async ({ req, db, params, user })
   const confirm = !!b.confirm;
   if (confirm) requirePkIfNeeded(m, s);
   const status = confirm ? 'confirmed' : (m.status === 'confirmed' ? 'confirmed' : 'provisional');
-  const corrected = m.status === 'confirmed' ? 1 : m.corrected;
+  // 「結果訂正」の印は、確定済みの結果の得点（PK・不戦勝を含む）が実際に変わったときだけ付ける。
+  // 同じ内容のもう一度の保存（確定ボタンの二度押しなど）では付けない
+  const same = (a, b) => (a ?? null) === (b ?? null);
+  const changed = !(same(m.home_score, s.home) && same(m.away_score, s.away) && same(m.home_pk, s.hpk) && same(m.away_pk, s.apk) && same(m.forfeit, s.forfeit));
+  if (m.status === 'confirmed' && confirm && !changed) return json({ ok: true, unchanged: true });
+  const corrected = m.status === 'confirmed' && changed ? 1 : m.corrected;
   await db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = ?, status = ?, corrected = ?,
     updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ?`)
     .bind(s.home, s.away, s.hpk, s.apk, s.forfeit, status, corrected, user.role === 'scorer' ? `スコア管理者（${user.name}）` : user.role === 'operator' ? `大会運営者（${user.name}）` : '本部', now(), m.id).run();

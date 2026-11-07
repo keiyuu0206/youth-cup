@@ -195,7 +195,7 @@ export function matchCard(m, cat, ctx) {
       h('span', null, m.label),
       m.forfeit && showScore ? h('span', { class: 'flag' }, '不戦勝') : null,
       m.time_changed ? h('span', { class: 'flag changed' }, '時間変更') : null,
-      m.corrected && m.status === 'confirmed' ? h('span', { class: 'flag' }, '修正あり') : null,
+      m.corrected && m.status === 'confirmed' ? h('span', { class: 'flag', title: '確定した後に、結果（得点）が訂正されました' }, '結果訂正') : null,
       status),
     row('home'), row('away'));
 }

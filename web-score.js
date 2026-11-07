@@ -123,9 +123,10 @@ export async function scoreApp(root, me) {
         teamLine(cat, cache, m, 'away', m.away_score, m.away_pk),
         m.updated_by ? h('div', { class: 'sc-by' }, `仮登録：${m.updated_by}${m.updated_at ? `（${formatUpdated(m.updated_at)}）` : ''}`) : null,
         h('div', { class: 'sc-actions' },
-          h('button', { class: 'btn btn-primary sc-ok', type: 'button', onclick: async () => {
+          h('button', { class: 'btn btn-primary sc-ok', type: 'button', onclick: async (e) => {
+            const btn = e.currentTarget; if (btn.disabled) return; btn.disabled = true; // 二度押しを防ぐ
             const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { home_score: m.home_score, away_score: m.away_score, home_pk: m.home_pk, away_pk: m.away_pk, confirm: true }), '承認しました');
-            if (r) reload();
+            if (r) reload(); else btn.disabled = false;
           } }, '承認'),
           h('button', { class: 'btn', type: 'button', onclick: () => editor(t, cat, m) }, '修正して承認'),
           h('button', { class: 'btn btn-ghost', type: 'button', onclick: async () => {
@@ -236,11 +237,15 @@ export async function scoreApp(root, me) {
       ko && v.h === v.a ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のときはPK戦の結果'),
         step('hp', `${sideInfo(m, 'home', cat, cache).text}（PK）`), step('ap', `${sideInfo(m, 'away', cat, cache).text}（PK）`)) : null,
       m.status === 'confirmed' ? h('p', { class: 'notice', style: { margin: 0 } }, `確定済みの結果（${m.home_score} - ${m.away_score}）を修正します。順位やトーナメントの組み合わせも自動で計算し直されます。`) : null,
-      h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async () => {
+      h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async (e) => {
+        const btn = e.currentTarget; if (btn.disabled) return; // 二度押しを防ぐ
         const tie = ko && v.h === v.a;
         if (tie && v.hp === v.ap) return toast('PK戦の結果で勝敗が決まるように入力してください', true);
         if (m.status === 'confirmed' && !(await confirmDialog('確定済みの結果を修正します', `${m.home_score} - ${m.away_score} → ${v.h} - ${v.a}${tie ? `（PK ${v.hp} - ${v.ap}）` : ''} に修正します。`, '修正する'))) return;
-        const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { home_score: v.h, away_score: v.a, home_pk: tie ? v.hp : null, away_pk: tie ? v.ap : null, confirm: true }), 'この結果で承認しました');
+        btn.disabled = true;
+        const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { home_score: v.h, away_score: v.a, home_pk: tie ? v.hp : null, away_pk: tie ? v.ap : null, confirm: true }));
+        btn.disabled = false;
+        if (r) toast(r.unchanged ? '同じ結果のため、変更はありません' : 'この結果で承認しました');
         if (r) { document.querySelector('.sheet-back')?.remove(); reload(); }
       } }, m.status === 'confirmed' ? 'この結果に修正（確定）' : 'この結果で承認（確定）'),
       isOp && m.status !== 'none' ? h('button', { class: 'btn btn-ghost btn-block', type: 'button', onclick: async () => {

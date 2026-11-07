@@ -2113,9 +2113,12 @@ async function tournamentView(root, id, navigate) {
       const tie = f.home_score !== '' && String(f.home_score) === String(f.away_score);
       const numIn = (key, cls, label) => h('input', { type: 'number', min: 0, max: 99, inputmode: 'numeric', class: cls, value: f[key], disabled: !editing || !ready || !!f.forfeit, 'aria-label': label,
         oninput: (e) => { f[key] = e.target.value; if (key === 'home_score' || key === 'away_score') { const pkNow = f.home_score !== '' && String(f.home_score) === String(f.away_score); if (pkNow !== tie) draw(); } } });
+      let saving = false; // 二度押しを防ぐ
       const save = async (confirm) => {
-        const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { ...f, forfeit: f.forfeit || null, confirm }), confirm ? '確定しました' : '保存しました');
-        if (r) await reload();
+        if (saving) return; saving = true;
+        const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { ...f, forfeit: f.forfeit || null, confirm }));
+        saving = false;
+        if (r) { toast(r.unchanged ? '同じ結果のため、変更はありません' : confirm ? '確定しました' : '保存しました'); await reload(); }
       };
       mount(row,
         h('div', { class: 'rl' },
