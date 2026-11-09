@@ -2,7 +2,7 @@ import { api } from './web-api.js';
 import { printParking } from './web-print.js';
 import { outlineWeb } from './web-outline.js';
 import { drawPoster, drawStandingsImage } from './web-poster.js';
-import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton } from './web-ui.js';
+import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton, saveImages } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin, setRefereeMode, refereeMode } from './web-views.js';
 
 export async function viewer(root, slug) {
@@ -384,12 +384,7 @@ function snsMode(t, cat, ctx) {
         ? drawPoster(canvas, t, cat, { kind: 'ranking', size, accent: 'lime', title: t.name, subtitle: `${cat.name} 最終結果`, footer, showTeamLogo: true, noWrap: true, myTeam: ctx.myTeam })
         : drawStandingsImage(canvas, t, cat, { size, title: t.name, subtitle: `${cat.name} 順位表`, footer, myTeam: ctx.myTeam });
       job.then(() => { img.src = canvas.toDataURL('image/png'); });
-      const save = () => canvas.toBlob((blob) => {
-        if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const a = h('a', { href: url, download: `${t.name}_${cat.name}_${st.kind === 'final' ? '最終結果' : '順位表'}.png`.replace(/[\\/:*?"<>|\s]+/g, '_') });
-        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
-      }, 'image/png');
+      const save = () => saveImages(canvas, `${t.name}_${cat.name}_${st.kind === 'final' ? '最終結果' : '順位表'}`);
       mount(back,
         h('div', { class: 'sns-bar' }, kinds.map(([k, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.kind === k), onclick: () => { st.kind = k; draw(); } }, label))),
         h('div', { class: 'sns-bar' },

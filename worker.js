@@ -78,6 +78,12 @@ async function body(req) {
   try { return await req.json(); } catch { return {}; }
 }
 
+// 忘れ物の写真（画面側でJPEGに圧縮して送る。上限はバナーと同じ）
+function checkPhoto(v) {
+  if (typeof v !== 'string' || !/^data:image\/(png|jpeg|webp);base64,/.test(v)) fail(400, '写真は PNG・JPEG・WebP の画像を選んでください');
+  if (v.length > MAX_BANNER) fail(400, '写真が大きすぎます。もう一度選び直してください');
+  return v;
+}
 const MAX_LOGO = 300_000;
 function checkLogo(v) {
   if (v == null || v === '') return null;
@@ -776,8 +782,9 @@ route('DELETE', '/api/admin/scorers/:sid', async ({ db, params, user }) => {
 
 // スコア管理者の画面用：担当する大会の一覧（承認待ちの件数つき）
 route('GET', '/api/score/tournaments', async ({ db, user }) => {
-  const all = (await db.prepare("SELECT id, slug, name, date, end_date, venue, status, owner_id FROM tournaments WHERE status != 'draft' ORDER BY date DESC").all()).results;
-  const list = all.filter((t) => canAccess(user, t));
+  // 準備中の大会も「準備中」として一覧に出す（開けるのは公開中・開催中・終了の大会だけ）
+  const all = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, owner_id FROM tournaments ORDER BY date DESC').all()).results;
+  const list = all.filter((t) => canAccess(user, t)).map((t) => ({ ...t, ready: t.status !== 'draft' }));
   const pend = list.length ? (await db.prepare(`SELECT c.tournament_id AS tid, COUNT(*) AS n FROM matches m JOIN categories c ON c.id = m.category_id
     WHERE m.status = 'provisional' GROUP BY c.tournament_id`).all()).results : [];
   const by = Object.fromEntries(pend.map((x) => [x.tid, x.n]));
@@ -1536,6 +1543,9 @@ route('POST', '/api/admin/categories/:cid/retime/undo', async ({ db, params, use
 
 // ---------- 管理者: 結果 ----------
 
+// リーグ戦として扱う試合（予選リーグと、決勝の段のリーグ戦）。引き分けがあり、PK戦は無い
+const isLeagueLike = (m) => m.stage === 'league' || /^R\d/.test(m.code || '');
+
 function validateScore(m, b, cfg) {
   if (b.forfeit === 'home' || b.forfeit === 'away') {
     const [w, l] = cfg.forfeitScore || [3, 0];
@@ -1546,12 +1556,12 @@ function validateScore(m, b, cfg) {
   if (home == null || away == null) fail(400, '両チームの得点を入力してください');
   let hpk = intOrNull(b.home_pk);
   let apk = intOrNull(b.away_pk);
-  if (m.stage === 'league' || home !== away) { hpk = null; apk = null; }
+  if (isLeagueLike(m) || home !== away) { hpk = null; apk = null; }
   return { home, away, hpk, apk, forfeit: null };
 }
 
 function requirePkIfNeeded(m, s) {
-  if (m.stage === 'knockout' && !s.forfeit && s.home === s.away && (s.hpk == null || s.apk == null || s.hpk === s.apk)) {
+  if (m.stage === 'knockout' && !isLeagueLike(m) && !s.forfeit && s.home === s.away && (s.hpk == null || s.apk == null || s.hpk === s.apk)) {
     fail(400, '同点のためPK戦の結果を入力してください（PKも同点では確定できません）');
   }
 }
@@ -1594,7 +1604,7 @@ route('POST', '/api/admin/categories/:cid/confirm', async ({ req, db, params, us
   const b = await body(req);
   const ids = Array.isArray(b.matchIds) ? b.matchIds : [];
   const { matches } = await loadCategoryData(db, c.id);
-  const needsPk = (m) => m.stage === 'knockout' && !m.forfeit && m.home_score === m.away_score && (m.home_pk == null || m.away_pk == null || m.home_pk === m.away_pk);
+  const needsPk = (m) => m.stage === 'knockout' && !isLeagueLike(m) && !m.forfeit && m.home_score === m.away_score && (m.home_pk == null || m.away_pk == null || m.home_pk === m.away_pk);
   const picked = matches.filter((m) => ids.includes(m.id) && m.status === 'provisional');
   const targets = picked.filter((m) => !needsPk(m));
   const skipped = picked.length - targets.length;
@@ -1733,7 +1743,7 @@ route('POST', '/api/admin/tournaments/:id/lost', async ({ req, db, params, user 
   const note = clip(b.note, 400);
   if (!note) fail(400, '忘れ物の内容を入力してください');
   await db.prepare('INSERT INTO lost_items (id, tournament_id, image, note, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .bind(uid(), t.id, b.image ? checkBanner(b.image) : null, note, 'open', now(), now()).run();
+    .bind(uid(), t.id, b.image ? checkPhoto(b.image) : null, note, 'open', now(), now()).run();
   await bump(db, t.id);
   return json({ ok: true });
 }, 'admin');

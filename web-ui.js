@@ -288,3 +288,91 @@ export function closeOverlays() {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   return true;
 }
+
+// ===== 画像の保存（スマホ・タブレットは共有の画面から「画像を保存」で写真へ。パソコンはダウンロード） =====
+const isMobileLike = () => /iPad|iPhone|iPod|Android/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+function dataUrlToFile(dataUrl, name) {
+  const [head, b64] = dataUrl.split(',');
+  const type = (head.match(/data:([^;]+)/) || [])[1] || 'image/jpeg';
+  const bin = atob(b64); const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new File([arr], name, { type });
+}
+const safeName = (s) => String(s).replace(/[\\/:*?"<>|\s]+/g, '_');
+function downloadFile(file) {
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a'); a.href = url; a.download = file.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+// canvases：保存するキャンバス（1枚または複数）、baseName：ファイル名のもと
+export async function saveImages(canvases, baseName) {
+  const list = Array.isArray(canvases) ? canvases : [canvases];
+  // 共有はタップの直後に呼ぶ必要があるため、画像の変換は同期で行う
+  const files = list.map((c, i) => dataUrlToFile(c.toDataURL('image/jpeg', 0.92), `${safeName(baseName)}${list.length > 1 ? `_${i + 1}` : ''}.jpg`));
+  if (isMobileLike() && navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files });
+      toast('保存しました（共有の画面で「画像を保存」を選ぶと、写真に入ります）');
+      return true;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false; // 共有の画面を閉じた
+      // タップから時間がたって共有できないときは、もう一度押してもらう
+      return new Promise((resolve) => {
+        const back = h('div', { class: 'modal-back' }, h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' },
+          h('h2', null, '画像の準備ができました'),
+          h('p', null, `${files.length}枚の画像を保存します。下のボタンを押して、共有の画面で「画像を保存」を選んでください。`),
+          h('div', { class: 'actions' },
+            h('button', { class: 'btn btn-ghost', type: 'button', onclick: () => { back.remove(); resolve(false); } }, 'やめる'),
+            h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => { back.remove(); try { await navigator.share({ files }); resolve(true); } catch { files.forEach(downloadFile); resolve(true); } } }, '写真に保存する'))));
+        document.body.append(back);
+      });
+    }
+  }
+  files.forEach((f, i) => setTimeout(() => downloadFile(f), i * 400));
+  toast(files.length > 1 ? `${files.length}枚の画像を保存しました` : '画像を保存しました');
+  return true;
+}
+
+// ===== 入力欄を押したら、キーボードに隠れないよう画面の中央へ移動（スマホ・タブレット） =====
+if (typeof document !== 'undefined' && typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0)) {
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || /^(file|checkbox|radio|button|submit)$/.test(el.type)) return;
+    const center = () => { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* 古い端末 */ } };
+    setTimeout(center, 320); // キーボードが出てから
+    if (window.visualViewport) {
+      const onResize = () => { center(); window.visualViewport.removeEventListener('resize', onResize); };
+      window.visualViewport.addEventListener('resize', onResize);
+      setTimeout(() => window.visualViewport.removeEventListener('resize', onResize), 1500);
+    }
+  });
+}
+
+// 得点の入力：0〜99の整数にそろえる（全角数字も半角に。先頭の0・小数点・記号は取り除く）
+export function cleanScore(v) {
+  const m = String(v ?? '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).match(/[0-9]+/);
+  const s = m ? m[0] : '';
+  if (s === '') return '';
+  return String(Math.min(99, parseInt(s, 10)));
+}
+
+// ===== 上部のボタン：パソコンでは横に並べ、スマホでは［メニュー］1つにまとめる =====
+// actions：[{ label, onClick } または { label, href }]、who：メニューの上に出す「ログイン中の人」
+export function headActions(actions, who) {
+  const list = actions.filter(Boolean);
+  const mk = (a, cls) => a.href
+    ? h('a', { class: cls, href: a.href, target: '_blank', rel: 'noopener', style: { textDecoration: 'none' } }, a.label)
+    : h('button', { class: cls, type: 'button', onclick: a.onClick }, a.label);
+  const open = () => {
+    const close = () => document.querySelector('.sheet-back')?.remove();
+    sheet({ title: 'メニュー', content: h('div', { class: 'head-menu-list' },
+      who ? h('p', { class: 'muted small', style: { margin: '0 0 6px' } }, who) : null,
+      list.map((a) => { const el = mk(a, 'btn btn-block'); if (!a.href) el.onclick = (e) => { close(); a.onClick(e); }; return el; })) });
+  };
+  return [
+    h('span', { class: 'head-actions' }, list.map((a) => mk(a, a.cls || 'btn btn-sm'))),
+    h('button', { class: 'btn btn-sm head-menu-btn', type: 'button', 'aria-label': 'メニューを開く', onclick: open },
+      h('span', { 'aria-hidden': 'true', style: { fontSize: '1.05em', lineHeight: 1 } }, '☰'), 'メニュー'),
+  ];
+}

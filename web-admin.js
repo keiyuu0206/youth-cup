@@ -3,8 +3,8 @@ const apiBase = api;
 import { openSnsChooser } from './web-poster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES } from './web-views.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions } from './web-ui.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -99,7 +99,8 @@ function knockoutPlanPanel(f, cat, redraw) {
     } }, '＋ トーナメントを追加')) : null;
 
   return h('div', { style: { marginTop: '16px' } },
-    h('h3', { style: { marginBottom: '8px' } }, '決勝トーナメント'),
+    h('h3', { style: { marginBottom: '8px' } }, '決勝（トーナメント・リーグ戦）'),
+    h('p', { class: 'muted small', style: { margin: '0 0 8px' } }, '下の一覧の［トーナメント］［リーグ戦］で、決勝の形を選べます。「予選リーグ → 決勝リーグ」にするときは、［リーグ戦］を選んでください。'),
     h('div', { class: 'grid-form' },
       h('label', { class: 'field', style: { gridColumn: '1 / -1' } }, h('span', null, '進み方'), h('select', { onchange: (e) => {
         const type = e.target.value;
@@ -119,8 +120,8 @@ function knockoutPlanPanel(f, cat, redraw) {
         h('strong', null, p.name),
         h('span', null, `${p.range}（${p.n}チーム${p.games ? `・総当たり${p.games}試合` : ''}）`),
         p.warn ? h('span', { class: 'pp-warn' }, p.warn) : h('span', { class: 'pp-rank' }, `${p.decided}を決定`),
-        // 段ごとにトーナメントかリーグ戦かを選ぶ（全チームで1つ・上位だけの場合は対象外）
-        ['split', 'split3', 'byrank'].includes(plan.type) && p.n >= 2 ? h('span', { class: 'pp-fmt', role: 'group', 'aria-label': `${p.name}の形式` },
+        // 段ごとにトーナメントかリーグ戦かを選ぶ（上位チームだけ・全チームで1つの決勝でも、決勝リーグにできる）
+        plan.type !== 'custom' && p.n >= 2 ? h('span', { class: 'pp-fmt', role: 'group', 'aria-label': `${p.name}の形式` },
           [['knockout', 'トーナメント'], ['league', 'リーグ戦']].map(([v, l]) => h('button', { type: 'button', 'aria-pressed': String(p.format === v),
             onclick: () => { plan.formats = { ...(plan.formats || {}) }; if (v === 'league') plan.formats[p.index] = 'league'; else delete plan.formats[p.index]; redraw(); } }, l))) : null)))),
     h('p', { class: 'muted small' }, '同じ組のチームができるだけ後で当たるように、組み合わせを自動で決めます。各組の上位1〜2チームが2・4・8組から進む場合は、クロス方式（A組1位 対 B組2位 など）になります。チーム数が2・4・8・16でないときは、上位の組の1位から順にシード（不戦）が入ります。'));
@@ -367,12 +368,15 @@ async function operatorDesk(root, path, navigate) {
   if (m) return tournamentView(root, m[1], navigate);
   let list = [];
   try { list = (await api('GET', '/api/score/tournaments')).tournaments || []; } catch (e) { return mount(root, adminHeader('大会運営', navigate), h('p', { class: 'empty' }, e.message)); }
-  if (list.length === 1) return navigate(`/admin/t/${list[0].id}`);
+  const ready = list.filter((t) => t.ready !== false);
+  if (ready.length === 1 && ready.length === list.length) return navigate(`/admin/t/${ready[0].id}`);
   mount(root, adminHeader('大会運営', navigate), h('main', { class: 'wrap wide' },
     h('h2', null, '担当の大会'),
-    list.length ? h('div', { class: 'op-list' }, list.map((t) => h('a', { class: 'panel op-card', href: `/admin/t/${t.id}`, onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
-      h('strong', null, t.name), h('span', { class: 'muted small' }, [t.date, t.venue].filter(Boolean).join('　')))))
-      : h('p', { class: 'empty' }, '担当の大会がありません（公開中・開催中の大会が表示されます）')));
+    list.length ? h('div', { class: 'op-list' }, list.map((t) => t.ready === false
+      ? h('div', { class: 'panel op-card is-draft' }, h('strong', null, t.name), h('span', { class: 'muted small' }, [t.date, '準備中（公開されると開けます）'].filter(Boolean).join('　')))
+      : h('a', { class: 'panel op-card', href: `/admin/t/${t.id}`, onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
+        h('strong', null, t.name), h('span', { class: 'muted small' }, [t.date, t.venue].filter(Boolean).join('　')))))
+      : h('p', { class: 'empty' }, '担当の大会がありません')));
 }
 
 // ログイン中の管理者（全体管理者 / 地域管理者）
@@ -473,14 +477,14 @@ function adminHeader(title, navigate, back) {
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
     h('span', { class: 'spacer' }),
     ME ? h('span', { class: 'me-chip', title: `ログインID：${ME.login_id}` }, ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
-    isSuperUser() ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: () => navigate('/admin/accounts') }, 'アカウント管理') : null,
-    ME && !isViewer() && !isOp() ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: () => navigate('/admin/scorers') }, 'アカウント追加') : null,
-    isOp() ? h('a', { class: 'btn btn-sm', href: MANUALS.scorer.href, target: '_blank', rel: 'noopener' }, '使い方')
-      : ME ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: openManuals }, 'マニュアル') : null,
-    isOp() ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { store.set('op:mobile', true); location.href = '/admin'; } }, 'スマホ表示') : null,
-    ME && ME.id !== 'root' ? h('button', { class: 'btn btn-sm', type: 'button', style: ghost, onclick: changePassword }, 'パスワード変更') : null,
-    h('button', { class: 'btn btn-sm', type: 'button', style: ghost,
-      onclick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } }, 'ログアウト')));
+    ...headActions([
+      isSuperUser() ? { label: 'アカウント管理', onClick: () => navigate('/admin/accounts') } : null,
+      ME && !isViewer() && !isOp() ? { label: 'アカウント追加', onClick: () => navigate('/admin/scorers') } : null,
+      isOp() ? { label: '使い方', href: MANUALS.scorer.href } : ME ? { label: 'マニュアル', onClick: openManuals } : null,
+      isOp() ? { label: 'スマホ表示', onClick: () => { store.set('op:mobile', true); location.href = '/admin'; } } : null,
+      ME && ME.id !== 'root' ? { label: 'パスワード変更', onClick: changePassword } : null,
+      { label: 'ログアウト', onClick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } },
+    ], ME ? `ログイン中：${ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者'}（${ME.id === 'root' ? ME.login_id : ME.name}）` : '')));
 }
 
 function changePassword() {
@@ -535,7 +539,7 @@ async function scorersView(root, navigate) {
     h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '担当する大会（選ばなければ、すべての大会）'),
     tournaments.length ? h('div', { class: 'scope-list' }, tournaments.map((t) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: f.tournament_ids.includes(t.id), onchange: (e) => { f.tournament_ids = e.target.checked ? [...f.tournament_ids, t.id] : f.tournament_ids.filter((x) => x !== t.id); } }),
-      `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`))) : h('p', { class: 'muted small' }, '大会がまだありません'));
+      `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`, t.status === 'draft' ? h('span', { class: 'tag', style: { marginLeft: '6px' } }, '準備中：公開すると担当者の画面で開けます') : null))) : h('p', { class: 'muted small' }, '大会がまだありません'));
   const ROLE = { scorer: 'スコア管理者', operator: '大会運営者' };
   const ROLE_DESC = {
     scorer: 'スコア（試合結果）の登録に特化した権限です。結果の入力ができます。確定済みの結果の修正や、設定・チーム・日程の変更はできません。',
@@ -935,6 +939,19 @@ async function tournamentView(root, id, navigate) {
     const big = done.filter((m) => !m.forfeit).sort((a, b) => (b.home_score + b.away_score) - (a.home_score + a.away_score))[0];
     const recent = done.slice().sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')) || absMin(cfg, b) - absMin(cfg, a)).slice(0, 8);
     const go = (sub) => { st.sub = sub; store.set(`a:${id}:sub`, sub); render(); };
+    // 結果の報告待ち：開催中で、終わる時刻を過ぎたのに結果が確定していない試合
+    const d0 = new Date(); const today = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+    const nowM = d0.getHours() * 60 + d0.getMinutes();
+    const endOf = (m) => m.start_min + matchLengthFor(cfg, m);
+    const late = t.status === 'live' ? all.filter((m) => m.status !== 'confirmed' && m.home_team_id && m.away_team_id && (() => {
+      const date = dayDate(cat, dayOf(cfg, m.slot), t);
+      return date && (date < today || (date === today && nowM >= endOf(m)));
+    })()).sort((a, b) => absMin(cfg, a) - absMin(cfg, b)) : [];
+    // 連戦：同じチームの次の試合が、この試合の終わりから30分以内に始まる
+    const backToBack = (m) => [m.home_team_id, m.away_team_id].filter((tid) => all.some((x) => x.id !== m.id && (x.home_team_id === tid || x.away_team_id === tid)
+      && dayOf(cfg, x.slot) === dayOf(cfg, m.slot) && x.start_min >= endOf(m) - 1 && x.start_min - endOf(m) <= 15));
+    const lineText = () => [`【${t.name}】結果の報告のお願い`, '次の試合の結果がまだ届いていません。試合をしたチームは、本部のLINEへ結果の報告をお願いします。', '',
+      ...late.map((m) => `・${toHHMM(m.start_min)} ${courtName(cfg, m.court)}　${nm(m, 'home')} − ${nm(m, 'away')}`), '', '※連戦のチームは、次の試合の前に報告してください。'].join('\n');
     const card = (title, ...kids) => h('section', { class: 'dash-card' }, h('h3', null, title), ...kids);
     const scoreText = (m) => (m.status === 'confirmed' ? `${m.home_score} - ${m.away_score}${m.home_pk != null ? `（PK${m.home_pk}-${m.away_pk}）` : ''}` : 'vs');
     return h('div', { class: 'dash' },
@@ -946,6 +963,21 @@ async function tournamentView(root, id, navigate) {
         h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, 'PDFで出力'),
         ro() ? null : h('button', { class: 'btn btn-danger', type: 'button', onclick: () => openWithdraw(t, cat) }, '棄権・キャンセル')),
       h('div', { class: 'dash-grid' },
+        t.status === 'live' ? card(`結果の報告待ち（${late.length}試合）`,
+          late.length ? [
+            h('div', { class: 'dash-recent' }, late.slice(0, 12).map((m) => {
+              const b2b = backToBack(m);
+              const prevDay = dayDate(cat, dayOf(cfg, m.slot), t) < today;
+              const mins = Math.max(0, nowM - endOf(m));
+              const elapsed = prevDay ? '前日の試合' : mins >= 60 ? `${Math.floor(mins / 60)}時間${mins % 60 ? `${mins % 60}分` : ''}経過` : `${mins}分経過`;
+              return h('div', { class: 'dash-m late' }, h('span', { class: 'num' }, toHHMM(m.start_min)), h('span', null, `${courtName(cfg, m.court)}　${nm(m, 'home')} - ${nm(m, 'away')}`),
+                m.status === 'provisional' ? h('em', null, '承認待ち') : h('em', { class: 'late' }, elapsed),
+                b2b.length ? h('em', { class: 'b2b' }, `連戦：${b2b.map((x) => (cache.teams[x] || {}).name).join('・')}`) : null);
+            })),
+            h('div', { class: 'row', style: { gap: '8px' } },
+              h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => copyText(lineText()) }, 'LINE用の催促文をコピー'),
+              h('button', { class: 'btn btn-sm', type: 'button', onclick: () => go('results') }, '結果を入力'))]
+            : h('p', { class: 'muted small', style: { margin: 0 } }, '時間を過ぎて結果が届いていない試合はありません')) : null,
         card('試合の進み具合',
           h('div', { class: 'dash-big' }, h('b', null, `${rate}`), h('span', null, '%'), h('small', null, `${done.length} / ${all.length} 試合が確定`)),
           h('div', { class: 'dash-bar' }, h('i', { style: { width: `${rate}%` } })),
@@ -2109,10 +2141,11 @@ async function tournamentView(root, id, navigate) {
     const row = h('div', { class: `result-row${isOverdue ? ' overdue' : ''}${m.status === 'provisional' ? ' provisional' : ''}${m.ref_conflict ? ' conflict' : ''}` });
 
     const draw = () => {
-      const isKo = m.stage === 'knockout';
+      const isKo = m.stage === 'knockout' && !isRankLeague(m); // 決勝の段のリーグ戦は引き分けあり（PK戦なし）
       const tie = f.home_score !== '' && String(f.home_score) === String(f.away_score);
-      const numIn = (key, cls, label) => h('input', { type: 'number', min: 0, max: 99, inputmode: 'numeric', class: cls, value: f[key], disabled: !editing || !ready || !!f.forfeit, 'aria-label': label,
-        oninput: (e) => { f[key] = e.target.value; if (key === 'home_score' || key === 'away_score') { const pkNow = f.home_score !== '' && String(f.home_score) === String(f.away_score); if (pkNow !== tie) draw(); } } });
+      const numIn = (key, cls, label) => h('input', { type: 'text', inputmode: 'numeric', pattern: '[0-9]*', maxlength: 2, autocomplete: 'off', class: cls, value: f[key], disabled: !editing || !ready || !!f.forfeit, 'aria-label': label,
+        onfocus: (e) => e.target.select(),
+        oninput: (e) => { const c = cleanScore(e.target.value); if (e.target.value !== c) e.target.value = c; f[key] = c; if (key === 'home_score' || key === 'away_score') { const pkNow = f.home_score !== '' && String(f.home_score) === String(f.away_score); if (pkNow !== tie) draw(); } } });
       let saving = false; // 二度押しを防ぐ
       const save = async (confirm) => {
         if (saving) return; saving = true;

@@ -1,6 +1,6 @@
 // 結果一覧（ポスター）：最終順位・参加チームの一覧を、SNS用の画像（PNG）や PDF にする
 // ブラウザの Canvas で直接描く（外部のサービスは使わない）
-import { h, mount, modal, toast, run, resizeBanner } from './web-ui.js';
+import { h, mount, modal, toast, run, resizeBanner, saveImages } from './web-ui.js';
 import { api } from './web-api.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayLabel, isRankLeague, winnerSide } from './web-views.js';
 import { runPrint } from './web-print.js';
@@ -111,13 +111,15 @@ export async function drawPoster(canvas, t, cat, o) {
   // 縦に余裕があるときは、一覧を縦の中央に置く
   const top2 = top + Math.max(0, ((bottom - top) - rowH * perCol) / 2) * 0.8;
   const colGap = 36 * u;
-  const colW = (W - pad * 2 - colGap * (cols - 1)) / cols;
+  // 1列のときは、横に広がりすぎないよう幅を抑えて中央に置く
+  const colW = cols === 1 ? Math.min(W - pad * 2, 780 * u) : (W - pad * 2 - colGap * (cols - 1)) / cols;
+  const left = cols === 1 ? (W - colW) / 2 : pad;
   const fs = Math.max(12 * u, Math.min(38 * u, rowH * 0.5));
   const noW = fs * 1.8, logoS = Math.min(rowH * 0.66, fs * 1.35);
   const logos = await Promise.all(rows.map((r) => (o.showTeamLogo ? loadImg(r.team.logo) : null)));
   rows.forEach((r, i) => {
     const c = Math.floor(i / perCol), k = i % perCol;
-    const x = pad + c * (colW + colGap), cy = top2 + k * rowH + rowH / 2;
+    const x = left + c * (colW + colGap), cy = top2 + k * rowH + rowH / 2;
     if (o.myTeam && r.team.id === o.myTeam) { ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(x, cy - rowH / 2 + 2, colW, rowH - 4); }
     // 区切りの線
     ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = Math.max(1, 1.5 * u);
@@ -219,17 +221,7 @@ export function openResultPoster(t, categories, catId, opts = {}) {
         runPrint(doc, fileBase(), '@page { size: A4 portrait; margin: 0; }');
         return true;
       } },
-      { label: '画像を保存（PNG）', kind: 'btn-primary', onClick: () => {
-        canvas.toBlob((blob) => {
-          if (!blob) { toast('画像を作れませんでした', true); return; }
-          const url = URL.createObjectURL(blob);
-          const a = h('a', { href: url, download: `${fileBase()}.png` });
-          document.body.append(a); a.click(); a.remove();
-          setTimeout(() => URL.revokeObjectURL(url), 5000);
-          toast('画像を保存しました（スマホでは、開いた画像を長押しして保存できます）');
-        }, 'image/png');
-        return true;
-      } },
+      { label: '画像を保存', kind: 'btn-primary', onClick: () => { saveImages(canvas, fileBase()); return true; } },
     ],
   });
   redraw();
@@ -314,12 +306,13 @@ export async function drawMatchPoster(canvas, t, cat, o, page = 0) {
   const ctx = canvas.getContext('2d');
   const accent = (MATCH_ACCENTS[o.accent] || MATCH_ACCENTS.cyan)[1];
   const all = matchesOf(cat, o);
-  const per = Math.max(3, Math.min(8, Number(o.perPage) || 5));
+  const per = o.perPage === 'all' ? Math.max(3, all.length) : Math.max(3, Math.min(8, Number(o.perPage) || 5));
   const pages = Math.max(1, Math.ceil(all.length / per));
   const list = all.slice(page * per, page * per + per);
   const sponsors = (t.sponsors || []).filter((sp) => sp.img);
   const footH = sponsors.length ? 120 : 70;
-  const topH = 600;
+  // 試合が多いときは、上部（写真・見出し）を低くして試合のカードに場所を回す
+  const topH = per > 6 ? Math.max(420, 600 - (per - 6) * 30) : 600;
   // 全体の背景
   ctx.fillStyle = '#0b0e0d'; ctx.fillRect(0, 0, W, H);
   ctx.save(); ctx.globalAlpha = 0.05; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
@@ -432,7 +425,7 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
   const cats = categories.filter((c) => c.matches.length);
   if (!cats.length) { toast('日程がまだありません', true); return; }
   const accKeys = Object.keys(MATCH_ACCENTS);
-  const o = { catId: (cats.find((c) => c.id === catId) || cats[0]).id, round: 'all', onlyDone: true, perPage: 5, showTeamLogo: true, showLogo: false, page: 0 };
+  const o = { catId: (cats.find((c) => c.id === catId) || cats[0]).id, round: 'all', onlyDone: true, perPage: 'all', showTeamLogo: true, showLogo: false, page: 0 };
   const photos = () => ((t.settings || {}).snsPhotos || {});
   const reset = () => {
     const cat = cats.find((c) => c.id === o.catId);
@@ -463,7 +456,7 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
     const r = await paint((c) => drawMatchPoster(c, t, cat, o, o.page));
     if (!r) return;
     total = r.pages;
-    info.textContent = `${r.count}試合・${r.pages}枚（1枚に${o.perPage}試合まで）`;
+    info.textContent = o.perPage === 'all' ? `${r.count}試合を1枚にまとめています` : `${r.count}試合・${r.pages}枚（1枚に${o.perPage}試合まで）`;
     draw(true);
   };
   const sel = (label, key, opts, after) => h('label', { class: 'field' }, h('span', null, label), h('select', { onchange: (e) => { o[key] = e.target.value; if (after) after(); draw(); redraw(); } },
@@ -506,7 +499,7 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
       sel('出力の範囲', 'scope', sc.map((x) => [x.key, x.label]), () => { o.round = 'all'; o.page = 0; o.scopeText = (sc.find((x) => x.key === o.scope) || {}).label || ''; const ms = matchesOf(cat, { ...o, onlyDone: false }); o.dateText = [...new Set(ms.map((m) => dayOf(cat.config, m.slot)))].map((d) => dayLabel(cat, d, t, true)).join('・'); }),
       rounds.length > 1 ? sel('節', 'round', [['all', 'すべての節'], ...rounds.map((r) => [r, `第${r}節`])], () => { o.page = 0; }) : null,
       chk('確定した試合だけ', 'onlyDone', () => { o.page = 0; }),
-      sel('1枚の試合数', 'perPage', [3, 4, 5, 6, 7, 8].map((n) => [n, `${n}試合`]), () => { o.page = 0; }),
+      sel('1枚の試合数', 'perPage', [['all', 'すべて（1枚に収める）'], ...[3, 4, 5, 6, 7, 8].map((n) => [n, `${n}試合ずつ（複数枚）`])], () => { o.page = 0; }),
       sel('アクセントの色', 'accent', Object.entries(MATCH_ACCENTS).map(([k, v]) => [k, v[0]])),
       txt('大会名', 'title'), txt('大きな文字（カテゴリ）', 'big'), txt('範囲の文字', 'scopeText'), txt('日付', 'dateText'),
       !canPhoto ? h('p', { class: 'muted small', style: { margin: 0 } }, o.photoUrl ? `写真：大会の管理者が登録した写真を使います（${cat.name}）` : '写真：大会の管理者が登録すると、上部に表示されます') :
@@ -524,10 +517,6 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
     const cat = cats.find((c) => c.id === o.catId);
     return `${t.name}_${cat.name}_${o.scopeText}`.replace(/[\\/:*?"<>|\s]+/g, '_');
   };
-  const savePng = (cv, name) => new Promise((resolve) => cv.toBlob((blob) => {
-    if (blob) { const url = URL.createObjectURL(blob); const a = h('a', { href: url, download: name }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000); }
-    resolve(!!blob);
-  }, 'image/png'));
   modal({
     title: '試合結果（SNS画像）',
     content: body,
@@ -535,19 +524,12 @@ export function openMatchPoster(t, categories, catId, opts = {}) {
       { label: '閉じる', kind: 'btn-ghost' },
       { label: 'すべて保存', kind: '', onClick: async () => {
         const cat = cats.find((c) => c.id === o.catId);
-        for (let pg = 0; pg < total; pg++) {
-          const cv = h('canvas'); await drawMatchPoster(cv, t, cat, o, pg);
-          await savePng(cv, `${base()}${total > 1 ? `_${pg + 1}` : ''}.png`);
-          await new Promise((r) => setTimeout(r, 400));
-        }
-        toast(`${total}枚の画像を保存しました`);
+        const list = [];
+        for (let pg = 0; pg < total; pg++) { const cv = h('canvas'); await drawMatchPoster(cv, t, cat, o, pg); list.push(cv); }
+        await saveImages(list, base());
         return true;
       } },
-      { label: 'この1枚を保存', kind: 'btn-primary', onClick: async () => {
-        await savePng(canvas, `${base()}${total > 1 ? `_${o.page + 1}` : ''}.png`);
-        toast('画像を保存しました（スマホでは、開いた画像を長押しして保存できます）');
-        return true;
-      } },
+      { label: 'この1枚を保存', kind: 'btn-primary', onClick: () => { saveImages(canvas, `${base()}${total > 1 ? `_${o.page + 1}` : ''}`); return true; } },
     ],
   });
   redraw();
@@ -644,9 +626,39 @@ export function openSnsChooser(t, categories, catId, opts = {}) {
     content: h('div', { class: 'stack' },
       h('button', { class: 'btn btn-primary btn-block', type: 'button', onclick: pick(() => openMatchPoster(t, categories, catId, opts)) }, '試合結果（組ごと・回戦ごと）'),
       h('p', { class: 'muted small', style: { margin: 0 } }, '予選リーグの組ごと、決勝トーナメントの1回戦・準決勝などの回戦ごとに、試合結果の画像を作ります。'),
+      h('button', { class: 'btn btn-block', type: 'button', onclick: pick(() => openStandingsPoster(t, categories, catId)) }, '予選リーグの順位表'),
       h('button', { class: 'btn btn-block', type: 'button', onclick: pick(() => openResultPoster(t, categories, catId, { kind: 'ranking' })) }, '最終結果（順位の一覧）'),
       h('button', { class: 'btn btn-block', type: 'button', onclick: pick(() => openResultPoster(t, categories, catId, { kind: 'teams' })) }, '参加チーム一覧'),
       h('p', { class: 'muted small', style: { margin: 0 } }, '最終順位や参加チームを一覧にした画像（PDFも可）を作ります。')),
     actions: [{ label: '閉じる', kind: 'btn-ghost' }],
   });
+}
+
+
+// 予選リーグの順位表（SNS画像）：すべての組を1枚に。管理画面・大会運営者の［SNS画像］から
+export function openStandingsPoster(t, categories, catId) {
+  const cats = categories.filter((c) => Object.keys(c.standings || {}).length);
+  if (!cats.length) { toast('予選リーグの順位表がありません', true); return; }
+  const o = { catId: (cats.find((c) => c.id === catId) || cats[0]).id, size: 'sns', accent: 'lime' };
+  const defaults = () => { const cat = cats.find((c) => c.id === o.catId); o.title = t.name; o.subtitle = `${cat.name} 予選リーグ 順位表`; o.footer = [t.venue, t.date].filter(Boolean).join('　'); };
+  defaults();
+  const canvas = h('canvas', { class: 'poster-canvas' });
+  const paint = latestPainter(canvas);
+  const body = h('div', { class: 'poster' });
+  const redraw = () => { const cat = cats.find((c) => c.id === o.catId); paint((c) => drawStandingsImage(c, t, cat, o)); };
+  const sel = (label, key, opts, after) => h('label', { class: 'field' }, h('span', null, label), h('select', { onchange: (e) => { o[key] = e.target.value; if (after) after(); draw(); redraw(); } },
+    opts.map(([v, l]) => h('option', { value: v, selected: o[key] === v }, l))));
+  const txt = (label, key) => h('label', { class: 'field' }, h('span', null, label), h('input', { type: 'text', value: o[key], oninput: (e) => { o[key] = e.target.value; redraw(); } }));
+  const draw = () => mount(body, h('div', { class: 'poster-preview' }, canvas), h('div', { class: 'poster-form' },
+    cats.length > 1 ? sel('カテゴリ', 'catId', cats.map((c) => [c.id, c.name]), defaults) : null,
+    sel('形', 'size', [['sns', 'SNS用（縦 4:5）'], ['square', '正方形（1:1）'], ['story', 'ストーリー（9:16）']]),
+    sel('アクセントの色', 'accent', Object.entries(ACCENTS).map(([k, v]) => [k, v[0]])),
+    txt('タイトル', 'title'), txt('サブタイトル', 'subtitle'), txt('下部の文字', 'footer'),
+    h('p', { class: 'muted small', style: { margin: 0 } }, 'すべての組が1枚に収まるよう、列の数と文字の大きさを自動で調整します。')));
+  draw();
+  modal({ title: '予選リーグの順位表（SNS画像）', content: body, actions: [
+    { label: '閉じる', kind: 'btn-ghost' },
+    { label: '画像を保存', kind: 'btn-primary', onClick: () => { const cat = cats.find((c) => c.id === o.catId); saveImages(canvas, `${t.name}_${cat.name}_予選順位表`); return true; } },
+  ] });
+  redraw();
 }

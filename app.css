@@ -1553,3 +1553,27 @@ body.has-bottom-nav { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 11
 .pk-team.has-logo .pk-team-fit > .t { text-align: left; }
 .pk-team.has-logo { padding: 0 6mm; }
 .pk-team.has-logo .pk-team-fit > .t { text-align: center; }
+
+/* 連続タップの遅れを無くす（ダブルタップでの拡大を止める） */
+button, .btn, .chip-btn, .sc-pm, a, input, select, label { touch-action: manipulation; }
+/* ダッシュボード：結果の報告待ち */
+.dash-card:has(.dash-m.late) { border-color: var(--ink); grid-column: 1 / -1; }
+.dash-m em.late { background: var(--live-soft); color: #b91c1c; }
+.dash-m em.b2b { background: var(--surface-2); color: var(--ink); }
+
+/* 担当者の画面：準備中の大会（開けない） */
+.sc-tcard.is-draft, .op-card.is-draft { opacity: 0.55; cursor: default; background: var(--surface-2); }
+
+/* 上部のボタン：スマホでは［メニュー］にまとめる */
+.head-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.head-menu-btn { display: none; gap: 6px; flex: none; }
+.head-menu-list { display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 760px) {
+  .site-head:not(.sc-head) .head-actions, .site-head:not(.sc-head) .me-chip { display: none; }
+  .site-head:not(.sc-head) .head-menu-btn { display: inline-flex; }
+  .site-head h1 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@media (max-width: 600px) {
+  .sc-head .head-actions { display: none; }
+  .sc-head .head-menu-btn { display: inline-flex; }
+}
