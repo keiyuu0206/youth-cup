@@ -1635,3 +1635,22 @@ button, .btn, .chip-btn, .sc-pm, a, input, select, label { touch-action: manipul
 .sc-next-teams span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; }
 .sc-row { grid-template-columns: 66px minmax(0, 1fr) auto auto; }
 .sc-rtime { white-space: nowrap; font-size: 0.9rem; }
+
+/* ===== スマホの上部：黒帯で引き締める ===== */
+@media (max-width: 760px) {
+  .site-head { background: #0c0a09; color: #fafaf9; border-bottom: 0; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06); }
+  .site-head .wrap { min-height: 56px; padding-top: 6px; padding-bottom: 6px; }
+  .site-head h1, .site-head a, .sc-who, .sc-who strong { color: #fafaf9; }
+  .sc-who small { color: #a8a29e; }
+  /* マーク：黒帯の上はライム地に黒 */
+  .site-head h1::before, .sc-who strong::before { background-color: var(--lime); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230c0a09' stroke-width='2.6'%3E%3Cpath d='M6 5h7a6 6 0 0 1 0 12H6z'/%3E%3Cpath d='M6 11h7'/%3E%3C/svg%3E"); }
+  /* ボタン：黒帯の上は、細い白線のピル */
+  .site-head .btn, .site-head .sc-mini, .site-head .head-menu-btn { background: transparent; color: #fafaf9; border: 1px solid rgba(250, 250, 249, 0.28); }
+  .site-head .btn:hover, .site-head .head-menu-btn:active { background: rgba(250, 250, 249, 0.1); }
+  .site-head .btn-primary { background: var(--lime); color: #0c0a09; border-color: var(--lime); }
+  .site-head .back, .site-head .link-btn { color: #fafaf9; }
+  /* 上部が黒くなった分、絞り込みが上部の下にぴったり付くように */
+  .sc-filterbar { top: 56px; }
+}
+.sc-head .wrap { justify-content: space-between; }
+.sc-head .sc-who { margin-right: auto; align-items: flex-start; text-align: left; }

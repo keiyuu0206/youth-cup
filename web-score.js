@@ -3,7 +3,7 @@
 //  大会運営者　：スコアの登録・修正（確定済みの修正・取り消しを含む）、SNS画像の出力、忘れ物の登録
 import { api } from './web-api.js';
 import { openMatchPoster, openResultPoster, openStandingsPoster } from './web-poster.js';
-import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
@@ -238,7 +238,7 @@ export async function scoreApp(root, me) {
       h('label', { class: 'field' }, h('span', null, '写真（任意・その場で撮影、または撮っておいた写真を選べます）'),
         h('input', { type: 'file', accept: 'image/*', onchange: async (e) => {
           const file = e.target.files && e.target.files[0]; if (!file) return;
-          const v = await run(() => resizeBanner(file, 1280, 1280)); if (v) { f.image = v; draw3(); }
+          const v = await run(() => resizePhoto(file)); if (v) { f.image = v; draw3(); }
         } })),
       f.image ? h('img', { src: f.image, alt: '', style: { maxWidth: '100%', borderRadius: '10px' } }) : null,
       h('label', { class: 'field' }, h('span', null, '内容・見つかった場所'),

@@ -376,3 +376,42 @@ export function headActions(actions, who) {
       h('span', { 'aria-hidden': 'true', style: { fontSize: '1.05em', lineHeight: 1 } }, '☰'), 'メニュー'),
   ];
 }
+
+// ===== 写真の縮小（忘れ物など）：iPhone・iPadの高画素の写真でも失敗しにくいように =====
+// 1. メモリを使いすぎない読み込み（createImageBitmap）→ だめなら従来の読み込み
+// 2. 長い辺を maxSide に縮め、上限（limit）に収まるまで画質と大きさを段階的に下げて JPEG にする
+async function loadBitmap(file) {
+  if (window.createImageBitmap) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { /* 下の方法で読み込む */ }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('写真を読み込めませんでした。別の写真を選ぶか、カメラで撮り直してください')); };
+    img.src = url;
+  });
+}
+export async function resizePhoto(file, maxSide = 1280, limit = 450_000) {
+  if (!file) return null;
+  if (file.type && !/^image\//.test(file.type)) throw new Error('写真（画像）のファイルを選んでください');
+  const bmp = await loadBitmap(file);
+  const W0 = bmp.width, H0 = bmp.height;
+  if (!W0 || !H0) throw new Error('写真を読み込めませんでした。別の写真を選んでください');
+  let side = maxSide;
+  for (let tries = 0; tries < 6; tries++) {
+    const scale = Math.min(1, side / Math.max(W0, H0));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(W0 * scale)); c.height = Math.max(1, Math.round(H0 * scale));
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    for (const q of [0.82, 0.7, 0.58, 0.46]) {
+      const out = c.toDataURL('image/jpeg', q);
+      if (out.length <= limit) { if (bmp.close) bmp.close(); return out; }
+    }
+    side = Math.round(side * 0.75); // まだ大きいときは、さらに小さくする
+  }
+  if (bmp.close) bmp.close();
+  throw new Error('写真を小さくできませんでした。別の写真を選んでください');
+}

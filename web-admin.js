@@ -3,7 +3,7 @@ const apiBase = api;
 import { openSnsChooser } from './web-poster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague } from './web-views.js';
 
 const STATUS = {
@@ -1296,7 +1296,7 @@ async function tournamentView(root, id, navigate) {
       content: h('div', { class: 'stack' },
         h('div', null, h('span', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '写真'), prev,
           h('div', { class: 'row' },
-            h('input', { type: 'file', accept: 'image/*', 'aria-label': '忘れ物の写真', onchange: async (e) => { const v = await run(() => resizeBanner(e.target.files[0], 1200, 1200)); if (v) { f.image = v; drawPrev(); } } }),
+            h('input', { type: 'file', accept: 'image/*', 'aria-label': '忘れ物の写真', onchange: async (e) => { const v = await run(() => resizePhoto(e.target.files[0])); if (v) { f.image = v; drawPrev(); } } }),
             it && it.img ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.image = null; drawPrev(); } }, '写真を外す') : null)),
         h('label', { class: 'field' }, h('span', null, '申し送り事項'), (() => { const a = h('textarea', { rows: 4, placeholder: '例：Bコート横のベンチに黒いすね当て（片方）。本部でお預かりしています。', oninput: (e) => { f.note = e.target.value; } }); a.value = f.note; return a; })()),
         it ? h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {

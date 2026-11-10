@@ -1755,7 +1755,7 @@ route('PATCH', '/api/admin/lost/:lid', async ({ req, db, params, user }) => {
   const b = await body(req);
   await db.prepare('UPDATE lost_items SET note = ?, image = ?, status = ?, updated_at = ? WHERE id = ?').bind(
     b.note !== undefined ? clip(b.note, 400) || it.note : it.note,
-    b.image === null ? null : b.image ? checkBanner(b.image) : it.image,
+    b.image === null ? null : b.image ? checkPhoto(b.image) : it.image,
     b.status === 'returned' || b.status === 'open' ? b.status : it.status,
     now(), it.id).run();
   await bump(db, it.tournament_id);
