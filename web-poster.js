@@ -55,10 +55,23 @@ function background(ctx, W, H) {
 }
 
 // 文字が幅に収まるよう、文字の大きさを下げる
+// 文字の幅：iPhone・iPad（Safari）では、絵文字（♾️ など）を含む文字列の幅が正しく測れないことがあるため、
+// 絵文字を同じくらいの幅の文字に置き換えて測る
+const EMOJI = /\p{Extended_Pictographic}/gu;
+const measureW = (ctx, text) => ctx.measureText(String(text ?? '').replace(/\uFE0F/g, '').replace(EMOJI, '■')).width;
+// 中央そろえで描く：ブラウザの中央そろえに頼らず、自分で測った幅から左端を決めて描く（Safariで右にずれるのを防ぐ）
+function fillCenter(ctx, text, cx, y) {
+  const w = measureW(ctx, text);
+  const a = ctx.textAlign;
+  ctx.textAlign = 'left';
+  ctx.fillText(String(text ?? ''), cx - w / 2, y);
+  ctx.textAlign = a;
+}
+
 function fitFont(ctx, text, maxW, size, weight = 900, min = 10) {
   let s = size;
   ctx.font = `${weight} ${s}px ${FONT}`;
-  while (ctx.measureText(text).width > maxW && s > min) { s -= 1; ctx.font = `${weight} ${s}px ${FONT}`; }
+  while (measureW(ctx, text) > maxW && s > min) { s -= 1; ctx.font = `${weight} ${s}px ${FONT}`; }
   return s;
 }
 
@@ -93,13 +106,13 @@ export async function drawPoster(canvas, t, cat, o) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`;
   ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 12 * u;
-  ctx.fillText(o.title, W / 2, y + ts * 0.25); ctx.shadowBlur = 0;
+  fillCenter(ctx, o.title, W / 2, y + ts * 0.25); ctx.shadowBlur = 0;
   y += ts * 0.25 + 64 * u;
   if (o.subtitle) {
     const ss = fitFont(ctx, o.subtitle, W - pad * 2, 46 * u, 900, 18 * u);
     ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`;
-    ctx.fillText(o.subtitle, W / 2, y); y += 40 * u;
+    fillCenter(ctx, o.subtitle, W / 2, y); y += 40 * u;
   }
   // 一覧
   const rows = rowsOf(cat, o.kind);
@@ -160,7 +173,7 @@ export async function drawPoster(canvas, t, cat, o) {
   });
   // 下部（大会名・カテゴリ）
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 ${18 * u}px ${FONT}`;
-  ctx.fillText(o.footer || '', W / 2, H - 28 * u);
+  fillCenter(ctx, o.footer || '', W / 2, H - 28 * u);
   return { rows: n, cols };
 }
 
@@ -365,7 +378,7 @@ export async function drawMatchPoster(canvas, t, cat, o, page = 0) {
   const imgs = await Promise.all(list.flatMap((m) => [m.home_team_id, m.away_team_id]).map((id) => (o.showTeamLogo && tm[id] ? loadImg(tm[id].logo) : null)));
   if (!list.length) {
     ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `700 34px ${FONT}`;
-    ctx.fillText(o.onlyDone ? 'まだ確定した試合がありません' : '試合がありません', W / 2, (areaTop0 + areaBottom) / 2);
+    fillCenter(ctx, o.onlyDone ? 'まだ確定した試合がありません' : '試合がありません', W / 2, (areaTop0 + areaBottom) / 2);
   }
   list.forEach((m, i) => {
     const top = areaTop + i * rowH + 6, hgt = rowH - 12, cy = top + hgt / 2;
@@ -414,7 +427,7 @@ export async function drawMatchPoster(canvas, t, cat, o, page = 0) {
   } else {
     ctx.fillStyle = accent; ctx.fillRect(0, H - footH, W, 6);
     ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `700 24px ${FONT}`;
-    ctx.fillText(o.footer || '', W / 2, H - footH / 2 + 3);
+    fillCenter(ctx, o.footer || '', W / 2, H - footH / 2 + 3);
   }
   return { count: all.length, pages };
 }
@@ -551,9 +564,9 @@ export async function drawStandingsImage(canvas, t, cat, o = {}) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   const pad = 48;
   const ts = fitFont(ctx, o.title || t.name, W - pad * 2, 64, 900, 22);
-  ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`; ctx.fillText(o.title || t.name, W / 2, 40 + ts);
+  ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`; fillCenter(ctx, o.title || t.name, W / 2, 40 + ts);
   const ss = fitFont(ctx, o.subtitle || `${cat.name} 順位表`, W - pad * 2, 38, 900, 16);
-  ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`; ctx.fillText(o.subtitle || `${cat.name} 順位表`, W / 2, 40 + ts + 18 + ss);
+  ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`; fillCenter(ctx, o.subtitle || `${cat.name} 順位表`, W / 2, 40 + ts + 18 + ss);
   const top = 40 + ts + 18 + ss + 34, bottom = H - 56;
   // 列の数：行の高さとチーム名の幅のつり合いが一番良いものを選ぶ
   const HEAD = 1.5; // 組の見出しの高さ（行の何倍か）
@@ -614,7 +627,7 @@ export async function drawStandingsImage(canvas, t, cat, o = {}) {
     }
   }
   ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 20px ${FONT}`;
-  ctx.fillText(o.footer || '', W / 2, H - 22);
+  fillCenter(ctx, o.footer || '', W / 2, H - 22);
   return { cols };
 }
 
