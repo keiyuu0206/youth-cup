@@ -89,91 +89,126 @@ function latestPainter(canvas) {
   };
 }
 
+// ===== Instagram向けのデザイン（共通の部品） =====
+const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; };
+const rr = (ctx, x, y, w, h, r) => { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); };
+// 背景：黒地に、右上からのアクセントの光と、薄いピッチのライン
+function bgModern(ctx, W, H, accent) {
+  ctx.fillStyle = '#0a0a0a'; ctx.fillRect(0, 0, W, H);
+  const g = ctx.createRadialGradient(W * 0.96, H * 0.02, 0, W * 0.96, H * 0.02, W * 0.95);
+  g.addColorStop(0, hexA(accent, 0.34)); g.addColorStop(0.42, hexA(accent, 0.08)); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.globalAlpha = 0.07; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(2, W * 0.004);
+  ctx.beginPath(); ctx.arc(W * 0.93, W * 0.2, W * 0.34, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(W * 0.93, -10); ctx.lineTo(W * 0.93, W * 0.8); ctx.stroke();
+  ctx.restore();
+  const v = ctx.createLinearGradient(0, H * 0.7, 0, H); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.55)');
+  ctx.fillStyle = v; ctx.fillRect(0, H * 0.7, W, H * 0.3);
+}
+// 見出し：大会名を小さく、見出し（「U11 最終結果」など）を大きく左上に。見出しの下の位置を返す
+async function headModern(ctx, W, u, t, o, accent, topPad) {
+  const pad = 64 * u; let y = topPad; let x = pad;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const logo = o.showLogo && t.logo ? await loadImg(t.logo) : null;
+  if (logo) { const s = 54 * u; const k = Math.min(s / logo.width, s / logo.height); ctx.drawImage(logo, x, y - 42 * u, logo.width * k, logo.height * k); x += s + 14 * u; }
+  const title = o.title || t.name || '';
+  const ts = fitFont(ctx, title, W - pad - x, 30 * u, 700, 16 * u);
+  ctx.fillStyle = '#d6d3d1'; ctx.font = `700 ${ts}px ${FONT}`; ctx.fillText(title, x, y);
+  y += 24 * u;
+  const head = o.subtitle || '';
+  const hs = fitFont(ctx, head, W - pad * 2, 98 * u, 900, 34 * u);
+  ctx.fillStyle = '#ffffff'; ctx.font = `900 ${hs}px ${FONT}`; ctx.fillText(head, pad, y + hs * 0.94);
+  y += hs * 0.94 + 26 * u;
+  ctx.fillStyle = accent; ctx.fillRect(pad, y, 132 * u, 10 * u);
+  return y + 10 * u + 34 * u;
+}
+function footModern(ctx, W, H, u, o, accent, lift = 0) {
+  const pad = 64 * u; const base = H - lift;
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)'; ctx.lineWidth = Math.max(1, 1.5 * u);
+  ctx.beginPath(); ctx.moveTo(pad, base - 80 * u); ctx.lineTo(W - pad, base - 80 * u); ctx.stroke();
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'right'; ctx.fillStyle = accent; ctx.font = `900 ${22 * u}px ${FONT}`;
+  ctx.fillText('INFINEX', W - pad, base - 44 * u);
+  ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(255,255,255,0.72)';
+  const fs = fitFont(ctx, o.footer || '', W - pad * 2 - 170 * u, 22 * u, 700, 12 * u); ctx.font = `700 ${fs}px ${FONT}`;
+  ctx.fillText(o.footer || '', pad, base - 44 * u);
+}
+// チームのロゴ（無いときは頭文字の丸）
+function crestModern(ctx, img, team, cx, cy, size, onLight) {
+  if (img) { const k = Math.min(size / img.width, size / img.height); ctx.drawImage(img, cx - (img.width * k) / 2, cy - (img.height * k) / 2, img.width * k, img.height * k); return; }
+  ctx.fillStyle = onLight ? 'rgba(0,0,0,0.14)' : 'rgba(255,255,255,0.12)'; ctx.beginPath(); ctx.arc(cx, cy, size / 2, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = onLight ? '#0c0a09' : '#e7e5e4'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `900 ${size * 0.46}px ${FONT}`;
+  ctx.fillText(team ? [...(team.short_name || team.name)][0] || '' : '', cx, cy + size * 0.03); ctx.textAlign = 'left';
+}
+// 名前を幅に収めて1行で描く（左そろえ）
+function nameFit(ctx, text, x, cy, maxW, size, color, weight = 900, min = 10) {
+  const s = fitFont(ctx, text, maxW, size, weight, min);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = color; ctx.font = `${weight} ${s}px ${FONT}`; ctx.fillText(text, x, cy + s * 0.04);
+}
+
 export async function drawPoster(canvas, t, cat, o) {
   const { w: W, h: H } = SIZES[o.size] || SIZES.sns;
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   const accent = (ACCENTS[o.accent] || ACCENTS.lime)[1];
-  const u = W / 1080; // 大きさの基準
-  background(ctx, W, H);
-  // タイトル・サブタイトル
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  const pad = 64 * u;
-  let y = 120 * u;
-  const tLogo = o.showLogo && t.logo ? await loadImg(t.logo) : null;
-  if (tLogo) { const s = 92 * u; ctx.drawImage(tLogo, W / 2 - s / 2, y - 92 * u, s, s); y += 24 * u; }
-  const ts = fitFont(ctx, o.title, W - pad * 2, 84 * u, 900, 24 * u);
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`;
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 12 * u;
-  fillCenter(ctx, o.title, W / 2, y + ts * 0.25); ctx.shadowBlur = 0;
-  y += ts * 0.25 + 64 * u;
-  if (o.subtitle) {
-    const ss = fitFont(ctx, o.subtitle, W - pad * 2, 46 * u, 900, 18 * u);
-    ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`;
-    fillCenter(ctx, o.subtitle, W / 2, y); y += 40 * u;
-  }
-  // 一覧
-  const rows = rowsOf(cat, o.kind);
-  const top = y + 30 * u, bottom = H - 70 * u;
-  const n = rows.length;
-  const cols = o.cols && o.cols !== 'auto' ? Number(o.cols) : n <= 12 ? 1 : n <= 44 ? 2 : 3;
-  const perCol = Math.ceil(n / cols) || 1;
-  const rowH = Math.min(78 * u, (bottom - top) / perCol);
-  // 縦に余裕があるときは、一覧を縦の中央に置く
-  const top2 = top + Math.max(0, ((bottom - top) - rowH * perCol) / 2) * 0.8;
-  const colGap = 36 * u;
-  // 1列のときは、横に広がりすぎないよう幅を抑えて中央に置く
-  const colW = cols === 1 ? Math.min(W - pad * 2, 780 * u) : (W - pad * 2 - colGap * (cols - 1)) / cols;
-  const left = cols === 1 ? (W - colW) / 2 : pad;
-  const fs = Math.max(12 * u, Math.min(38 * u, rowH * 0.5));
-  const noW = fs * 1.8, logoS = Math.min(rowH * 0.66, fs * 1.35);
+  const u = W / 1080; const pad = 64 * u; const story = o.size === 'story';
+  bgModern(ctx, W, H, accent);
+  let top = await headModern(ctx, W, u, t, o, accent, story ? 270 * u : 104 * u);
+  const lift = story ? 210 * u : 0; // ストーリーは下部が操作の表示に隠れるので、少し上げる
+  const bottom = H - lift - 104 * u;
+  const rows = rowsOf(cat, o.kind); const n = rows.length;
   const logos = await Promise.all(rows.map((r) => (o.showTeamLogo ? loadImg(r.team.logo) : null)));
-  rows.forEach((r, i) => {
-    const c = Math.floor(i / perCol), k = i % perCol;
-    const x = left + c * (colW + colGap), cy = top2 + k * rowH + rowH / 2;
-    if (o.myTeam && r.team.id === o.myTeam) { ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(x, cy - rowH / 2 + 2, colW, rowH - 4); }
-    // 区切りの線
-    ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = Math.max(1, 1.5 * u);
-    ctx.beginPath(); ctx.moveTo(x + noW * 0.6, cy + rowH / 2 - 1); ctx.lineTo(x + colW, cy + rowH / 2 - 1); ctx.stroke();
-    // 番号
-    ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = r.no <= 3 && o.kind === 'ranking' ? accent : '#f2f2f2';
-    ctx.font = `900 ${fs}px ${FONT}`; ctx.fillText(String(r.no), x + noW - 8 * u, cy);
-    // ロゴ（無いときは頭文字の丸）
-    const lx = x + noW + 6 * u;
-    if (o.showTeamLogo) {
-      if (logos[i]) {
-        const im = logos[i], ratio = Math.min(logoS / im.width, logoS / im.height);
-        ctx.drawImage(im, lx + (logoS - im.width * ratio) / 2, cy - (im.height * ratio) / 2, im.width * ratio, im.height * ratio);
-      } else {
-        ctx.fillStyle = '#2b2f2e'; ctx.beginPath(); ctx.arc(lx + logoS / 2, cy, logoS / 2, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#cfd5d2'; ctx.textAlign = 'center'; ctx.font = `800 ${logoS * 0.5}px ${FONT}`; ctx.fillText([...(r.team.short_name || r.team.name)][0] || '', lx + logoS / 2, cy + 1);
-      }
+  let rest = rows.map((r, i) => ({ ...r, i }));
+  // 最終順位は表彰台の形：優勝を大きなカード、2位・3位を並べたカード
+  const podium = o.kind === 'ranking' && n >= 3 && rows[0].no === 1 && rows[1].no === 2 && rows[2].no === 3;
+  if (podium) {
+    const k = n - 3 > 30 ? 0.72 : n - 3 > 14 ? 0.86 : 1;
+    const h1 = 196 * u * k, h2 = 132 * u * k, gap = 14 * u, cw = W - pad * 2;
+    ctx.fillStyle = accent; rr(ctx, pad, top, cw, h1, 28 * u); ctx.fill();
+    ctx.fillStyle = '#0c0a09'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = `900 ${h1 * 0.66}px ${FONT}`; ctx.fillText('1', pad + 34 * u, top + h1 / 2 + h1 * 0.03);
+    const c1 = h1 * 0.6; const lx = pad + 34 * u + h1 * 0.5;
+    if (o.showTeamLogo) crestModern(ctx, logos[0], rows[0].team, lx + c1 / 2, top + h1 / 2, c1, true);
+    const nx = lx + (o.showTeamLogo ? c1 + 24 * u : 0);
+    ctx.fillStyle = '#0c0a09'; rr(ctx, nx, top + h1 * 0.16, 92 * u * k, 34 * u * k, 17 * u); ctx.fill();
+    ctx.fillStyle = accent; ctx.textAlign = 'center'; ctx.font = `900 ${19 * u * k}px ${FONT}`; ctx.fillText('優勝', nx + 46 * u * k, top + h1 * 0.16 + 18 * u * k);
+    nameFit(ctx, rows[0].team.name, nx, top + h1 * 0.62, pad + cw - nx - 28 * u, 58 * u * k, '#0c0a09', 900, 16 * u);
+    const w2 = (cw - gap) / 2; const y2 = top + h1 + gap;
+    for (let j = 0; j < 2; j++) {
+      const x = pad + j * (w2 + gap); const r = rows[j + 1];
+      ctx.fillStyle = '#171717'; rr(ctx, x, y2, w2, h2, 22 * u); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = Math.max(1, 1.5 * u); rr(ctx, x, y2, w2, h2, 22 * u); ctx.stroke();
+      ctx.fillStyle = accent; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = `900 ${h2 * 0.5}px ${FONT}`; ctx.fillText(String(r.no), x + 24 * u, y2 + h2 / 2 + h2 * 0.02);
+      const c2 = h2 * 0.54; const l2 = x + 24 * u + h2 * 0.42;
+      if (o.showTeamLogo) crestModern(ctx, logos[j + 1], r.team, l2 + c2 / 2, y2 + h2 / 2, c2, false);
+      const n2 = l2 + (o.showTeamLogo ? c2 + 16 * u : 0);
+      nameFit(ctx, r.team.short_name && [...r.team.name].length > 12 ? r.team.short_name : r.team.name, n2, y2 + h2 / 2, x + w2 - n2 - 18 * u, 34 * u * k, '#ffffff', 900, 12 * u);
     }
-    // チーム名（長い名前は枠に収まるよう小さく）
-    const nx = lx + (o.showTeamLogo ? logoS + 14 * u : 4 * u);
-    const name = r.team.name;
-    const maxW = x + colW - nx - 4 * u;
-    const nfs = fitFont(ctx, name, maxW, fs, 900, 10 * u);
-    ctx.textAlign = 'left'; ctx.fillStyle = '#f2f2f2';
-    if (!o.noWrap && nfs < fs * 0.72 && rowH >= fs * 1.5) {
-      // 1行だと小さくなりすぎる長い名前は、2行に分けて大きめに表示する
-      const chars = [...name];
-      let cut = Math.round(chars.length / 2);
-      const sp = name.lastIndexOf(' ', Math.round(name.length / 2) + 4);
-      if (sp > 2) cut = [...name.slice(0, sp)].length;
-      const l1 = chars.slice(0, cut).join('').trim(), l2 = chars.slice(cut).join('').trim();
-      const s2 = Math.min(fitFont(ctx, l1, maxW, fs * 0.8, 900, 9 * u), fitFont(ctx, l2, maxW, fs * 0.8, 900, 9 * u), rowH * 0.42);
-      ctx.font = `900 ${s2}px ${FONT}`;
-      ctx.fillText(l1, nx, cy - s2 * 0.52); ctx.fillText(l2, nx, cy + s2 * 0.58);
-    } else {
-      ctx.font = `900 ${nfs}px ${FONT}`; ctx.fillText(name, nx, cy + 1);
-    }
-  });
-  // 下部（大会名・カテゴリ）
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 ${18 * u}px ${FONT}`;
-  fillCenter(ctx, o.footer || '', W / 2, H - 28 * u);
+    top = y2 + h2 + 26 * u;
+    rest = rest.slice(3);
+  }
+  const m = rest.length;
+  let cols = 1;
+  if (m) {
+    cols = o.cols && o.cols !== 'auto' ? Number(o.cols) : m <= 10 ? 1 : m <= 40 ? 2 : 3;
+    const perCol = Math.ceil(m / cols); const colGap = 34 * u;
+    const rowH = Math.min((story ? 100 : 78) * u, (bottom - top) / perCol);
+    const colW = (W - pad * 2 - colGap * (cols - 1)) / cols;
+    const fs = Math.max(12 * u, Math.min(36 * u, rowH * 0.5));
+    const noW = fs * 1.7, cs = Math.min(rowH * 0.66, fs * 1.4);
+    rest.forEach((r, idx) => {
+      const c = Math.floor(idx / perCol), kk = idx % perCol;
+      const x = pad + c * (colW + colGap), cy = top + kk * rowH + rowH / 2;
+      if (o.myTeam && r.team.id === o.myTeam) { ctx.fillStyle = hexA(accent, 0.2); rr(ctx, x - 8 * u, cy - rowH / 2 + 3, colW + 16 * u, rowH - 6, 12 * u); ctx.fill(); }
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = Math.max(1, 1.2 * u); ctx.beginPath(); ctx.moveTo(x, cy + rowH / 2); ctx.lineTo(x + colW, cy + rowH / 2); ctx.stroke();
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = o.kind === 'ranking' ? '#a8a29e' : accent; ctx.font = `900 ${fs * 0.9}px ${FONT}`; ctx.fillText(String(r.no), x + noW - 6 * u, cy + fs * 0.03);
+      let nx = x + noW + 8 * u;
+      if (o.showTeamLogo) { crestModern(ctx, logos[r.i], r.team, nx + cs / 2, cy, cs, false); nx += cs + 14 * u; }
+      nameFit(ctx, r.team.name, nx, cy, x + colW - nx - 4 * u, fs, '#f5f5f4', 800, 9 * u);
+    });
+  } else if (!podium) {
+    ctx.fillStyle = 'rgba(255,255,255,0.7)'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.font = `700 ${30 * u}px ${FONT}`;
+    ctx.fillText(o.kind === 'ranking' ? 'まだ順位が決まっていません' : 'チームがいません', pad, (top + bottom) / 2);
+  }
+  footModern(ctx, W, H, u, o, accent, lift);
   return { rows: n, cols };
 }
 
@@ -557,77 +592,72 @@ export async function drawStandingsImage(canvas, t, cat, o = {}) {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   const accent = (ACCENTS[o.accent] || ACCENTS.lime)[1];
-  background(ctx, W, H);
+  const u = W / 1080; const pad = 56 * u; const story = o.size === 'story';
+  bgModern(ctx, W, H, accent);
   const tm = teamMap(cat);
   const groups = Object.entries(cat.standings || {}).sort(([a], [b]) => a.localeCompare(b));
-  // タイトル
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  const pad = 48;
-  const ts = fitFont(ctx, o.title || t.name, W - pad * 2, 64, 900, 22);
-  ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${ts}px ${FONT}`; fillCenter(ctx, o.title || t.name, W / 2, 40 + ts);
-  const ss = fitFont(ctx, o.subtitle || `${cat.name} 順位表`, W - pad * 2, 38, 900, 16);
-  ctx.fillStyle = accent; ctx.font = `900 ${ss}px ${FONT}`; fillCenter(ctx, o.subtitle || `${cat.name} 順位表`, W / 2, 40 + ts + 18 + ss);
-  const top = 40 + ts + 18 + ss + 34, bottom = H - 56;
-  // 列の数：行の高さとチーム名の幅のつり合いが一番良いものを選ぶ
-  const HEAD = 1.5; // 組の見出しの高さ（行の何倍か）
+  const top = await headModern(ctx, W, u, t, { ...o, title: o.title || t.name, subtitle: o.subtitle || `${cat.name} 順位表` }, accent, story ? 270 * u : 104 * u) - 8 * u;
+  const lift = story ? 210 * u : 0;
+  const bottom = H - lift - 100 * u;
+  // 列の数：行の高さとチーム名の幅のつり合いが一番良いものを選ぶ（組ごとに角丸のカード）
+  const HEAD = 1.35, GAP = 0.45;
   let best = null;
   for (let cols = 1; cols <= Math.min(4, Math.max(1, groups.length)); cols++) {
     const per = Math.ceil(groups.length / cols);
-    const colsUnits = Array.from({ length: cols }, (_, c) => groups.slice(c * per, c * per + per).reduce((a, [, g]) => a + g.rows.length + HEAD + 0.6, 0));
-    const units = Math.max(...colsUnits);
-    const rowH = Math.min(64, (bottom - top) / units);
-    const colW = (W - pad * 2 - 28 * (cols - 1)) / cols;
-    const score = Math.min(rowH, colW / 11);
+    const units = Math.max(...Array.from({ length: cols }, (_, c) => groups.slice(c * per, c * per + per).reduce((a, [, g]) => a + g.rows.length + HEAD + GAP + 0.5, 0)));
+    const rowH = Math.min(66 * u, (bottom - top) / units);
+    const colW = (W - pad * 2 - 22 * u * (cols - 1)) / cols;
+    const score = Math.min(rowH, colW / 10.5);
     if (!best || score > best.score) best = { cols, per, rowH, colW, score };
   }
   const { cols, per, rowH, colW } = best;
-  const fs = Math.max(11, Math.min(30, rowH * 0.5));
-  const crestS = Math.min(rowH * 0.62, fs * 1.3);
+  const fs = Math.max(10 * u, Math.min(30 * u, rowH * 0.48));
+  const cs = Math.min(rowH * 0.62, fs * 1.35);
   const logos = {};
   if (o.showTeamLogo !== false) await Promise.all(Object.values(tm).map(async (x) => { logos[x.id] = await loadImg(x.logo); }));
   for (let c = 0; c < cols; c++) {
     let y = top;
-    const x = pad + c * (colW + 28);
+    const x = pad + c * (colW + 22 * u);
     for (const [gname, g] of groups.slice(c * per, c * per + per)) {
-      // 組の見出し
-      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillStyle = accent; ctx.fillRect(x, y + 4, 6, rowH * HEAD - 12);
-      ctx.fillStyle = '#ffffff'; ctx.font = `900 ${fs * 1.05}px ${FONT}`;
-      ctx.fillText(`${gname}組${g.complete ? '' : '（途中経過）'}`, x + 16, y + rowH * HEAD / 2 - 2);
-      ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = `700 ${fs * 0.6}px ${FONT}`;
-      const cPts = x + colW - 6, cGd = cPts - fs * 2.6, cW = cGd - fs * 2.6;
-      ctx.fillText('勝点', cPts, y + rowH * HEAD / 2); ctx.fillText('得失', cGd, y + rowH * HEAD / 2); ctx.fillText('勝分敗', cW, y + rowH * HEAD / 2);
+      const cardH = rowH * (HEAD + g.rows.length + 0.25);
+      ctx.fillStyle = '#151515'; rr(ctx, x, y, colW, cardH, 18 * u); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = Math.max(1, 1.2 * u); rr(ctx, x, y, colW, cardH, 18 * u); ctx.stroke();
+      const inX = x + fs * 0.7, inW = colW - fs * 1.4;
+      const hy = y + rowH * HEAD / 2;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = accent; ctx.font = `900 ${fs * 1.08}px ${FONT}`;
+      const gl = /リーグ|トーナメント/.test(gname) ? gname : `${gname}組`;
+      ctx.fillText(gl, inX, hy);
+      if (!g.complete) { const gw = ctx.measureText(gl).width; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 ${fs * 0.58}px ${FONT}`; ctx.fillText('途中経過', inX + gw + fs * 0.5, hy + fs * 0.06); }
+      // 列が狭いときは「勝-分-敗」を省いて、チーム名に幅を回す
+      const wide = colW > 620 * u;
+      const cPts = inX + inW, cGd = cPts - fs * 2.1, cW = cGd - fs * 2.0;
+      const nameEnd = wide ? cW - fs * 2.9 : cGd - fs * 1.7;
+      ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 ${fs * 0.56}px ${FONT}`;
+      ctx.fillText('勝点', cPts, hy); ctx.fillText('得失', cGd, hy); if (wide) ctx.fillText('勝-分-敗', cW, hy);
       y += rowH * HEAD;
-      for (const r of g.rows) {
+      g.rows.forEach((r, ri) => {
         const cy = y + rowH / 2;
         const mine = o.myTeam && r.teamId === o.myTeam;
-        if (mine) { ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fillRect(x, y + 1, colW, rowH - 2); }
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(x, y + rowH - 1); ctx.lineTo(x + colW, y + rowH - 1); ctx.stroke();
-        ctx.textAlign = 'right'; ctx.fillStyle = g.complete && r.rank <= 3 ? accent : '#f2f2f2'; ctx.font = `900 ${fs}px ${FONT}`;
-        ctx.fillText(String(r.rank), x + fs * 1.4, cy);
-        let nx = x + fs * 1.4 + 12;
+        if (mine) { ctx.fillStyle = hexA(accent, 0.22); rr(ctx, x + 4 * u, y + 1, colW - 8 * u, rowH - 2, 10 * u); ctx.fill(); }
+        if (ri) { ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = Math.max(1, u); ctx.beginPath(); ctx.moveTo(inX, y); ctx.lineTo(inX + inW, y); ctx.stroke(); }
+        // 順位：1位はアクセントの丸
+        const bw = fs * 1.25;
+        if (r.rank === 1) { ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(inX + bw / 2, cy, bw / 2, 0, Math.PI * 2); ctx.fill(); }
+        ctx.textAlign = 'center'; ctx.fillStyle = r.rank === 1 ? '#0c0a09' : '#d6d3d1'; ctx.font = `900 ${fs * 0.82}px ${FONT}`; ctx.fillText(String(r.rank), inX + bw / 2, cy + fs * 0.04);
+        let nx = inX + bw + fs * 0.45;
         const team = tm[r.teamId];
-        if (o.showTeamLogo !== false) {
-          const im = team && logos[team.id];
-          if (im) { const k = Math.min(crestS / im.width, crestS / im.height); ctx.drawImage(im, nx + (crestS - im.width * k) / 2, cy - (im.height * k) / 2, im.width * k, im.height * k); }
-          else { ctx.fillStyle = '#2b2f2e'; ctx.beginPath(); ctx.arc(nx + crestS / 2, cy, crestS / 2, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = '#cfd5d2'; ctx.textAlign = 'center'; ctx.font = `800 ${crestS * 0.5}px ${FONT}`; ctx.fillText([...((team && (team.short_name || team.name)) || '-')][0], nx + crestS / 2, cy + 1); }
-          nx += crestS + 10;
-        }
-        // チーム名：折り返さず1行（入らないときは小さく）
-        const name = team ? team.name : '-';
-        const nfs = fitFont(ctx, name, cW - fs * 2.4 - nx, fs, 900, 9);
-        ctx.textAlign = 'left'; ctx.fillStyle = '#f2f2f2'; ctx.font = `900 ${nfs}px ${FONT}`; ctx.fillText(name, nx, cy + 1);
-        ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = `700 ${fs * 0.72}px ${FONT}`;
-        ctx.fillText(`${r.w}-${r.d}-${r.l}`, cW, cy + 1);
+        if (o.showTeamLogo !== false) { crestModern(ctx, team && logos[team.id], team, nx + cs / 2, cy, cs, false); nx += cs + fs * 0.4; }
+        nameFit(ctx, team ? team.name : '-', nx, cy, nameEnd - nx, fs, '#f5f5f4', 800, 8 * u);
+        ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = 'rgba(255,255,255,0.78)'; ctx.font = `700 ${fs * 0.7}px ${FONT}`;
+        if (wide) ctx.fillText(`${r.w}-${r.d}-${r.l}`, cW, cy + 1);
         ctx.fillText(r.gd > 0 ? `+${r.gd}` : String(r.gd), cGd, cy + 1);
         ctx.fillStyle = '#ffffff'; ctx.font = `900 ${fs}px ${FONT}`; ctx.fillText(String(r.pts), cPts, cy + 1);
         y += rowH;
-      }
-      y += rowH * 0.6;
+      });
+      y += rowH * (0.25 + GAP);
     }
   }
-  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic'; ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.font = `700 20px ${FONT}`;
-  fillCenter(ctx, o.footer || '', W / 2, H - 22);
+  footModern(ctx, W, H, u, o, accent, lift);
   return { cols };
 }
 

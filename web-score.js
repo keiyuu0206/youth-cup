@@ -4,7 +4,7 @@
 import { api } from './web-api.js';
 import { openMatchPoster, openResultPoster, openStandingsPoster } from './web-poster.js';
 import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
 
@@ -143,38 +143,63 @@ export async function scoreApp(root, me) {
           } }, '差し戻し')))));
   }
 
-  // 試合一覧（試合の結果の入力にも使う）。状態とコートで絞り込み、時刻ごとにまとめる
+  // 試合一覧（試合の結果の入力にも使う）。一番上に「次に入力する試合」、状態とコートで絞り込み、時刻ごとにまとめる
   function allView(t, cat) {
     const cache = cacheOf(cat);
     const all = [...cat.matches].sort((a, b) => absMin(cat.config, a) - absMin(cat.config, b) || a.court - b.court);
     if (!all.length) return h('p', { class: 'empty' }, '日程はまだありません');
+    // 絞り込みは覚えておく（大会ごとのコート、状態）
+    if (st.prefFor !== st.tid) {
+      st.prefFor = st.tid;
+      const c0 = store.get(`score:court:${st.tid}`, 'all');
+      st.court = c0 === 'all' || all.some((m) => m.court === c0) ? c0 : 'all';
+      st.filter = store.get('score:filter', 'none');
+    }
     const LBL = { none: '未登録', provisional: '承認待ち', confirmed: '確定' };
     const courts = [...new Set(all.map((m) => m.court))].sort((a, b) => a - b);
-    const count = (k) => all.filter((m) => (k === 'all' || m.status === k) && (st.court === 'all' || m.court === st.court)).length;
-    const list = all.filter((m) => (st.filter === 'all' || m.status === st.filter) && (st.court === 'all' || m.court === st.court));
+    const inCourt = (m) => st.court === 'all' || m.court === st.court;
+    const ready = (m) => m.home_team_id && m.away_team_id;
+    if (st.filter === 'none' && !all.some((m) => m.status === 'none' && inCourt(m))) st.filter = 'all';
+    // 入力待ち：終わる時刻を過ぎたのに結果が入っていない試合
+    const d0 = new Date(); const today = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+    const nowM = d0.getHours() * 60 + d0.getMinutes();
+    const late = (m) => m.status === 'none' && ready(m) && (() => { const date = dayDate(cat, dayOf(cat.config, m.slot), t); return date && (date < today || (date === today && nowM >= m.start_min + matchLengthFor(cat.config, m))); })();
+    const next = all.find((m) => m.status === 'none' && ready(m) && inCourt(m));
+    const count = (k) => all.filter((m) => (k === 'all' || m.status === k) && inCourt(m)).length;
+    const list = all.filter((m) => (st.filter === 'all' || m.status === st.filter) && inCourt(m));
     const groups = [];
     for (const m of list) {
       const key = `${dayOf(cat.config, m.slot)}-${m.start_min}`;
       const g = groups[groups.length - 1];
       if (g && g.key === key) g.items.push(m); else groups.push({ key, m, items: [m] });
     }
+    const name = (m, side) => sideInfo(m, side, cat, cache).text;
     return h('div', null,
-      h('div', { class: 'chips sc-filter' }, [['all', 'すべて'], ['none', '未登録'], ['provisional', '承認待ち'], ['confirmed', '確定']].map(([k, l]) =>
-        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.filter === k), onclick: () => { st.filter = k; draw(); } }, `${l}（${count(k)}）`))),
-      courts.length > 1 ? h('div', { class: 'chips sc-filter' }, [['all', '全コート'], ...courts.map((c) => [c, courtName(cat.config, c)])].map(([k, l]) =>
-        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.court === k), onclick: () => { st.court = k; draw(); } }, l))) : null,
+      next ? h('button', { class: `sc-next${late(next) ? ' late' : ''}`, type: 'button', onclick: () => editor(t, cat, next) },
+        h('span', { class: 'sc-next-k' }, late(next) ? '入力待ちの試合' : '次に入力する試合'),
+        h('span', { class: 'sc-next-t' }, h('b', null, toHHMM(next.start_min)), `${courtName(cat.config, next.court)}　${next.label}`),
+        h('span', { class: 'sc-next-teams' }, h('span', null, name(next, 'home')), h('i', null, 'vs'), h('span', null, name(next, 'away'))),
+        h('span', { class: 'sc-next-cta' }, '結果を入力する'))
+        : h('p', { class: 'sc-alldone' }, st.court === 'all' ? '未登録の試合はありません' : `${courtName(cat.config, st.court)}の未登録の試合はありません`),
+      h('div', { class: 'sc-filterbar' },
+        h('div', { class: 'chips sc-filter' }, [['none', '未登録'], ['confirmed', '確定'], ['provisional', '承認待ち'], ['all', 'すべて']].filter(([k]) => k !== 'provisional' || count('provisional') > 0).map(([k, l]) =>
+          h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.filter === k), onclick: () => { st.filter = k; store.set('score:filter', k); draw(); } }, `${l} ${count(k)}`))),
+        courts.length > 1 ? h('div', { class: 'chips sc-filter' }, [['all', '全コート'], ...courts.map((c) => [c, courtName(cat.config, c)])].map(([k, l]) =>
+          h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.court === k), onclick: () => { st.court = k; store.set(`score:court:${st.tid}`, k); draw(); } }, l))) : null),
       !list.length ? h('p', { class: 'empty' }, '該当する試合はありません')
         : h('div', { class: 'sc-all' }, groups.map((g) => [
           h('div', { class: 'sc-time-h' }, `${dayTotal(cat.config) > 1 ? `${dayLabel(cat, dayOf(cat.config, g.m.slot), t, true)} ` : ''}${toHHMM(g.m.start_min)}`),
           g.items.map((m) => {
-            const ready = m.home_team_id && m.away_team_id;
-            const can = ready && (m.status !== 'confirmed' || isOp);
-            return h('button', { class: `sc-row ${m.status}`, type: 'button', disabled: !can, onclick: () => editor(t, cat, m) },
+            const can = ready(m) && (m.status !== 'confirmed' || isOp);
+            const isLate = late(m);
+            return h('button', { class: `sc-row ${m.status}${isLate ? ' late' : ''}`, type: 'button', disabled: !can, onclick: () => editor(t, cat, m) },
               h('span', { class: 'sc-rtime' }, courtName(cat.config, m.court), h('small', null, m.stage === 'league' ? `${m.group_label}組` : '')),
               h('span', { class: 'sc-rteams' },
-                h('span', null, sideInfo(m, 'home', cat, cache).text, refBadge(cat, m, 'home')), h('span', null, sideInfo(m, 'away', cat, cache).text, refBadge(cat, m, 'away'))),
-              h('span', { class: 'sc-rscore' }, m.home_score != null ? `${m.home_score} - ${m.away_score}` : ''),
-              h('span', { class: `sc-rstat ${m.status}` }, ready ? LBL[m.status] : '対戦未定'));
+                h('span', null, name(m, 'home'), refBadge(cat, m, 'home')), h('span', null, name(m, 'away'), refBadge(cat, m, 'away'))),
+              m.home_score != null ? h('span', { class: 'sc-rscore' }, `${m.home_score} - ${m.away_score}`) : null,
+              !ready(m) ? h('span', { class: 'sc-rstat none' }, '対戦未定')
+                : m.status === 'none' ? h('span', { class: `sc-rcta${isLate ? ' late' : ''}` }, isLate ? '入力待ち' : '入力')
+                  : h('span', { class: `sc-rstat ${m.status}` }, LBL[m.status]));
           })])));
   }
 
@@ -228,52 +253,76 @@ export async function scoreApp(root, me) {
     sheet({ title: '忘れ物を登録', content: body });
   }
 
-  // スコアの入力・修正（＋−で数える）して承認
+  // スコアの入力・修正（大きな＋−で数える）して確定。確定したら、そのまま次の試合へ進める
   function editor(t, cat, m) {
     const cache = cacheOf(cat);
     const v = { h: m.home_score ?? 0, a: m.away_score ?? 0, hp: m.home_pk ?? 0, ap: m.away_pk ?? 0 };
     const ko = m.stage === 'knockout' && !isRankLeague(m); // 決勝の段のリーグ戦は引き分けあり（PK戦なし）
     const body = h('div');
     const tieNow = () => ko && v.h === v.a;
-    const step = (key, label) => {
+    const fixing = m.status === 'confirmed';
+    const okLabel = () => `${v.h} - ${v.a}${tieNow() ? `（PK ${v.hp} - ${v.ap}）` : ''} で${fixing ? '修正する' : '確定する'}`;
+    const step = (key, info, label, small) => {
       const out = h('output', null, v[key]);
       const bump = (d) => {
         const before = tieNow();
         v[key] = Math.max(0, Math.min(99, v[key] + d));
         out.textContent = v[key];
         if (before !== tieNow()) draw2(); // PK戦の欄の出し入れだけ描き直す
-        else { const btn = body.querySelector('.sc-ok'); if (btn && m.status !== 'confirmed') btn.textContent = 'この結果で承認（確定）'; }
+        else { const btn = body.querySelector('.sc-ok'); if (btn) btn.textContent = okLabel(); }
       };
-      return h('div', { class: 'sc-step' },
-        h('span', { class: 'sc-step-name' }, label),
-        h('button', { type: 'button', class: 'sc-pm', 'aria-label': `${label}を1減らす`, onclick: () => bump(-1) }, '−'),
-        out,
-        h('button', { type: 'button', class: 'sc-pm plus', 'aria-label': `${label}を1増やす`, onclick: () => bump(1) }, '＋'));
+      return h('div', { class: `sc-step${small ? ' small' : ''}` },
+        h('span', { class: 'sc-step-name' }, info && info.team && !small ? crest(info.team, 30) : null, h('b', null, label)),
+        h('span', { class: 'sc-step-ctl' },
+          h('button', { type: 'button', class: 'sc-pm', 'aria-label': `${label}を1減らす`, onclick: () => bump(-1) }, '−'),
+          out,
+          h('button', { type: 'button', class: 'sc-pm plus', 'aria-label': `${label}を1増やす`, onclick: () => bump(1) }, '＋')));
+    };
+    const hi = sideInfo(m, 'home', cat, cache), ai = sideInfo(m, 'away', cat, cache);
+    const close = () => document.querySelector('.sheet-back')?.remove();
+    // 確定した後：そのまま次の試合へ
+    const done = async () => {
+      await reload();
+      const cat2 = (st.data.categories || []).find((c) => c.id === cat.id) || cat;
+      const t2 = st.data.tournament || t;
+      const next = [...cat2.matches].sort((a, b) => absMin(cat2.config, a) - absMin(cat2.config, b) || a.court - b.court)
+        .find((x) => x.status === 'none' && x.home_team_id && x.away_team_id && x.id !== m.id && (st.court === 'all' || x.court === st.court));
+      if (!document.body.contains(body)) return;
+      const c2 = cacheOf(cat2);
+      mount(body, h('div', { class: 'sc-done' },
+        h('div', { class: 'sc-done-mark', 'aria-hidden': 'true' }, '✓'),
+        h('strong', null, fixing ? '結果を修正しました' : '確定しました'),
+        h('p', null, `${hi.text}  ${v.h} - ${v.a}  ${ai.text}`),
+        next ? h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: () => { close(); editor(t2, cat2, next); } },
+          h('span', null, '次の試合を入力'), h('small', null, `${toHHMM(next.start_min)} ${courtName(cat2.config, next.court)}　${sideInfo(next, 'home', cat2, c2).text} vs ${sideInfo(next, 'away', cat2, c2).text}`))
+          : h('p', { class: 'muted small' }, '未登録の試合はありません。おつかれさまでした。'),
+        h('button', { class: 'btn btn-block', type: 'button', onclick: close }, '一覧に戻る')));
     };
     const draw2 = () => mount(body, h('div', { class: 'stack' },
       h('div', { class: 'sc-meta' }, h('span', null, when(t, cat, m)), h('span', null, m.label)),
-      step('h', sideInfo(m, 'home', cat, cache).text),
-      step('a', sideInfo(m, 'away', cat, cache).text),
-      ko && v.h === v.a ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のときはPK戦の結果'),
-        step('hp', `${sideInfo(m, 'home', cat, cache).text}（PK）`), step('ap', `${sideInfo(m, 'away', cat, cache).text}（PK）`)) : null,
-      m.status === 'confirmed' ? h('p', { class: 'notice', style: { margin: 0 } }, `確定済みの結果（${m.home_score} - ${m.away_score}）を修正します。順位やトーナメントの組み合わせも自動で計算し直されます。`) : null,
+      step('h', hi, hi.text),
+      step('a', ai, ai.text),
+      tieNow() ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のため、PK戦の結果を入力'),
+        step('hp', hi, `${hi.text}（PK）`, true), step('ap', ai, `${ai.text}（PK）`, true)) : null,
+      fixing ? h('p', { class: 'notice', style: { margin: 0 } }, `確定済みの結果（${m.home_score} - ${m.away_score}）を修正します。順位やトーナメントの組み合わせも自動で計算し直されます。`) : null,
       h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async (e) => {
         const btn = e.currentTarget; if (btn.disabled) return; // 二度押しを防ぐ
-        const tie = ko && v.h === v.a;
+        const tie = tieNow();
         if (tie && v.hp === v.ap) return toast('PK戦の結果で勝敗が決まるように入力してください', true);
-        if (m.status === 'confirmed' && !(await confirmDialog('確定済みの結果を修正します', `${m.home_score} - ${m.away_score} → ${v.h} - ${v.a}${tie ? `（PK ${v.hp} - ${v.ap}）` : ''} に修正します。`, '修正する'))) return;
+        if (fixing && !(await confirmDialog('確定済みの結果を修正します', `${m.home_score} - ${m.away_score} → ${v.h} - ${v.a}${tie ? `（PK ${v.hp} - ${v.ap}）` : ''} に修正します。`, '修正する'))) return;
         btn.disabled = true;
         const r = await run(() => api('POST', `/api/admin/matches/${m.id}/result`, { home_score: v.h, away_score: v.a, home_pk: tie ? v.hp : null, away_pk: tie ? v.ap : null, confirm: true }));
         btn.disabled = false;
-        if (r) toast(r.unchanged ? '同じ結果のため、変更はありません' : 'この結果で承認しました');
-        if (r) { document.querySelector('.sheet-back')?.remove(); reload(); }
-      } }, m.status === 'confirmed' ? 'この結果に修正（確定）' : 'この結果で承認（確定）'),
+        if (!r) return;
+        if (r.unchanged) { toast('同じ結果のため、変更はありません'); close(); return; }
+        await done();
+      } }, okLabel()),
       isOp && m.status !== 'none' ? h('button', { class: 'btn btn-ghost btn-block', type: 'button', onclick: async () => {
         if (!(await confirmDialog('結果を取り消します', 'この試合の結果を取り消して「未登録」に戻します。', '未登録に戻す', true))) return;
-        if (await run(() => api('POST', `/api/admin/matches/${m.id}/clear`), '未登録に戻しました')) { document.querySelector('.sheet-back')?.remove(); reload(); }
+        if (await run(() => api('POST', `/api/admin/matches/${m.id}/clear`), '未登録に戻しました')) { close(); reload(); }
       } }, '結果を取り消して未登録に戻す') : null));
     draw2();
-    sheet({ title: m.status === 'confirmed' ? '確定済みの結果を修正' : m.status === 'provisional' ? '修正して承認' : '結果を入力して確定', content: body });
+    sheet({ title: fixing ? '確定済みの結果を修正' : m.status === 'provisional' ? '修正して承認' : '結果を入力', content: body });
   }
 
   function changePassword() {
