@@ -1654,3 +1654,13 @@ button, .btn, .chip-btn, .sc-pm, a, input, select, label { touch-action: manipul
 }
 .sc-head .wrap { justify-content: space-between; }
 .sc-head .sc-who { margin-right: auto; align-items: flex-start; text-align: left; }
+
+/* LINEで送る */
+.btn-line { display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: #06c755; border-color: #06c755; color: #fff; font-weight: 800; text-decoration: none; }
+.btn-line:hover { background: #05b34c; border-color: #05b34c; color: #fff; }
+/* 大会運営者のスマホ：結果の報告待ちの帯 */
+.sc-late { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 14px; margin: 0 0 12px; border-radius: 18px; background: var(--live-soft); border: 1.5px solid var(--live); }
+.sc-late-t { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sc-late-t strong { color: #b91c1c; font-size: 0.95rem; }
+.sc-late-t small { color: var(--ink-2); font-size: 0.75rem; }
+.sc-late .btn-line { min-height: 44px; padding: 0 16px; border-radius: 999px; flex: none; }

@@ -3,7 +3,7 @@ const apiBase = api;
 import { openSnsChooser } from './web-poster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague } from './web-views.js';
 
 const STATUS = {
@@ -975,7 +975,8 @@ async function tournamentView(root, id, navigate) {
                 b2b.length ? h('em', { class: 'b2b' }, `連戦：${b2b.map((x) => (cache.teams[x] || {}).name).join('・')}`) : null);
             })),
             h('div', { class: 'row', style: { gap: '8px' } },
-              h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: () => copyText(lineText()) }, 'LINE用の催促文をコピー'),
+              lineButton(lineText(), 'LINEで送る', 'btn btn-sm btn-line'),
+              h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(lineText()) }, '文をコピー'),
               h('button', { class: 'btn btn-sm', type: 'button', onclick: () => go('results') }, '結果を入力'))]
             : h('p', { class: 'muted small', style: { margin: 0 } }, '時間を過ぎて結果が届いていない試合はありません')) : null,
         card('試合の進み具合',

@@ -3,7 +3,7 @@
 //  大会運営者　：スコアの登録・修正（確定済みの修正・取り消しを含む）、SNS画像の出力、忘れ物の登録
 import { api } from './web-api.js';
 import { openMatchPoster, openResultPoster, openStandingsPoster } from './web-poster.js';
-import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto, lineButton } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
@@ -174,7 +174,20 @@ export async function scoreApp(root, me) {
       if (g && g.key === key) g.items.push(m); else groups.push({ key, m, items: [m] });
     }
     const name = (m, side) => sideInfo(m, side, cat, cache).text;
+    // 結果の報告待ち（大会運営者）：LINEの共有で、チームへ結果の報告をお願いする
+    const lateAll = all.filter(late);
+    const endOf = (m) => m.start_min + matchLengthFor(cat.config, m);
+    const b2b = (m) => [m.home_team_id, m.away_team_id].filter((tid) => all.some((x) => x.id !== m.id && (x.home_team_id === tid || x.away_team_id === tid)
+      && dayOf(cat.config, x.slot) === dayOf(cat.config, m.slot) && x.start_min >= endOf(m) - 1 && x.start_min - endOf(m) <= 15));
+    const b2bNames = [...new Set(lateAll.flatMap((m) => b2b(m).map((tid) => (cache.teams[tid] || {}).name).filter(Boolean)))];
+    const lateText = () => [`【${t.name}】結果の報告のお願い`, '次の試合の結果がまだ届いていません。試合をしたチームは、本部へ結果の報告をお願いします。', '',
+      ...lateAll.map((m) => `・${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}　${name(m, 'home')} − ${name(m, 'away')}`),
+      ...(b2bNames.length ? ['', `※${b2bNames.join('・')}は連戦です。次の試合の前に報告してください。`] : [])].join('\n');
+    const lateBar = isOp && t.status === 'live' && lateAll.length ? h('div', { class: 'sc-late' },
+      h('div', { class: 'sc-late-t' }, h('strong', null, `結果の報告待ち ${lateAll.length}試合`), h('small', null, b2bNames.length ? `連戦：${b2bNames.join('・')}` : '時間を過ぎても結果が届いていない試合')),
+      lineButton(lateText(), 'LINEで送る')) : null;
     return h('div', null,
+      lateBar,
       next ? h('button', { class: `sc-next${late(next) ? ' late' : ''}`, type: 'button', onclick: () => editor(t, cat, next) },
         h('span', { class: 'sc-next-k' }, late(next) ? '入力待ちの試合' : '次に入力する試合'),
         h('span', { class: 'sc-next-t' }, h('b', null, toHHMM(next.start_min)), `${courtName(cat.config, next.court)}　${next.label}`),

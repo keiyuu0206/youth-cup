@@ -415,3 +415,11 @@ export async function resizePhoto(file, maxSide = 1280, limit = 450_000) {
   if (bmp.close) bmp.close();
   throw new Error('写真を小さくできませんでした。別の写真を選んでください');
 }
+
+// ===== LINEで送る（LINEの共有の画面を開き、送り先を選ぶだけで送れる） =====
+export const lineShareUrl = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
+export function lineButton(text, label = 'LINEで送る', cls = 'btn btn-line') {
+  return h('a', { class: cls, href: lineShareUrl(text), target: '_blank', rel: 'noopener', 'aria-label': `${label}（LINEが開きます）` },
+    h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': 'true' }, h('path', { fill: 'currentColor', d: 'M12 3C6.5 3 2 6.6 2 11c0 3.9 3.5 7.2 8.3 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.5s5.8-3.4 7.9-5.8C21.4 14.4 22 12.8 22 11c0-4.4-4.5-8-10-8z' })),
+    h('span', null, label));
+}
