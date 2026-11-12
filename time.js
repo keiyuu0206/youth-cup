@@ -89,6 +89,8 @@ export function normalizeConfig(c) {
   out.courtPriority = [...new Set(pr)];
   for (let i = 0; i < out.courts; i++) if (!out.courtPriority.includes(i)) out.courtPriority.push(i);
   out.advance = Number(out.advance) === 1 ? 1 : 2;
+  // 予選リーグのコートの割り振り：auto＝おまかせ（空いているコートに詰める）／block＝ブロック（組）ごとにコートを決めて交互に
+  out.leagueCourtMode = out.leagueCourtMode === 'block' ? 'block' : 'auto';
   for (const k of ['startTime', 'halfMinutes', 'halftimeMinutes', 'intervalMinutes', 'lunchStart', 'lunchMinutes', 'minLunchMinutes', 'minRestSlots']) {
     out[k] = Math.max(0, Number(out[k]) || 0);
   }

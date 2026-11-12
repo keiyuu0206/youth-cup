@@ -1559,6 +1559,8 @@ async function tournamentView(root, id, navigate) {
           (f.periods || 2) > 1 ? num('halftimeMinutes', (f.periods || 2) === 2 ? 'ハーフタイム（分）' : 'ピリオド間の休憩（分）', { max: 30 }) : null,
           num('intervalMinutes', '試合間隔（分）', { max: 60 }),
           num('courts', 'コート数', { min: 1, max: 12 }),
+          f.format !== 'knockout' ? h('label', { class: 'field' }, h('span', null, '予選リーグのコートの割り振り'), h('select', { onchange: (e) => { f.leagueCourtMode = e.target.value; } },
+            [['auto', 'おまかせ（空いているコートに詰める）'], ['block', 'ブロックごと（組ごとにコートを決めて交互に）']].map(([v, l]) => h('option', { value: v, selected: (f.leagueCourtMode || 'auto') === v }, l)))) : null,
           h('label', { class: 'field' }, h('span', null, '連戦を避ける'), h('select', { onchange: (e) => { f.minRestSlots = Number(e.target.value); } },
             [[0, '避けない'], [1, '1試合分は休む'], [2, '2試合分は休む']].map(([v, l]) => h('option', { value: v, selected: f.minRestSlots === v }, l))))),
         h('label', { class: 'field', style: { marginTop: '12px' } }, h('span', null, 'コート名（カンマ区切り・空欄なら Aコート, Bコート…）'),
@@ -1749,10 +1751,10 @@ async function tournamentView(root, id, navigate) {
           h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
           ro() ? null : h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => undoLast(cat) }, '↶ 1つ前に戻す'),
           editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),
-        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選ぶと、移動先の枠をタップして入れ替えたり、［⇄ 左右を入れ替える］で左右を反対にしたりできます。入れ替えると、組ごとの「第◯節」の番号も時刻の順に振り直されます。間違えたときは［↶ 1つ前に戻す］を押してください。') : null,
-        !ro() && cat.matches.some((m) => m.stage === 'league') ? h('div', { class: 'row no-print', style: { marginBottom: '8px' } },
-          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => renumberRounds(cat) }, '節の番号を時刻の順にそろえる'),
-          h('span', { class: 'muted small' }, '以前に入れ替えた日程で、「第◯節」が時刻の順になっていないときに使います')) : null,
+        editable ? h('p', { class: 'muted small no-print', style: { marginTop: 0 } }, '試合をタップして選ぶと、移動先の枠をタップして入れ替えたり、［⇄ 左右を入れ替える］で左右を反対にしたりできます。入れ替えて「第◯節」の番号が時刻の順でなくなったときは、そろえるかどうかの確認が出ます。間違えたときは［↶ 1つ前に戻す］を押してください。') : null,
+        !ro() && roundsOutOfOrder(cat).length ? h('div', { class: 'notice row no-print', style: { marginBottom: '8px', alignItems: 'center' } },
+          h('span', { style: { flex: 1 } }, `${roundsOutOfOrder(cat).map((g) => `${g}組`).join('・')}の「第◯節」の番号が、時刻の順になっていません。`),
+          h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => renumberRounds(cat) }, '節の番号をそろえる')) : null,
         warningsList(cat.warnings),
         selectedBar(cat),
         h('div', { class: 'table-wrap' }, scheduleGrid(cat, cat.matches, {
@@ -1766,7 +1768,7 @@ async function tournamentView(root, id, navigate) {
             if (m && m.id === st.moveSel) { st.moveSel = null; render(); return; }
             const matchId = st.moveSel;
             st.moveSel = null;
-            if (await run(() => api('POST', `/api/admin/categories/${cat.id}/move`, { matchId, slot, court }), '入れ替えました（間違えたときは［↶ 1つ前に戻す］）')) await reload();
+            if (await run(() => api('POST', `/api/admin/categories/${cat.id}/move`, { matchId, slot, court }), '入れ替えました（間違えたときは［↶ 1つ前に戻す］）')) { await reload(); await askRenumber(cat.id); }
             else render();
           },
           names,
@@ -1799,6 +1801,26 @@ async function tournamentView(root, id, navigate) {
     if (!last) { toast('戻せる操作がありません', true); return; }
     if (!(await confirmDialog('1つ前に戻します', `「${last.label}」の前の状態に戻します。試合の結果はそのまま残ります。`, '戻す'))) return;
     if (await run(() => api('POST', `/api/admin/categories/${cat.id}/retime/undo`), '1つ前に戻しました')) await reload();
+  }
+  // 予選リーグの「第◯節」が、組ごとに時刻の順になっていない組を返す（1節の試合数＝組のチーム数÷2）
+  function roundsOutOfOrder(cat) {
+    const size = {}; for (const x of cat.teams) if (x.group_label) size[x.group_label] = (size[x.group_label] || 0) + 1;
+    const bad = [];
+    for (const g of [...new Set(cat.matches.filter((m) => m.stage === 'league').map((m) => m.group_label))].sort()) {
+      const per = Math.max(1, Math.floor((size[g] || 2) / 2));
+      const list = cat.matches.filter((m) => m.stage === 'league' && m.group_label === g).sort((a, b) => a.slot - b.slot || a.court - b.court);
+      if (list.some((m, i) => m.round !== Math.floor(i / per) + 1)) bad.push(g);
+    }
+    return bad;
+  }
+  // 入れ替えの後に、節の番号が時刻の順になっていなければ確認する
+  async function askRenumber(catId) {
+    const cat = (data.categories || []).find((c) => c.id === catId);
+    const bad = cat ? roundsOutOfOrder(cat) : [];
+    if (!bad.length) return;
+    if (!(await confirmDialog('節の番号をそろえますか？', `入れ替えで、${bad.map((g) => `${g}組`).join('・')}の「第◯節」の番号が時刻の順になっていません。時刻の順に振り直しますか？（日程の時刻やコートは変わりません。［↶ 1つ前に戻す］で元に戻せます）`, 'そろえる'))) return;
+    const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/renumber`));
+    if (r) { toast(r.changed ? `${r.changed}試合の節の番号をそろえました` : 'すでに時刻の順になっています'); if (r.changed) await reload(); }
   }
   async function renumberRounds(cat) {
     if (!(await confirmDialog('節の番号をそろえます', '予選リーグの「第◯節」の番号を、組ごとに時刻の順で振り直します（日程の時刻やコートは変わりません）。［↶ 1つ前に戻す］で元に戻せます。', 'そろえる'))) return;

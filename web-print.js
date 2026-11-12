@@ -715,7 +715,7 @@ function rankLeagueSection(cat, names, opts) {
       const show = !opts.blank;
       const src = rankLeagueSource(cat, g);
       return h('div', { class: 'pd-star-wrap' },
-        h('h3', null, `${names.length > 1 ? g : ''}${st && st.complete && show ? '' : show ? '（途中経過）' : ''}　全体${(st.offset || 0) + 1}〜${(st.offset || 0) + src.order.length}位を決定`.trim()),
+        h('h3', null, `${names.length > 1 ? g : ''}　全体${(st.offset || 0) + 1}〜${(st.offset || 0) + src.order.length}位を決定`.trim()),
         starTable(cat, g, opts, 188, 8.5, src));
     }),
     h('p', { class: 'pd-note' }, starNote(cat)));
@@ -727,7 +727,7 @@ function leagueSection(cat, groups, opts) {
       const st = (cat.standings || {})[g];
       const show = !opts.blank;
       return h('div', { class: 'pd-star-wrap' },
-        h('h3', null, `${g}組${st && st.complete && show ? '' : show ? '（途中経過）' : ''}`),
+        h('h3', null, `${g}組`),
         starTable(cat, g, opts));
     }),
     h('p', { class: 'pd-note' }, starNote(cat)));
@@ -949,7 +949,7 @@ export function exportSpreadsheet(t, cats, opts) {
       for (const g of keys) {
         const st = cat.standings[g];
         for (const r of st.rows) {
-          const note = r.lottery ? '抽選・じゃんけん・本部決定' : r.tied && st.complete ? '順位決定待ち' : !st.complete ? '途中経過' : '';
+          const note = r.lottery ? '抽選・じゃんけん・本部決定' : r.tied && st.complete ? '順位決定待ち' : '';
           rows.push([...catCol(cat), st.placement ? g : `${g}組`, r.rank, tm[r.teamId] ? tm[r.teamId].name : '', r.p, r.w, r.d, r.l, r.gf, r.ga, r.gd, r.pts,
             st.placement && st.complete && !r.tied ? (st.offset || 0) + r.rank : null, note]);
         }

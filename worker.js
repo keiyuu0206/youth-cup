@@ -1219,7 +1219,6 @@ route('POST', '/api/admin/categories/:cid/move', async ({ req, db, params, user,
   if (other) { other.slot = m.slot; other.court = m.court; }
   m.slot = slot; m.court = court;
   applyTimes(c.config, matches);
-  renumberLeague(matches, teams);
   const label = `試合の入れ替え（${m.label}${other ? ` ⇄ ${other.label}` : ''}）`;
   await saveMatchChanges(db, c, label, before, matches);
   await bump(db, t.id);
@@ -1304,7 +1303,6 @@ async function liveSwap(db, c, t, b) {
     if (!same) fail(409, '移動先の時刻が分かりません。試合が入っている枠と入れ替えてください');
     Object.assign(m, { slot, court, start_min: same.start_min, session: same.session, time_changed: 1 });
   }
-  renumberLeague(matches, teams);
   await saveMatchChanges(db, c, `試合の入れ替え（${m.label}${other ? ` ⇄ ${other.label}` : ''}）`, before, matches);
   await bump(db, t.id);
   return json({ ok: true, live: true });

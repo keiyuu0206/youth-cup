@@ -241,10 +241,67 @@ export function placeMatches(cfg, league, ko) {
     const late = Object.values(roundEnd).reduce((a, b) => a + b, 0);
     return { place, slots: s, dist, viol, late };
   };
-  const cands = STRATEGIES.map((k) => ({ k, ...placeLeague(k) }));
-  lastCandidates = cands.map(({ k, slots, dist, viol, late }) => ({ k, slots, dist: Math.round(dist * 100) / 100, viol, late }));
-  // ①休憩が足りない連戦が少ない → ②時間帯の数が少ない → ③各節がなるべく早く終わる → ④担当のコートからのずれが小さい
-  const best = cands.sort((a, b) => a.viol - b.viol || a.slots - b.slots || a.late - b.late || a.dist - b.dist)[0];
+  // ブロックごとにコートを決める方式：組とコートの対応を固定し、各コートで担当の組を交互に（節の順に）並べる
+  //  例：8組・4コート → Aコート＝A・B組、Bコート＝C・D組…。組がコートより少ないときは、1つの組が複数のコートを担当する
+  const placeBlock = () => {
+    const G = groupCount, C = courts;
+    const courtsOf = (gi) => {
+      if (G >= C) return [Math.min(C - 1, Math.floor((gi * C) / G))];
+      const list = []; for (let c = 0; c < C; c++) if (Math.min(G - 1, Math.floor((c * G) / C)) === gi) list.push(c);
+      return list.length ? list : [gi % C];
+    };
+    const queues = Array.from({ length: C }, () => []);
+    for (let gi = 0; gi < G; gi++) {
+      const cs = courtsOf(gi);
+      const ms = league.filter((m) => m.gi === gi).sort((a, b) => a.round - b.round || a.idx - b.idx);
+      ms.forEach((m, i) => queues[cs[i % cs.length]].push(m));
+    }
+    // 1つのコートに複数の組があるときは、組を交互に並べる（A1・B1・A2・B2…）
+    for (let c = 0; c < C; c++) {
+      const byG = {};
+      for (const m of queues[c]) (byG[m.gi] ||= []).push(m);
+      const gs = Object.keys(byG).map(Number).sort((a, b) => a - b);
+      const mixed = [];
+      for (let i = 0; gs.some((g) => byG[g][i]); i++) for (const g of gs) if (byG[g][i]) mixed.push(byG[g][i]);
+      queues[c] = mixed;
+    }
+    const place = new Map(); const lastSlot = new Map();
+    let s = 0; let left = league.length;
+    while (left > 0 && s < 5000) {
+      const busy = new Set();
+      for (let c = 0; c < C; c++) {
+        const q = queues[c]; if (!q.length) continue;
+        const ok = (m) => !busy.has(m.home_team_id) && !busy.has(m.away_team_id);
+        const rested = (m) => [m.home_team_id, m.away_team_id].every((id) => s - (lastSlot.has(id) ? lastSlot.get(id) : -99) > minRest);
+        // 休憩を確保できる試合を、並び順の先頭から近い順に探す（3試合先まで）。無ければ先頭の試合
+        let k = q.slice(0, 3).findIndex((m) => ok(m) && rested(m));
+        if (k < 0) k = ok(q[0]) ? 0 : -1;
+        if (k < 0) continue;
+        const m = q.splice(k, 1)[0];
+        place.set(m, { slot: s, court: c });
+        busy.add(m.home_team_id); busy.add(m.away_team_id);
+        lastSlot.set(m.home_team_id, s); lastSlot.set(m.away_team_id, s);
+        left--;
+      }
+      s++;
+    }
+    let viol = 0; const byTeam = {};
+    for (const [m, x] of place) for (const id of [m.home_team_id, m.away_team_id]) (byTeam[id] ||= []).push(x.slot);
+    for (const list of Object.values(byTeam)) { list.sort((a, b) => a - b); for (let i = 1; i < list.length; i++) if (list[i] - list[i - 1] <= minRest) viol++; }
+    const roundEnd = {};
+    for (const [m, x] of place) roundEnd[m.round] = Math.max(roundEnd[m.round] ?? -1, x.slot);
+    return { k: 'block', place, slots: s, dist: 0, viol, late: Object.values(roundEnd).reduce((a, b) => a + b, 0) };
+  };
+  let best;
+  if (cfg.leagueCourtMode === 'block' && league.length) {
+    best = placeBlock();
+    lastCandidates = [{ k: 'block', slots: best.slots, dist: 0, viol: best.viol, late: best.late }];
+  } else {
+    const cands = STRATEGIES.map((k) => ({ k, ...placeLeague(k) }));
+    lastCandidates = cands.map(({ k, slots, dist, viol, late }) => ({ k, slots, dist: Math.round(dist * 100) / 100, viol, late }));
+    // ①休憩が足りない連戦が少ない → ②時間帯の数が少ない → ③各節がなるべく早く終わる → ④担当のコートからのずれが小さい
+    best = cands.sort((a, b) => a.viol - b.viol || a.slots - b.slots || a.late - b.late || a.dist - b.dist)[0];
+  }
   const groupLast = {};
   for (const [m, x] of best.place) {
     m.slot = x.slot;
