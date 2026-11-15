@@ -961,6 +961,7 @@ async function tournamentView(root, id, navigate) {
         h('button', { class: 'btn', type: 'button', onclick: () => openRetime(cat) }, '時間の調整'),
         h('button', { class: 'btn btn-accent', type: 'button', onclick: () => openSnsChooser(t, data.categories, cat.id, { canPhoto: !isOp() }) }, 'SNS画像'),
         h('button', { class: 'btn', type: 'button', onclick: () => openPrintDialog(t, data.categories, cat.id) }, 'PDFで出力'),
+        t.status === 'draft' ? null : h('a', { class: 'btn', href: `/t/${t.slug}`, target: '_blank', rel: 'noopener', title: '保護者が見ている画面を別のタブで開きます' }, '保護者の画面を見る'),
         ro() ? null : h('button', { class: 'btn btn-danger', type: 'button', onclick: () => openWithdraw(t, cat) }, '棄権・キャンセル')),
       h('div', { class: 'dash-grid' },
         t.status === 'live' ? card(`結果の報告待ち（${late.length}試合）`,
@@ -1200,6 +1201,7 @@ async function tournamentView(root, id, navigate) {
           t.status === 'draft' ? h('p', { class: 'muted', style: { margin: 0 } }, '「公開中」にすると見られるようになります') : null,
           h('div', { class: 'row' }, h('a', { href: viewUrl, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, viewUrl),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(viewUrl) }, 'コピー'))),
+        t.status === 'draft' ? null : h('a', { class: 'btn btn-block btn-primary', href: viewUrl, target: '_blank', rel: 'noopener' }, '保護者の画面を見る'),
         h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
   }
 

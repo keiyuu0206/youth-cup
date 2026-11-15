@@ -957,6 +957,8 @@ fieldset.lockable:disabled * { cursor: not-allowed; }
 .sc-thead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .sc-thead div { flex: 1; display: grid; }
 .sc-thead small { color: var(--ink-2); font-size: 0.75rem; }
+.sc-thead .sc-thead-btns { flex: none; display: flex; gap: 6px; align-items: center; }
+.sc-thead a.sc-mini { text-decoration: none; display: inline-flex; align-items: center; }
 .sc-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0 12px; }
 .sc-tabs button { font: inherit; font-weight: 800; min-height: 46px; border-radius: 12px; border: 1.5px solid var(--line); background: var(--surface); color: var(--ink-2); cursor: pointer; }
 .sc-tabs button[aria-selected="true"] { background: var(--turf); border-color: var(--turf); color: #fff; }

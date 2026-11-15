@@ -16,6 +16,7 @@ export async function scoreApp(root, me) {
     h('div', { class: 'sc-who' }, h('strong', null, isOp ? '大会運営' : 'スコア登録'), h('small', null, `${me.name}（${isOp ? '大会運営者' : 'スコア管理者'}・${me.region || me.parentName || ''}）`)),
     h('span', { class: 'spacer' }),
     ...headActions([
+      st.data && st.data.tournament.status !== 'draft' ? { label: '保護者の画面を見る', cls: 'sc-mini', href: `/t/${st.data.tournament.slug}` } : null,
       isOp ? { label: 'パソコン表示', cls: 'sc-mini', onClick: () => { store.set('op:mobile', false); location.href = '/admin'; } } : null,
       { label: '使い方', cls: 'sc-mini', href: MANUALS.scorer.href },
       { label: 'パスワード変更', cls: 'sc-mini', onClick: changePassword },
@@ -90,7 +91,9 @@ export async function scoreApp(root, me) {
     mount(root, header(), h('main', { class: 'wrap sc-main' },
       h('div', { class: 'sc-thead' },
         h('div', null, h('strong', null, t.name), h('small', null, STATUS[t.status] || '')),
-        h('button', { class: 'sc-mini dark', type: 'button', onclick: () => { st.listShown = true; list(); } }, '大会を選ぶ')),
+        h('div', { class: 'sc-thead-btns' },
+          t.status !== 'draft' ? h('a', { class: 'sc-mini dark', href: `/t/${t.slug}`, target: '_blank', rel: 'noopener', title: '保護者が見ている画面を別のタブで開きます（承認待ちの結果は、承認されると出ます）' }, '保護者の画面') : null,
+          h('button', { class: 'sc-mini dark', type: 'button', onclick: () => { st.listShown = true; list(); } }, '大会を選ぶ'))),
       categories.length > 1 ? h('div', { class: 'chips' }, categories.map((c) => {
         const n = c.matches.filter((m) => m.status === 'provisional').length;
         return h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(c.id === st.catId), onclick: () => { st.catId = c.id; draw(); } },
