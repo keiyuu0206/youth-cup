@@ -1812,7 +1812,7 @@ async function tournamentView(root, id, navigate) {
         h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '8px', marginBottom: '8px' } },
           h('h2', { style: { margin: 0 } }, `登録チーム（${cat.teams.length}）`),
           h('span', { class: 'spacer' }),
-          h('label', { class: 'check small', title: '都道府県を別の項目で登録したチームに付きます（大会全体の設定です）' },
+          h('label', { class: 'check small', title: '大会全体の設定です。「さくらFC（静岡）」のように名前に書いた都道府県も、外すと表示しなくなります（登録した名前はそのまま）' },
             h('input', { type: 'checkbox', checked: showPref, disabled: ro(), onchange: async (e) => {
               const v = e.target.checked ? 'show' : 'hide';
               if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { teamPref: v } }), v === 'show' ? 'チーム名のあとに都道府県を表示します' : '都道府県を表示しないようにしました')) await reload();

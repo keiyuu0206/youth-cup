@@ -197,3 +197,4 @@
 - チームの追加：貼り付け → 一致／確認／新規の一覧 → まとめて登録。照らし合わせはブラウザで計算（サーバーの負担なし）。マスタから登録するとロゴは大会のチームに写す（マスタを後で変えても過去の大会は変わらない）
 - 都道府県の表示：大会の設定 settings.teamPref（'hide' で出さない）。サーバーの loadFull で name に（静岡）を付け、元の名前は base_name。編集画面は base_name を使う
 - API：GET/POST /api/admin/team-master、PATCH/DELETE /api/admin/team-master/:id、POST …/:id/merge、POST …/import、GET …/:id/logo
+- 追記（同日）：これまで「名前（静岡）」と名前に書いて登録したチームも、表示のときだけ名前と都道府県に分けて扱う（withPref。保存データは変えない）。「出す」は元の名前のまま、「出さない」はかっこを外す。管理画面には base_name・prefecture・pref_in_name を渡す

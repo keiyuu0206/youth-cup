@@ -345,7 +345,14 @@ async function loadCategoryData(db, cid) {
 // 都道府県の表示：大会の設定で「出さない」にしていなければ、チーム名のあとに（静岡）のように付ける。
 // 都道府県を別の項目で持っているチームだけが対象（これまでの「名前（静岡）」で登録したチームは、そのまま表示される）
 const prefShown = (t) => readSettings(t).teamPref !== 'hide';
-const withPref = (teams, show) => teams.map((x) => ({ ...x, base_name: x.name, name: show && x.prefecture ? `${x.name}（${x.prefecture}）` : x.name }));
+// これまでの「ファンスナール（静岡）」のように名前に書いたチームも、表示のときだけ名前と都道府県に分けて扱う（保存しているデータは変えない）。
+// 「出す」のときは元の名前のまま、「出さない」のときはかっこの部分を外して表示する
+const withPref = (teams, show) => teams.map((x) => {
+  if (x.prefecture) return { ...x, base_name: x.name, name: show ? `${x.name}（${x.prefecture}）` : x.name };
+  const p = splitPref(x.name);
+  if (!p.pref) return { ...x, base_name: x.name };
+  return { ...x, base_name: p.name, prefecture: p.pref, pref_in_name: true, name: show ? x.name : p.name };
+});
 
 async function loadFull(db, t) {
   const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ? ORDER BY sort, created_at').bind(t.id).all()).results;
