@@ -18,6 +18,8 @@ import WEB_XLSX from './web-xlsx.js';
 import WEB_PAMPHLET from './web-pamphlet.js';
 import WEB_POSTER from './web-poster.js';
 import WEB_SCORE from './web-score.js';
+import WEB_TEAMMASTER from './web-teammaster.js';
+import { normKey, normPref, splitPref, stripSuffix } from './teamnorm.js';
 import { normalizeConfig, matchLength, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings, lenOfSlots, gapOfSlots } from './schedule.js';
@@ -168,6 +170,17 @@ async function ensureSchema(db) {
   await addCol('tournaments', 'shared_with', 'TEXT');
   // 閲覧ページ向けの版：保護者に見える内容が変わったときだけ上げる（関係者の仮登録では上げない）
   await addCol('tournaments', 'pub_rev', 'INTEGER NOT NULL DEFAULT 0');
+  // チームマスタ（全国で1つ）と、大会のチームの都道府県・元にしたマスタ。どちらも追加するだけで、既存のデータは変えない
+  if (!tables.includes('team_master')) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS team_master (id TEXT PRIMARY KEY, name TEXT NOT NULL, short_name TEXT, prefecture TEXT, logo TEXT,
+        norm TEXT NOT NULL, owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_team_master_norm ON team_master(norm)'),
+    ]);
+  }
+  await addCol('teams', 'prefecture', 'TEXT');
+  await addCol('teams', 'master_id', 'TEXT');
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_teams_master ON teams(master_id)').run();
   schemaChecked = true;
 }
 
@@ -329,12 +342,20 @@ async function loadCategoryData(db, cid) {
   return { teams: teams.results, matches: matches.results.map(parseMatch) };
 }
 
+// 都道府県の表示：大会の設定で「出さない」にしていなければ、チーム名のあとに（静岡）のように付ける。
+// 都道府県を別の項目で持っているチームだけが対象（これまでの「名前（静岡）」で登録したチームは、そのまま表示される）
+const prefShown = (t) => readSettings(t).teamPref !== 'hide';
+const withPref = (teams, show) => teams.map((x) => ({ ...x, base_name: x.name, name: show && x.prefecture ? `${x.name}（${x.prefecture}）` : x.name }));
+
 async function loadFull(db, t) {
   const cats = (await db.prepare('SELECT * FROM categories WHERE tournament_id = ? ORDER BY sort, created_at').bind(t.id).all()).results;
   const out = [];
+  const show = prefShown(t);
   for (const c of cats) {
     c.config = normalizeConfig(JSON.parse(c.config));
-    const { teams, matches } = await loadCategoryData(db, c.id);
+    const raw = await loadCategoryData(db, c.id);
+    const matches = raw.matches;
+    const teams = withPref(raw.teams, show);
     const ev = evaluateCategory(c.config, teams, matches);
     out.push({ id: c.id, name: c.name, sort: c.sort, config: c.config, teams, matches, standings: ev.standings, finalRanking: ev.finalRanking });
   }
@@ -424,7 +445,10 @@ async function sponsorImage(db, id, kind = 's') {
       : 'SELECT t.logo AS image FROM teams t JOIN categories c ON c.id = t.category_id JOIN tournaments x ON x.id = c.tournament_id WHERE t.id = ? AND x.show_logo = 1 AND x.status != \'draft\'';
   const sp = await db.prepare(q).bind(id).first();
   if (!sp || !sp.image) return new Response('見つかりません', { status: 404 });
-  const m = sp.image.match(/^data:([^;]+);base64,(.*)$/);
+  return sponsorImageFromData(sp.image);
+}
+function sponsorImageFromData(image) {
+  const m = image.match(/^data:([^;]+);base64,(.*)$/);
   if (!m) return new Response('画像が正しくありません', { status: 500 });
   const bin = atob(m[2]);
   const bytes = new Uint8Array(bin.length);
@@ -564,6 +588,7 @@ const STATIC = {
   '/web-pamphlet.js': [WEB_PAMPHLET, JS],
   '/web-poster.js': [WEB_POSTER, JS],
   '/web-score.js': [WEB_SCORE, JS],
+  '/web-teammaster.js': [WEB_TEAMMASTER, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -1086,21 +1111,43 @@ route('POST', '/api/admin/categories/:cid/teams', async ({ req, db, params, user
   const c = await getCategory(db, params.cid, user);
   mustUnlocked(await getTournament(db, c.tournament_id, user), url);
   const b = await body(req);
-  const list = Array.isArray(b.teams) ? b.teams : [b];
+  const list = (Array.isArray(b.teams) ? b.teams : [b]).slice(0, 200);
   const count = await db.prepare('SELECT COUNT(*) AS n FROM teams WHERE category_id = ?').bind(c.id).first();
   const stmts = [];
-  list.forEach((x, i) => {
+  let created = 0;
+  for (const [i, x] of list.entries()) {
     const name = clip(x.name, 60);
-    if (!name) return;
-    x.short_name = x.short_name ? clip(x.short_name, 20) : null;
-    x.club = x.club ? clip(x.club, 60) : null;
-    stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(uid(), c.id, name, x.short_name || null, x.club || null, checkLogo(x.logo), count.n + i));
-  });
+    if (!name) continue;
+    const short = x.short_name ? clip(x.short_name, 20) : null;
+    const club = x.club ? clip(x.club, 60) : null;
+    const pref = x.prefecture ? clip(x.prefecture, 12) : null;
+    let mid = x.master_id ? String(x.master_id) : null;
+    // マスタに無いチーム：マスタにも登録する（同じ名前・都道府県がすでにあれば、それを使う）
+    if (!mid && x.newMaster && ['super', 'region'].includes(user.role)) {
+      const mname = clip(x.master_name || name, 60);
+      const mpref = x.master_prefecture !== undefined ? (x.master_prefecture ? clip(x.master_prefecture, 12) : null) : pref;
+      mid = await findMaster(db, mname, mpref);
+      if (!mid) {
+        mid = uid();
+        await db.prepare('INSERT INTO team_master (id, name, short_name, prefecture, logo, norm, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(mid, mname, x.master_short_name ? clip(x.master_short_name, 20) : null, mpref, checkLogo(x.logo), normKey(mname), ownerOf(user), now(), now()).run();
+        created++;
+      }
+    }
+    if (mid) {
+      // ロゴはマスタから写す（あとでマスタのロゴを変えても、この大会の表示は変わらない）
+      stmts.push(db.prepare(`INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, prefecture, master_id)
+        SELECT ?, ?, ?, ?, ?, COALESCE(?, logo), ?, COALESCE(?, prefecture), id FROM team_master WHERE id = ?`)
+        .bind(uid(), c.id, name, short, club, x.logo ? checkLogo(x.logo) : null, count.n + i, pref, mid));
+    } else {
+      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, prefecture) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(uid(), c.id, name, short, club, checkLogo(x.logo), count.n + i, pref));
+    }
+  }
   if (!stmts.length) fail(400, 'チーム名を入力してください');
   await batchAll(db, stmts);
   await bump(db, c.tournament_id);
-  return json({ ok: true, added: stmts.length });
+  return json({ ok: true, added: stmts.length, masterCreated: created });
 }, 'admin');
 
 route('PATCH', '/api/admin/teams/:id', async ({ req, db, params, user }) => {
@@ -1108,11 +1155,12 @@ route('PATCH', '/api/admin/teams/:id', async ({ req, db, params, user }) => {
   if (!team) fail(404, 'チームが見つかりません');
   await getCategory(db, team.category_id, user);
   const b = await body(req);
-  await db.prepare('UPDATE teams SET name = ?, short_name = ?, club = ?, logo = ? WHERE id = ?').bind(
+  await db.prepare('UPDATE teams SET name = ?, short_name = ?, club = ?, logo = ?, prefecture = ? WHERE id = ?').bind(
     b.name !== undefined ? clip(b.name, 60) || team.name : team.name,
     b.short_name !== undefined ? clip(b.short_name, 20) || null : team.short_name,
     b.club !== undefined ? clip(b.club, 60) || null : team.club,
     b.logo !== undefined ? checkLogo(b.logo) : team.logo,
+    b.prefecture !== undefined ? clip(b.prefecture, 12) || null : team.prefecture ?? null,
     team.id,
   ).run();
   const c = await getCategory(db, team.category_id, user);
@@ -1132,6 +1180,135 @@ route('DELETE', '/api/admin/teams/:id', async ({ db, params, user, url }) => {
   if (used.n) await db.prepare('DELETE FROM matches WHERE category_id = ?').bind(c.id).run();
   await bump(db, t.id);
   return json({ ok: true, scheduleCleared: !!used.n });
+}, 'admin');
+
+// ---------- 管理者: チームマスタ（全国で1つ。次回以降の大会で使い回す） ----------
+// 見る：全体管理者・地域管理者・閲覧専用／追加：全体管理者・地域管理者／変更・削除：全体管理者と、登録した地域管理者
+
+const canEditMaster = (user, m) => isSuper(user) && !user.viewer || (user.role === 'region' && m.owner_id === user.id);
+const mustMasterUser = (user) => { if (!['super', 'region'].includes(user.role)) fail(403, 'チームマスタは管理者だけが使えます'); };
+
+// 同じ名前（表記ゆれを除く）・同じ都道府県のマスタ。都道府県が片方しか無いときも同じとみなす
+async function findMaster(db, name, pref) {
+  const rows = (await db.prepare('SELECT id, prefecture FROM team_master WHERE norm = ?').bind(normKey(name)).all()).results;
+  const same = rows.filter((r) => (r.prefecture || null) === (pref || null));
+  if (same.length) return same[0].id;
+  const loose = rows.filter((r) => !pref || !r.prefecture);
+  return loose.length === 1 ? loose[0].id : null;
+}
+async function getMaster(db, id) {
+  const m = await db.prepare('SELECT * FROM team_master WHERE id = ?').bind(id).first();
+  if (!m) fail(404, 'マスタのチームが見つかりません');
+  return m;
+}
+
+route('GET', '/api/admin/team-master', async ({ db, user }) => {
+  mustMasterUser(user);
+  const rows = (await db.prepare(`SELECT m.id, m.name, m.short_name, m.prefecture, m.owner_id, m.updated_at, length(m.logo) AS logo_len,
+      (SELECT COUNT(*) FROM teams t WHERE t.master_id = m.id) AS uses, u.region AS owner_region, u.name AS owner_name
+    FROM team_master m LEFT JOIN users u ON u.id = m.owner_id ORDER BY m.prefecture, m.name`).all()).results;
+  return json({ masters: rows.map(({ logo_len, owner_id, ...m }) => ({ ...m, owner: owner_id === 'root' || !owner_id ? '全体管理者' : m.owner_region || m.owner_name || '',
+    has_logo: !!logo_len, logo_v: logo_len ? `${logo_len}-${(m.updated_at || '').slice(0, 19)}` : null, can_edit: canEditMaster(user, { owner_id }) })),
+    canImport: isSuper(user) && !user.viewer });
+}, 'admin');
+
+route('GET', '/api/admin/team-master/:id/logo', async ({ db, params, user }) => {
+  mustMasterUser(user);
+  const m = await db.prepare('SELECT logo FROM team_master WHERE id = ?').bind(params.id).first();
+  if (!m || !m.logo) return new Response('見つかりません', { status: 404 });
+  const r = await sponsorImageFromData(m.logo);
+  r.headers.set('Cache-Control', 'private, max-age=86400');
+  return r;
+}, 'admin');
+
+route('POST', '/api/admin/team-master', async ({ req, db, user }) => {
+  mustMasterUser(user);
+  const b = await body(req);
+  const name = clip(b.name, 60);
+  if (!name) fail(400, 'チーム名を入力してください');
+  const pref = b.prefecture ? clip(b.prefecture, 12) : null;
+  const dup = await db.prepare('SELECT id FROM team_master WHERE norm = ? AND IFNULL(prefecture, \'\') = ?').bind(normKey(name), pref || '').first();
+  if (dup) fail(409, '同じ名前・都道府県のチームがすでにマスタにあります');
+  const id = uid();
+  await db.prepare('INSERT INTO team_master (id, name, short_name, prefecture, logo, norm, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .bind(id, name, b.short_name ? clip(b.short_name, 20) : null, pref, checkLogo(b.logo), normKey(name), ownerOf(user), now(), now()).run();
+  return json({ ok: true, id });
+}, 'admin');
+
+route('PATCH', '/api/admin/team-master/:id', async ({ req, db, params, user }) => {
+  mustMasterUser(user);
+  const m = await getMaster(db, params.id);
+  if (!canEditMaster(user, m)) fail(403, 'このチームは、登録した地域の管理者か全体管理者だけが変更できます');
+  const b = await body(req);
+  const name = b.name !== undefined ? clip(b.name, 60) || m.name : m.name;
+  const pref = b.prefecture !== undefined ? clip(b.prefecture, 12) || null : m.prefecture;
+  const dup = await db.prepare('SELECT id FROM team_master WHERE norm = ? AND IFNULL(prefecture, \'\') = ? AND id != ?').bind(normKey(name), pref || '', m.id).first();
+  if (dup) fail(409, '同じ名前・都道府県のチームがすでにマスタにあります（重なっているときは「統合」を使ってください）');
+  await db.prepare('UPDATE team_master SET name = ?, short_name = ?, prefecture = ?, logo = ?, norm = ?, updated_at = ? WHERE id = ?').bind(
+    name, b.short_name !== undefined ? clip(b.short_name, 20) || null : m.short_name, pref,
+    b.logo !== undefined ? checkLogo(b.logo) : m.logo, normKey(name), now(), m.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+// 削除：マスタからだけ消す（これまでの大会のチームはそのまま）
+route('DELETE', '/api/admin/team-master/:id', async ({ db, params, user }) => {
+  mustMasterUser(user);
+  const m = await getMaster(db, params.id);
+  if (!canEditMaster(user, m)) fail(403, 'このチームは、登録した地域の管理者か全体管理者だけが削除できます');
+  await db.prepare('DELETE FROM team_master WHERE id = ?').bind(m.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+// 統合：二重に登録されたチームを1つにまとめる（消す側を使った大会のチームは、残す側を指すようにする）
+route('POST', '/api/admin/team-master/:id/merge', async ({ req, db, params, user }) => {
+  mustMasterUser(user);
+  const m = await getMaster(db, params.id);
+  if (!canEditMaster(user, m)) fail(403, 'このチームは、登録した地域の管理者か全体管理者だけが統合できます');
+  const b = await body(req);
+  const into = await getMaster(db, String(b.into || ''));
+  if (into.id === m.id) fail(400, '同じチームは統合できません');
+  await db.batch([
+    db.prepare('UPDATE teams SET master_id = ? WHERE master_id = ?').bind(into.id, m.id),
+    db.prepare('UPDATE team_master SET logo = COALESCE(logo, ?), short_name = COALESCE(short_name, ?), prefecture = COALESCE(prefecture, ?), updated_at = ? WHERE id = ?')
+      .bind(m.logo, m.short_name, m.prefecture, now(), into.id),
+    db.prepare('DELETE FROM team_master WHERE id = ?').bind(m.id),
+  ]);
+  return json({ ok: true });
+}, 'admin');
+
+// これまでの大会のチームからマスタを作る（全体管理者だけ。何度押しても、すでにあるチームは増えない。大会のチームは変えない）
+route('POST', '/api/admin/team-master/import', async ({ db, user }) => {
+  if (!isSuper(user) || user.viewer) fail(403, '全体管理者だけが使える機能です');
+  const rows = (await db.prepare(`SELECT tm.id, tm.name, tm.short_name, tm.club, tm.prefecture, tm.category_id, tm.logo IS NOT NULL AS has_logo, x.owner_id
+    FROM teams tm JOIN categories c ON c.id = tm.category_id JOIN tournaments x ON x.id = c.tournament_id ORDER BY x.date DESC, x.created_at DESC`).all()).results;
+  // 同じカテゴリに「さくらFC A」「さくらFC B」のような兄弟チームがあれば、クラブ名「さくらFC」としてまとめる
+  const sib = {};
+  for (const r of rows) {
+    const p = splitPref(r.name);
+    r.base = p.name; r.pref = r.prefecture || p.pref;
+    const st = stripSuffix(r.base);
+    if (st) { const k = `${r.category_id}|${normKey(st)}`; (sib[k] = sib[k] || []).push(r); r.stripped = st; }
+  }
+  const groups = new Map();
+  for (const r of rows) {
+    let nm = r.base;
+    if (r.club && normKey(r.base).startsWith(normKey(r.club))) nm = r.club;
+    else if (r.stripped && sib[`${r.category_id}|${normKey(r.stripped)}`].length > 1) nm = r.stripped;
+    const key = `${normKey(nm)}|${r.pref || ''}`;
+    if (!normKey(nm)) continue;
+    const g = groups.get(key);
+    if (!g) groups.set(key, { name: nm, pref: r.pref, rep: r, short: nm === r.base ? r.short_name : null });
+    else if (!g.rep.has_logo && r.has_logo) g.rep = r; // 新しい大会を優先しつつ、ロゴがあるチームを選ぶ
+  }
+  const have = new Set((await db.prepare('SELECT norm, prefecture FROM team_master').all()).results.map((r) => `${r.norm}|${r.prefecture || ''}`));
+  const stmts = [];
+  for (const [key, g] of groups) {
+    if (have.has(key)) continue;
+    stmts.push(db.prepare(`INSERT INTO team_master (id, name, short_name, prefecture, logo, norm, owner_id, created_at, updated_at)
+      SELECT ?, ?, ?, ?, logo, ?, ?, ?, ? FROM teams WHERE id = ?`).bind(uid(), clip(g.name, 60), g.short ? clip(g.short, 20) : null, g.pref || null, normKey(g.name), g.rep.owner_id || 'root', now(), now(), g.rep.id));
+  }
+  await batchAll(db, stmts, 50);
+  return json({ ok: true, added: stmts.length, skipped: groups.size - stmts.length });
 }, 'admin');
 
 // ---------- 管理者: 組み分け・日程 ----------
@@ -1895,8 +2072,8 @@ route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user 
     const cid = uid();
     stmts.push(db.prepare('INSERT INTO categories (id, tournament_id, name, sort, config, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(cid, nid, c.name, c.sort, JSON.stringify(normalizeConfig(ncfg)), now()));
     for (const x of teams) {
-      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(tmap[x.id], cid, x.name, x.short_name, x.club, x.logo, x.sort, withSchedule ? x.group_label : null));
+      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label, prefecture, master_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(tmap[x.id], cid, x.name, x.short_name, x.club, x.logo, x.sort, withSchedule ? x.group_label : null, x.prefecture ?? null, x.master_id ?? null));
       teamCount++;
     }
     if (withSchedule) {
@@ -2022,8 +2199,8 @@ route('POST', '/api/admin/restore', async ({ req, db, user }) => {
       .bind(cid, nid, txt(c.name, 40) || 'カテゴリ', Number(c.sort) || 0, JSON.stringify(normalizeConfig(ncfg)), now()));
     for (const x of teams) {
       const tl = (() => { try { return checkLogo(x.logo); } catch { return null; } })();
-      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(tmap[x.id], cid, txt(x.name, 80) || 'チーム', txt(x.short_name, 40), txt(x.club, 80), tl, Number(x.sort) || 0, txt(x.group_label, 4)));
+      stmts.push(db.prepare('INSERT INTO teams (id, category_id, name, short_name, club, logo, sort, group_label, prefecture, master_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(tmap[x.id], cid, txt(x.name, 80) || 'チーム', txt(x.short_name, 40), txt(x.club, 80), tl, Number(x.sort) || 0, txt(x.group_label, 4), txt(x.prefecture, 12), txt(x.master_id, 64)));
       teamCount++;
     }
     for (const m of matchesAll.filter((x) => x && x.category_id === c.id).slice(0, 2000)) {

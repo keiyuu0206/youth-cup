@@ -582,3 +582,52 @@ test('時刻で区切る: 終了時刻までに終わる試合だけ1日目に�
     assert.equal(matches.length, 84);
   }
 });
+
+// ---------- チームマスタ：貼り付けの読み取りと照らし合わせ ----------
+import * as TM from './web-teammaster.js';
+import * as TN from './teamnorm.js';
+
+test('チームマスタ：画面とサーバーの正規化が同じ', () => {
+  for (const s of ['ＴＤＦＣ', 'K-WEST.FC2001', 'さくら ＦＣ', 'INFINITY F.C.', '静岡県', '東京都', '京都府', '北海道', '大阪', 'オーストラリア']) {
+    assert.equal(TM.normKey(s), TN.normKey(s));
+    assert.equal(TM.normPref(s), TN.normPref(s));
+  }
+  assert.deepEqual(TM.PREFS, TN.PREFS);
+  assert.equal(TM.PREFS.length, 47);
+  assert.equal(TN.normPref('京都府'), '京都');
+  assert.equal(TN.normPref('京都'), '京都');
+});
+
+test('チームマスタ：1行の読み取り', () => {
+  assert.deepEqual(TM.parseLine('A1 INFINITY FOOTBALL CLUB (茨城)').name, 'INFINITY FOOTBALL CLUB');
+  assert.equal(TM.parseLine('A1 INFINITY FOOTBALL CLUB (茨城)').pref, '茨城');
+  assert.equal(TM.parseLine('さくらFC, 静岡県').pref, '静岡');
+  assert.equal(TM.parseLine('さくらFC A, さくらFC').club, 'さくらFC');
+  assert.equal(TM.parseLine('KSS（オーストラリア）').name, 'KSS（オーストラリア）');
+  assert.equal(TM.parseLine('   '), null);
+});
+
+test('チームマスタ：一致・確認・新規とA・Bチーム', () => {
+  const idx = TM.buildIndex([{ id: '1', name: 'K-WEST.FC2001', prefecture: '埼玉' }, { id: '2', name: 'FC春江', prefecture: '東京' },
+    { id: '3', name: 'さくらFC', prefecture: '静岡' }, { id: '4', name: 'さくらFC', prefecture: '愛知' }, { id: '5', name: 'TDFC', prefecture: null }]);
+  const m = (l) => TM.matchRow(TM.parseLine(l), idx);
+  assert.equal(m('K-WEST.FC2001A').status, 'match');
+  assert.equal(TM.teamName(m('K-WEST.FC2001A').master, m('K-WEST.FC2001A').suffix), 'K-WEST.FC2001A');
+  assert.equal(TM.teamName(m('FC春江② (東京)').master, '②'), 'FC春江②');
+  assert.equal(m('ＴＤＦＣ').master.id, '5');
+  assert.equal(m('さくらFC（静岡）').master.id, '3');
+  assert.equal(m('さくらFC').status, 'similar'); // 都道府県違いの同名が2つ
+  assert.equal(m('さくらFC').candidates.length, 2);
+  assert.equal(m('さくらサッカークラブ（静岡）').status, 'similar');
+  assert.equal(m('まったく新しい少年団').status, 'new');
+  assert.equal(TM.teamName({ name: 'さくらFC' }, 'A'), 'さくらFC A');
+  assert.equal(TM.splitSuffix('TDFC').strong, false);
+  assert.equal(TM.splitSuffix('さくらFC A').strong, true);
+});
+
+test('チームマスタ：これまでの名前から都道府県を分ける', () => {
+  assert.deepEqual(TN.splitPref('ファンスナール（静岡）'), { name: 'ファンスナール', pref: '静岡' });
+  assert.deepEqual(TN.splitPref('KSS（オーストラリア）'), { name: 'KSS（オーストラリア）', pref: null });
+  assert.equal(TN.stripSuffix('FC春江②'), 'FC春江');
+  assert.equal(TN.stripSuffix('K-WEST.FC2001A'), 'K-WEST.FC2001');
+});

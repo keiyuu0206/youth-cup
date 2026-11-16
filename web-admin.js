@@ -1,6 +1,7 @@
 import { api, ApiError } from './web-api.js';
 const apiBase = api;
 import { openSnsChooser } from './web-poster.js';
+import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix } from './web-teammaster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton } from './web-ui.js';
@@ -396,6 +397,7 @@ export async function admin(root, path, navigate) {
   if (ME.role === 'scorer' || ME.role === 'operator') return (await import('./web-score.js')).scoreApp(root, ME);
   if (path.startsWith('/admin/scorers')) return isViewer() ? navigate('/admin') : scorersView(root, navigate);
   if (path.startsWith('/admin/accounts')) return isSuperUser() ? accountsView(root, navigate) : navigate('/admin');
+  if (path.startsWith('/admin/masters')) return mastersView(root, navigate);
   const m = path.match(/^\/admin\/t\/([^/]+)/);
   if (m) return tournamentView(root, m[1], navigate);
   return listView(root, navigate);
@@ -480,6 +482,7 @@ function adminHeader(title, navigate, back) {
     ...headActions([
       isSuperUser() ? { label: 'アカウント管理', onClick: () => navigate('/admin/accounts') } : null,
       ME && !isViewer() && !isOp() ? { label: 'アカウント追加', onClick: () => navigate('/admin/scorers') } : null,
+      ME && !isOp() ? { label: 'チームマスタ', onClick: () => navigate('/admin/masters') } : null,
       isOp() ? { label: '使い方', href: MANUALS.scorer.href } : ME ? { label: 'マニュアル', onClick: openManuals } : null,
       isOp() ? { label: 'スマホ表示', onClick: () => { store.set('op:mobile', true); location.href = '/admin'; } } : null,
       ME && ME.id !== 'root' ? { label: 'パスワード変更', onClick: changePassword } : null,
@@ -528,6 +531,121 @@ function loginView(root, onDone) {
 }
 
 // ---------- スコア管理者（全体管理者・地域管理者が発行） ----------
+
+// ===== 都道府県の選択（47都道府県＋その他は自由入力） =====
+function prefPicker(value, onChange) {
+  const other = value && !PREFS.includes(value);
+  const txt = h('input', { type: 'text', value: other ? value : '', placeholder: '例: オーストラリア', hidden: !other, 'aria-label': '都道府県（その他）', oninput: (e) => onChange(e.target.value.trim()) });
+  const sel = h('select', { 'aria-label': '都道府県', onchange: (e) => {
+    const v = e.target.value;
+    txt.hidden = v !== '__other';
+    if (v === '__other') { txt.focus(); onChange(txt.value.trim()); } else onChange(v);
+  } }, h('option', { value: '', selected: !value }, '（なし）'), PREFS.map((p) => h('option', { value: p, selected: value === p }, p)),
+  h('option', { value: '__other', selected: other }, 'その他（入力）'));
+  return h('div', { class: 'pref-pick' }, sel, txt);
+}
+const masterLogo = (m, size = 32) => (m.has_logo ? h('img', { class: 'tm-logo', src: `/api/admin/team-master/${m.id}/logo?v=${encodeURIComponent(m.logo_v || '')}`, alt: '', width: size, height: size, loading: 'lazy' })
+  : h('span', { class: 'tm-logo tm-nologo', style: { width: `${size}px`, height: `${size}px` } }));
+const prefText = (p) => (p ? `（${p}）` : '');
+
+// ===== チームマスタ：全国で1つ。登録したチームを次回以降の大会で使い回す =====
+async function mastersView(root, navigate) {
+  let data;
+  try { data = await api('GET', '/api/admin/team-master'); } catch (e) { return mount(root, adminHeader('チームマスタ', navigate, true), h('p', { class: 'empty' }, e.message)); }
+  const st = { q: store.get('tm:q', ''), pref: store.get('tm:pref', ''), limit: 120 };
+  const listBox = h('div');
+  const canAdd = !isViewer();
+  const reloadView = () => mastersView(root, navigate);
+  const draw = () => {
+    const q = st.q.normalize('NFKC').toLowerCase();
+    const hits = data.masters.filter((m) => (!st.pref || (m.prefecture || '') === st.pref)
+      && (!q || `${m.name} ${m.short_name || ''} ${m.prefecture || ''}`.normalize('NFKC').toLowerCase().includes(q)));
+    mount(listBox,
+      h('p', { class: 'muted small', style: { margin: '0 0 8px' } }, `${hits.length}チーム${hits.length !== data.masters.length ? `（全${data.masters.length}チーム中）` : ''}`),
+      hits.length ? h('div', { class: 'tm-list' }, hits.slice(0, st.limit).map((m) => h('div', { class: 'tm-row' },
+        masterLogo(m, 36),
+        h('div', { class: 'tm-main' }, h('strong', null, m.name), h('small', { class: 'muted' }, [m.short_name ? `略称：${m.short_name}` : '', `登録：${m.owner || '—'}`, m.uses ? `${m.uses}大会で使用` : ''].filter(Boolean).join('　'))),
+        m.prefecture ? h('span', { class: 'tag' }, m.prefecture) : h('span', { class: 'tag muted' }, '都道府県なし'),
+        m.can_edit ? h('div', { class: 'row', style: { gap: '4px' } },
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editMaster(m) }, '編集'),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => mergeMaster(m) }, '統合'),
+          h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
+            if (!(await confirmDialog(`${m.name}をマスタから削除します`, 'これまでの大会のチームはそのまま残ります。次回からの照らし合わせに出なくなります。', '削除する', true))) return;
+            if (await run(() => api('DELETE', `/api/admin/team-master/${m.id}`), '削除しました')) reloadView();
+          } }, '削除')) : null)))
+        : h('p', { class: 'empty' }, data.masters.length ? '条件に合うチームがありません' : 'まだチームがありません。大会の「チーム」で参加チームを登録すると、ここに貯まっていきます。'),
+      hits.length > st.limit ? h('button', { class: 'btn btn-block', type: 'button', style: { marginTop: '10px' }, onclick: () => { st.limit += 300; draw(); } }, `さらに表示（残り${hits.length - st.limit}チーム）`) : null);
+  };
+  const editMaster = (m) => {
+    const f = { name: m ? m.name : '', short_name: m ? m.short_name || '' : '', prefecture: m ? m.prefecture || '' : '' };
+    const img = h('div');
+    let logoChanged = false, logo = null;
+    const drawImg = () => mount(img, logoChanged ? (logo ? h('img', { src: logo, alt: '', width: 48, height: 48, style: { objectFit: 'contain' } }) : h('span', { class: 'muted small' }, 'ロゴなし'))
+      : m && m.has_logo ? masterLogo(m, 48) : h('span', { class: 'muted small' }, 'ロゴなし'),
+      (logoChanged ? logo : m && m.has_logo) ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { logoChanged = true; logo = null; drawImg(); } }, 'ロゴを外す') : null);
+    drawImg();
+    modal({
+      title: m ? 'マスタのチームを編集' : 'マスタにチームを追加',
+      content: h('div', { class: 'stack' },
+        h('label', { class: 'field' }, h('span', null, 'チーム名（クラブ名。A・Bは付けない）'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
+        h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, '略称'), h('input', { type: 'text', value: f.short_name, placeholder: '順位表などで名前が長いときに使います', oninput: (e) => { f.short_name = e.target.value; } })),
+          h('label', { class: 'field tm-pref' }, h('span', null, '都道府県'), prefPicker(f.prefecture, (v) => { f.prefecture = v; }))),
+        h('div', { class: 'row', style: { alignItems: 'center' } }, h('span', { class: 'small', style: { fontWeight: 700 } }, 'ロゴ'), img),
+        h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', 'aria-label': 'チームロゴの画像', onchange: async (e) => {
+          const v = await run(() => resizeImage(e.target.files[0], 160));
+          if (v) { logoChanged = true; logo = v; drawImg(); }
+        } }),
+        m && m.uses ? h('p', { class: 'muted small', style: { margin: 0 } }, 'ここで変えても、これまでの大会の表示は変わりません。次に登録する大会から使われます。') : null),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '保存', kind: 'btn-primary', onClick: async () => {
+        const payload = { ...f, ...(logoChanged ? { logo } : {}) };
+        const ok = m ? await run(() => api('PATCH', `/api/admin/team-master/${m.id}`, payload), '保存しました') : await run(() => api('POST', '/api/admin/team-master', payload), '追加しました');
+        if (!ok) return true;
+        reloadView();
+      } }],
+    });
+  };
+  const mergeMaster = (m) => {
+    let into = null, q = '';
+    const box = h('div', { class: 'tm-pick' });
+    const drawPick = () => {
+      const k = q.normalize('NFKC').toLowerCase();
+      const c = data.masters.filter((x) => x.id !== m.id && (!k || `${x.name} ${x.short_name || ''}`.normalize('NFKC').toLowerCase().includes(k))).slice(0, 30);
+      mount(box, c.map((x) => h('label', { class: 'tm-row tm-choice' }, h('input', { type: 'radio', name: 'tm-into', checked: into === x.id, onchange: () => { into = x.id; } }),
+        masterLogo(x, 28), h('div', { class: 'tm-main' }, h('strong', null, x.name + prefText(x.prefecture)), h('small', { class: 'muted' }, `登録：${x.owner || '—'}`)))));
+    };
+    drawPick();
+    modal({
+      title: `${m.name}${prefText(m.prefecture)}を統合`,
+      content: h('div', { class: 'stack' },
+        h('p', { style: { margin: 0 } }, '同じチームが二重に登録されているときに使います。残すチームを選ぶと、このチームはマスタから消え、残すチームにまとまります（ロゴなどが空なら、このチームのものを引き継ぎます）。これまでの大会の表示は変わりません。'),
+        h('input', { type: 'search', placeholder: '残すチームを検索', oninput: (e) => { q = e.target.value; drawPick(); } }), box),
+      actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '統合する', kind: 'btn-primary', onClick: async () => {
+        if (!into) { toast('残すチームを選んでください', true); return true; }
+        if (!(await run(() => api('POST', `/api/admin/team-master/${m.id}/merge`, { into }), '統合しました'))) return true;
+        reloadView();
+      } }],
+    });
+  };
+  const prefs = [...new Set(data.masters.map((m) => m.prefecture || ''))].filter(Boolean).sort((a, b) => (PREFS.indexOf(a) + 1 || 99) - (PREFS.indexOf(b) + 1 || 99));
+  mount(root, adminHeader('チームマスタ', navigate, true), h('main', { class: 'wrap wide' },
+    h('section', { class: 'panel' },
+      h('div', { class: 'row', style: { alignItems: 'flex-start', flexWrap: 'wrap', gap: '8px' } },
+        h('div', { style: { flex: '1 1 320px' } }, h('h2', { style: { margin: '0 0 4px' } }, 'チームマスタ'),
+          h('p', { class: 'muted small', style: { margin: 0 } }, '全国で共通のチームの一覧です。大会の「チーム」で参加チーム一覧を貼り付けると、ここと照らし合わせて名前・都道府県・ロゴを自動で入れます。追加は全体管理者と地域管理者、変更・削除は全体管理者と登録した地域の管理者ができます。')),
+        canAdd ? h('button', { class: 'btn btn-primary', type: 'button', onclick: () => editMaster(null) }, '＋ チームを追加') : null,
+        data.canImport ? h('button', { class: 'btn', type: 'button', onclick: async () => {
+          if (!(await confirmDialog('これまでの大会のチームからマスタを作ります', 'これまでに登録したすべての大会のチームを読み取って、マスタに無いチームを追加します。「さくらFC（静岡）」のような名前は、名前と都道府県に分けて登録します。大会のチームのデータは変わりません。何度押しても、同じチームは増えません。', '作る'))) return;
+          const r = await run(() => api('POST', '/api/admin/team-master/import'));
+          if (r) { toast(r.added ? `${r.added}チームをマスタに追加しました` : '追加するチームはありませんでした（すでにマスタにあります）'); reloadView(); }
+        } }, 'これまでの大会のチームから作る') : null),
+      h('div', { class: 'row', style: { margin: '14px 0 10px', flexWrap: 'wrap', gap: '8px' } },
+        h('input', { type: 'search', value: st.q, placeholder: 'チーム名で検索', style: { flex: '1 1 220px' }, oninput: (e) => { st.q = e.target.value; store.set('tm:q', st.q); st.limit = 120; draw(); } }),
+        h('select', { 'aria-label': '都道府県で絞り込む', onchange: (e) => { st.pref = e.target.value; store.set('tm:pref', st.pref); st.limit = 120; draw(); } },
+          h('option', { value: '' }, 'すべての都道府県'), prefs.map((p) => h('option', { value: p, selected: st.pref === p }, p)))),
+      listBox)));
+  draw();
+}
 
 async function scorersView(root, navigate) {
   const [{ scorers }, { tournaments }] = await Promise.all([api('GET', '/api/admin/scorers'), api('GET', '/api/admin/tournaments')]);
@@ -1677,25 +1795,33 @@ async function tournamentView(root, id, navigate) {
   // ----- チーム -----
 
   function teamsView(t, cat, editable) {
-    const bulk = h('textarea', { placeholder: '1行に1チーム\n例:\nさくらFC A, さくらFC\nさくらFC B, さくらFC\n青空SC' });
+    const bulk = h('textarea', { rows: 6, placeholder: '参加チーム一覧を貼り付け（1行に1チーム）\n例:\nさくらFC（静岡）\nK-WEST.FC2001A（埼玉）\nK-WEST.FC2001B（埼玉）\n青空SC, 東京' });
+    const showPref = (data.tournament.settings || {}).teamPref !== 'hide';
     return h('div', null,
       h('fieldset', { class: 'lockable', disabled: isLocked() }, h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '8px' } }, 'チームを追加'),
-        h('p', { class: 'muted small', style: { marginTop: 0 } }, '「チーム名, クラブ名」と書くとクラブも登録できます。同じクラブのチームは組み分けで別の組になります。'),
+        h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Excelや資料の参加チーム一覧をそのまま貼り付けてください。チームマスタと照らし合わせて、名前・都道府県・ロゴを自動で入れます。「チーム名（静岡）」「チーム名, 静岡」のどちらの書き方でも読み取れます。同じクラブのA・Bチームは、組み分けで別の組になります。'),
         bulk,
         h('button', { class: 'btn btn-primary', type: 'button', style: { marginTop: '8px' }, onclick: async () => {
-          const teams = bulk.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-            const [name, club] = l.split(/[,、\t]/).map((s) => s.trim());
-            return { name, club: club || null };
-          });
-          if (await run(() => api('POST', `/api/admin/categories/${cat.id}/teams`, { teams }), `${teams.length}チームを追加しました`)) await reload();
-        } }, 'チームを追加'))),
+          const rows = bulk.value.split('\n').map(parseLine).filter(Boolean);
+          if (!rows.length) return toast('チーム名を貼り付けてください', true);
+          const ok = await openTeamReview(cat, rows);
+          if (ok) bulk.value = '';
+        } }, '照らし合わせて追加'))),
       h('section', { class: 'panel' },
-        h('h2', { style: { marginBottom: '8px' } }, `登録チーム（${cat.teams.length}）`),
+        h('div', { class: 'row', style: { flexWrap: 'wrap', gap: '8px', marginBottom: '8px' } },
+          h('h2', { style: { margin: 0 } }, `登録チーム（${cat.teams.length}）`),
+          h('span', { class: 'spacer' }),
+          h('label', { class: 'check small', title: '都道府県を別の項目で登録したチームに付きます（大会全体の設定です）' },
+            h('input', { type: 'checkbox', checked: showPref, disabled: ro(), onchange: async (e) => {
+              const v = e.target.checked ? 'show' : 'hide';
+              if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { teamPref: v } }), v === 'show' ? 'チーム名のあとに都道府県を表示します' : '都道府県を表示しないようにしました')) await reload();
+              else e.target.checked = !e.target.checked;
+            } }), 'チーム名のあとに都道府県を表示（画面・PDF・SNS画像・保護者の画面）')),
         cat.teams.length ? cat.teams.map((tm) => h('div', { class: 'row', style: { padding: '6px 0', borderBottom: '1px solid var(--line)' } },
           tm.logo ? h('img', { src: tm.logo, alt: '', width: 28, height: 28, style: { objectFit: 'contain', borderRadius: '50%' } }) : null,
           h('strong', null, tm.name),
-          tm.club ? h('span', { class: 'muted small' }, tm.club) : null,
+          tm.club && tm.club !== (tm.base_name ?? tm.name) ? h('span', { class: 'muted small' }, tm.club) : null,
           tm.group_label ? h('span', { class: 'tag' }, `${tm.group_label}組`) : null,
           h('span', { class: 'spacer' }),
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editTeam(tm) }, '編集'),
@@ -1709,7 +1835,7 @@ async function tournamentView(root, id, navigate) {
   }
 
   function editTeam(tm) {
-    const f = { name: tm.name, short_name: tm.short_name || '', club: tm.club || '', logo: tm.logo };
+    const f = { name: tm.base_name ?? tm.name, short_name: tm.short_name || '', club: tm.club || '', logo: tm.logo, prefecture: tm.prefecture || '' };
     const img = h('div');
     const drawImg = () => mount(img, f.logo ? h('div', { class: 'row' }, h('img', { src: f.logo, alt: '', width: 48, height: 48, style: { objectFit: 'contain' } }),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.logo = null; drawImg(); } }, 'ロゴを外す')) : null);
@@ -1719,7 +1845,9 @@ async function tournamentView(root, id, navigate) {
       content: h('div', { class: 'stack' },
         h('label', { class: 'field' }, h('span', null, 'チーム名'), h('input', { type: 'text', value: f.name, oninput: (e) => { f.name = e.target.value; } })),
         h('label', { class: 'field' }, h('span', null, '略称（関係者の更新表示などに使用）'), h('input', { type: 'text', value: f.short_name, oninput: (e) => { f.short_name = e.target.value; } })),
-        h('label', { class: 'field' }, h('span', null, 'クラブ名'), h('input', { type: 'text', value: f.club, oninput: (e) => { f.club = e.target.value; } })),
+        h('div', { class: 'grid-form' },
+          h('label', { class: 'field' }, h('span', null, 'クラブ名'), h('input', { type: 'text', value: f.club, oninput: (e) => { f.club = e.target.value; } })),
+          h('label', { class: 'field tm-pref' }, h('span', null, '都道府県'), prefPicker(f.prefecture, (v) => { f.prefecture = v; }))),
         h('div', null, h('span', { class: 'small', style: { fontWeight: 700 } }, 'ロゴ'), img,
           h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', 'aria-label': 'チームロゴの画像', onchange: async (e) => {
             const v = await run(() => resizeImage(e.target.files[0], 160));
@@ -1728,6 +1856,102 @@ async function tournamentView(root, id, navigate) {
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '保存', kind: 'btn-primary', onClick: async () => {
         if (await run(() => api('PATCH', `/api/admin/teams/${tm.id}`, f), '保存しました')) await reload();
       } }],
+    });
+  }
+
+  // ===== 貼り付けた参加チーム一覧をマスタと照らし合わせて、確認してからまとめて登録する =====
+  async function openTeamReview(cat, rows) {
+    const res = await run(() => api('GET', '/api/admin/team-master'));
+    if (!res) return false;
+    const index = buildIndex(res.masters);
+    const byId = Object.fromEntries(res.masters.map((m) => [m.id, m]));
+    const have = new Set(cat.teams.map((x) => (x.base_name ?? x.name).normalize('NFKC').replace(/\s/g, '')));
+    const items = rows.map((r) => {
+      const x = matchRow(r, index);
+      const sp = splitSuffix(r.name);
+      const strong = sp && sp.strong ? sp : null;
+      const it = { ...x, choice: x.status === 'match' ? x.master.id : x.status === 'new' ? 'new' : '', suf: x.suffix || '',
+        mname: strong ? strong.base : r.name, msuf: strong ? strong.suffix : '', mpref: r.pref || '', mshort: r.shortName || '', toMaster: true, logo: null };
+      if (x.status === 'similar' && x.candidates.length === 1 && x.suffix === '' && x.candidates[0].name === r.name) it.choice = x.candidates[0].id;
+      const finalName = it.choice && it.choice !== 'new' && it.choice !== 'skip' ? teamName(byId[it.choice], it.suf) : teamName({ name: it.mname }, it.msuf);
+      if (have.has(finalName.normalize('NFKC').replace(/\s/g, ''))) { it.dup = true; it.choice = 'skip'; }
+      return it;
+    });
+    // 同じ貼り付けの中に「○○A」「○○ B」のような兄弟チームがあれば、同じクラブ（○○）のA・Bとして分ける
+    const baseKey = (n) => (n || '').normalize('NFKC').toLowerCase().replace(/[\s.\-_・]/g, '');
+    const fresh = items.filter((it) => it.status === 'new').map((it) => ({ it, sp: splitSuffix(it.name) })).filter((x) => x.sp);
+    const cnt = {};
+    for (const x of fresh) cnt[baseKey(x.sp.base)] = (cnt[baseKey(x.sp.base)] || 0) + 1;
+    for (const x of fresh) if (cnt[baseKey(x.sp.base)] > 1) { x.it.mname = x.sp.base; x.it.msuf = x.sp.suffix; }
+    const list = h('div', { class: 'tm-review' });
+    const summary = h('p', { class: 'small', style: { margin: '0 0 8px' } });
+    const label = { match: ['一致', 'ok'], similar: ['確認', 'warn'], new: ['新規', 'new'] };
+    const drawSummary = () => {
+      const n = (k) => items.filter((it) => it.status === k).length;
+      const left = items.filter((it) => it.choice === '').length;
+      mount(summary, `一致 ${n('match')}件・確認 ${n('similar')}件・新規 ${n('new')}件`, left ? h('strong', { style: { color: 'var(--live)', marginLeft: '8px' } }, `選んでいない行が${left}件あります`) : null);
+    };
+    const drawRow = (it, box) => {
+      const m = it.choice && byId[it.choice];
+      const opts = it.status === 'match' ? [it.master] : it.candidates;
+      const preview = m ? teamName(m, it.suf) + prefText(m.prefecture || it.pref) : it.choice === 'new' ? teamName({ name: it.mname || '' }, it.msuf) + prefText(it.mpref) : '';
+      mount(box,
+        h('div', { class: 'tm-rv-head' },
+          h('span', { class: `tm-badge ${label[it.status][1]}` }, label[it.status][0]),
+          h('span', { class: 'tm-input', title: '貼り付けた文字' }, it.input),
+          it.dup ? h('span', { class: 'tag' }, 'すでに登録済み') : null),
+        h('div', { class: 'tm-rv-body' },
+          m ? masterLogo(m, 32) : h('span', { class: 'tm-logo tm-nologo' }),
+          h('select', { 'aria-label': '登録するチーム', onchange: (e) => { it.choice = e.target.value; drawRow(it, box); drawSummary(); } },
+            it.choice === '' ? h('option', { value: '', selected: true }, '— どれか選んでください —') : null,
+            opts.map((c) => h('option', { value: c.id, selected: it.choice === c.id }, `${c.name}${prefText(c.prefecture)}${c.owner ? `　登録：${c.owner}` : ''}`)),
+            h('option', { value: 'new', selected: it.choice === 'new' }, '＋ 新しいチームとして登録'),
+            h('option', { value: 'skip', selected: it.choice === 'skip' }, '登録しない')),
+          m ? h('label', { class: 'tm-suf' }, h('span', null, 'A・Bなど'), h('input', { type: 'text', value: it.suf, maxlength: 4, oninput: (e) => { it.suf = e.target.value.trim(); pv.textContent = `大会での名前：${teamName(m, it.suf)}${prefText(m.prefecture || it.pref)}`; } })) : null),
+        it.choice === 'new' ? h('div', { class: 'tm-rv-new' },
+          h('label', { class: 'field' }, h('span', null, 'チーム名（クラブ名）'), h('input', { type: 'text', value: it.mname, oninput: (e) => { it.mname = e.target.value; pv.textContent = `大会での名前：${teamName({ name: it.mname }, it.msuf)}${prefText(it.mpref)}`; } })),
+          h('label', { class: 'field tm-suf' }, h('span', null, 'A・Bなど'), h('input', { type: 'text', value: it.msuf, maxlength: 4, oninput: (e) => { it.msuf = e.target.value.trim(); pv.textContent = `大会での名前：${teamName({ name: it.mname }, it.msuf)}${prefText(it.mpref)}`; } })),
+          h('label', { class: 'field tm-pref' }, h('span', null, '都道府県'), prefPicker(it.mpref, (v) => { it.mpref = v; pv.textContent = `大会での名前：${teamName({ name: it.mname }, it.msuf)}${prefText(it.mpref)}`; })),
+          h('label', { class: 'field tm-short' }, h('span', null, '略称（任意）'), h('input', { type: 'text', value: it.mshort, oninput: (e) => { it.mshort = e.target.value; } })),
+          h('label', { class: 'field tm-logo-field' }, h('span', null, 'ロゴ（任意）'), h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', onchange: async (e) => { it.logo = await run(() => resizeImage(e.target.files[0], 160)); } })),
+          h('label', { class: 'check small' }, h('input', { type: 'checkbox', checked: it.toMaster, onchange: (e) => { it.toMaster = e.target.checked; } }), 'チームマスタにも登録する（次回から自動で入ります）')) : null,
+        h('div', { class: 'tm-preview muted small' }));
+      const pv = box.querySelector('.tm-preview');
+      pv.textContent = preview ? `大会での名前：${preview}` : '';
+    };
+    items.forEach((it) => { const box = h('div', { class: `tm-rv ${it.status}` }); drawRow(it, box); list.append(box); });
+    drawSummary();
+    return new Promise((resolve) => {
+      let done = false;
+      modal({
+        title: `参加チームの確認（${items.length}行）`,
+        content: h('div', null,
+          h('p', { class: 'muted small', style: { marginTop: 0 } }, '「一致」はマスタの名前・都道府県・ロゴで登録します。「確認」は似ているチームから選んでください。マスタに無いチームは「新規」で、チームマスタにも追加されます。'),
+          summary, list),
+        onClose: () => { if (!done) resolve(false); },
+        actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: 'まとめて登録', kind: 'btn-primary', onClick: async () => {
+          const left = items.filter((it) => it.choice === '').length;
+          if (left) { toast(`「確認」の行で、登録するチームを選んでください（残り${left}件）`, true); return true; }
+          const picked = items.filter((it) => it.choice && it.choice !== 'skip');
+          const finalOf = (it) => (byId[it.choice] ? teamName(byId[it.choice], it.suf) : teamName({ name: (it.mname || '').trim() }, it.msuf));
+          const seen = new Set(), twice = [];
+          for (const it of picked) { const k = baseKey(finalOf(it)); if (seen.has(k)) twice.push(finalOf(it)); seen.add(k); }
+          if (twice.length) { toast(`同じチームが2回入っています：${[...new Set(twice)].join('、')}（片方を「登録しない」にしてください）`, true); return true; }
+          const teams = picked.map((it) => {
+            const m = byId[it.choice];
+            if (m) return { name: teamName(m, it.suf), short_name: m.short_name ? teamName({ name: m.short_name }, it.suf) : null, club: m.name, prefecture: m.prefecture || it.pref || null, master_id: m.id };
+            const base = (it.mname || '').trim();
+            return { name: teamName({ name: base }, it.msuf), short_name: it.mshort ? teamName({ name: it.mshort.trim() }, it.msuf) : null, club: it.msuf ? base : it.club || null,
+              prefecture: it.mpref || null, newMaster: it.toMaster, master_name: base, master_short_name: it.mshort || null, logo: it.logo || null };
+          }).filter((x) => x.name);
+          if (!teams.length) { toast('登録するチームがありません', true); return true; }
+          const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/teams`, { teams }));
+          if (!r) return true;
+          toast(`${r.added}チームを登録しました${r.masterCreated ? `（チームマスタに${r.masterCreated}チームを追加）` : ''}`);
+          done = true; resolve(true);
+          await reload();
+        } }],
+      });
     });
   }
 

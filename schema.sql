@@ -37,9 +37,17 @@ CREATE TABLE teams (
   club TEXT,                          -- 同じクラブは別の組に分ける
   logo TEXT,
   group_label TEXT,
-  sort INTEGER NOT NULL DEFAULT 0
+  sort INTEGER NOT NULL DEFAULT 0,
+  prefecture TEXT,                    -- 都道府県（表示するかは大会の設定 teamPref）
+  master_id TEXT                      -- 元にしたチームマスタ
 );
 CREATE INDEX idx_teams_category ON teams(category_id);
+CREATE INDEX idx_teams_master ON teams(master_id);
+
+-- チームマスタ（全国で1つ。次回以降の大会で使い回す）
+CREATE TABLE team_master (id TEXT PRIMARY KEY, name TEXT NOT NULL, short_name TEXT, prefecture TEXT, logo TEXT,
+  norm TEXT NOT NULL, owner_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX idx_team_master_norm ON team_master(norm);
 
 CREATE TABLE matches (
   id TEXT PRIMARY KEY,
