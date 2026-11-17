@@ -254,8 +254,10 @@ const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
   if (user.role === 'scorer' || user.role === 'operator') {
     // スコア管理者・大会運営者：発行した管理者が見られる大会のうち、担当に選ばれた大会（未指定ならすべて）
-    const parentOk = user.parentRole === 'super' || (t.owner_id && t.owner_id === user.parent_id);
-    return parentOk && (!user.scope || !user.scope.length || user.scope.includes(t.id));
+    // 担当の大会を選んであるときは、その大会だけ（担当に入れられるのは、保存した管理者が操作できる大会だけなので、
+    // 全体管理者が地域管理者の発行したアカウントに全体管理者の大会を割り当てた場合も開ける）
+    if (user.scope && user.scope.length) return user.scope.includes(t.id);
+    return user.parentRole === 'super' || !!(t.owner_id && t.owner_id === user.parent_id);
   }
   return !!(t.owner_id && t.owner_id === user.id);
 };
@@ -269,13 +271,14 @@ const canEditOwned = (user, owner) => isSuper(user) || owner === user.id;
 
 // 発行した管理者として、担当大会の指定が正しいか（自分が見られる大会だけ）
 // 削除された大会が担当に残っていても保存できるように、もう無い大会は外す（すべて外れて空になるときは「すべての大会」に広がらないよう止める）
-async function checkScope(db, user, ids) {
+// prev：今の担当。ほかの管理者（全体管理者など）が割り当てた、自分では見られない大会はそのまま残す
+async function checkScope(db, user, ids, prev = []) {
   const asked = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
   const list = [];
   for (const id of asked) {
-    const t = await db.prepare('SELECT id FROM tournaments WHERE id = ?').bind(id).first();
+    const t = await db.prepare('SELECT * FROM tournaments WHERE id = ?').bind(id).first();
     if (!t) continue;
-    await getTournament(db, id, user);
+    if (!canAccess(user, t) && !prev.includes(id)) fail(404, '大会が見つかりません');
     list.push(id);
   }
   if (asked.length && !list.length) fail(400, '担当する大会を選んでください（削除された大会は選べません）');
@@ -780,7 +783,17 @@ route('GET', '/api/admin/scorers', async ({ db, user }) => {
     ? await db.prepare(`SELECT s.id, s.login_id, s.name, s.role, s.active, s.scope, s.parent_id, s.last_login_at, s.created_at, p.name AS parent_name, p.region AS parent_region
         FROM users s LEFT JOIN users p ON p.id = s.parent_id WHERE s.role IN ('scorer', 'operator') ORDER BY p.region, s.name`).all()
     : await db.prepare("SELECT id, login_id, name, role, active, scope, parent_id, last_login_at, created_at FROM users WHERE role IN ('scorer', 'operator') AND parent_id = ? ORDER BY name").bind(user.id).all();
-  return json({ scorers: r.results.map((x) => ({ ...x, scope: JSON.parse(x.scope || '[]'), parent_name: x.parent_id === 'root' ? '全体管理者' : x.parent_name || '' })) });
+  // 担当の大会の名前（自分の一覧に無い大会＝ほかの管理者が割り当てた大会も、名前で表示できるように）
+  const ids = [...new Set(r.results.flatMap((x) => { try { return JSON.parse(x.scope || '[]'); } catch { return []; } }))];
+  const names = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50);
+    for (const t of (await db.prepare(`SELECT id, name FROM tournaments WHERE id IN (${part.map(() => '?').join(',')})`).bind(...part).all()).results) names[t.id] = t.name;
+  }
+  return json({ scorers: r.results.map((x) => {
+    const scope = JSON.parse(x.scope || '[]');
+    return { ...x, scope, scope_names: Object.fromEntries(scope.filter((id) => names[id]).map((id) => [id, names[id]])), parent_name: x.parent_id === 'root' ? '全体管理者' : x.parent_name || '' };
+  }) });
 }, 'admin');
 
 route('POST', '/api/admin/scorers', async ({ req, env, db, user }) => {
@@ -807,7 +820,9 @@ route('PATCH', '/api/admin/scorers/:sid', async ({ req, db, params, user }) => {
   if (b.password) { const h = await hashPassword(checkPassword(b.password)); hash = h.hash; salt = h.salt; iter = h.iterations; ver += 1; }
   const active = b.active !== undefined ? (b.active ? 1 : 0) : sc.active;
   if (active !== sc.active) ver += 1;
-  const scope = b.tournament_ids !== undefined ? JSON.stringify(await checkScope(db, user, b.tournament_ids)) : sc.scope;
+  let prev = [];
+  try { prev = JSON.parse(sc.scope || '[]') || []; } catch { prev = []; }
+  const scope = b.tournament_ids !== undefined ? JSON.stringify(await checkScope(db, user, b.tournament_ids, prev)) : sc.scope;
   await db.prepare('UPDATE users SET name = ?, active = ?, pass_hash = ?, pass_salt = ?, iterations = ?, session_ver = ?, scope = ?, updated_at = ? WHERE id = ?')
     .bind(b.name !== undefined ? clip(b.name, 60) || sc.name : sc.name, active, hash, salt, iter, ver, scope, now(), sc.id).run();
   return json({ ok: true });

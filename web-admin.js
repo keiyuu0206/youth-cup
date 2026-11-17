@@ -651,13 +651,14 @@ async function scorersView(root, navigate) {
   const [{ scorers }, { tournaments }] = await Promise.all([api('GET', '/api/admin/scorers'), api('GET', '/api/admin/tournaments')]);
   const tName = Object.fromEntries(tournaments.map((t) => [t.id, t.name]));
   const fmt = (iso) => (iso ? formatDate(iso.slice(0, 10)) : '未ログイン');
-  const scopeText = (sc) => (sc.scope && sc.scope.length ? sc.scope.map((id) => tName[id] || '（削除された大会）').join('、') : 'すべての大会');
+  const scopeText = (sc) => (sc.scope && sc.scope.length ? sc.scope.map((id) => tName[id] || (sc.scope_names || {})[id] || '（削除された大会）').join('、') : 'すべての大会');
   const reload = () => scorersView(root, navigate);
   const scopePicker = (f) => h('div', null,
     h('div', { class: 'small', style: { fontWeight: 700, color: 'var(--ink-2)' } }, '担当する大会（選ばなければ、すべての大会）'),
     tournaments.length ? h('div', { class: 'scope-list' }, tournaments.map((t) => h('label', { class: 'check' },
       h('input', { type: 'checkbox', checked: f.tournament_ids.includes(t.id), onchange: (e) => { f.tournament_ids = e.target.checked ? [...f.tournament_ids, t.id] : f.tournament_ids.filter((x) => x !== t.id); } }),
-      `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`, t.status === 'draft' ? h('span', { class: 'tag', style: { marginLeft: '6px' } }, '準備中：公開すると担当者の画面で開けます') : null))) : h('p', { class: 'muted small' }, '大会がまだありません'));
+      `${t.name}（${t.date ? formatDate(t.date) : '日付未定'}）`, t.status === 'draft' ? h('span', { class: 'tag', style: { marginLeft: '6px' } }, '準備中：公開すると担当者の画面で開けます') : null))) : h('p', { class: 'muted small' }, '大会がまだありません'),
+    f.others && f.others.length ? h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, `ほかの管理者が割り当てた大会（そのまま残ります）：${f.others.join('、')}`) : null);
   const ROLE = { scorer: 'スコア管理者', operator: '大会運営者' };
   const ROLE_DESC = {
     scorer: 'スコア（試合結果）の登録に特化した権限です。結果の入力ができます。確定済みの結果の修正や、設定・チーム・日程の変更はできません。',
@@ -669,7 +670,7 @@ async function scorersView(root, navigate) {
       actions: [{ label: '閉じる', kind: 'btn-ghost' }, { label: '案内文をコピー', kind: 'btn-primary', onClick: async () => { await copyText(text); toast('コピーしました'); return true; } }] });
   };
   const edit = (sc) => {
-    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? (sc.scope || []).filter((x) => tName[x]) : [], role: sc ? sc.role || 'scorer' : 'scorer' };
+    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? (sc.scope || []).filter((x) => tName[x] || (sc.scope_names || {})[x]) : [], others: sc ? (sc.scope || []).filter((x) => !tName[x] && (sc.scope_names || {})[x]).map((x) => sc.scope_names[x]) : [], role: sc ? sc.role || 'scorer' : 'scorer' };
     const pw = h('input', { type: 'text', value: f.password, oninput: (e) => { f.password = e.target.value; } });
     const desc = h('p', { class: 'muted small', style: { margin: 0 } }, ROLE_DESC[f.role]);
     modal({
