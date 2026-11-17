@@ -559,7 +559,7 @@ async function publicPayload(db, t, level) {
   return {
     tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline),
       // 大会運営者・スコア管理者の画面（SNS画像）用：登録済みの写真
-      ...(level === 'relative' ? { settings: { snsPhotos: settings.snsPhotos || {} } } : {}),
+      ...(level === 'relative' ? { settings: { snsPhotos: settings.snsPhotos || {}, snsBg: settings.snsBg || {} } } : {}),
       referee: ['one', 'halves', 'left'].includes((settings.referee || {}).mode) ? settings.referee.mode : 'none' },
     categories: cats.map((c) => ({
       ...c,

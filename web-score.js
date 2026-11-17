@@ -2,7 +2,7 @@
 //  スコア管理者：スコア（試合結果）の登録に特化
 //  大会運営者　：スコアの登録・修正（確定済みの修正・取り消しを含む）、SNS画像の出力、忘れ物の登録
 import { api } from './web-api.js';
-import { openMatchPoster, openResultPoster, openStandingsPoster } from './web-poster.js';
+import { openMatchPoster, openResultPoster, openStandingsPoster, openLogoPoster } from './web-poster.js';
 import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto, lineButton } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor } from './web-views.js';
 
@@ -228,6 +228,7 @@ export async function scoreApp(root, me) {
       h('button', { class: 'btn btn-block sc-ok', type: 'button', onclick: () => openStandingsPoster(t, cats, cat.id) }, '予選リーグの順位表'),
       h('button', { class: 'btn btn-block sc-ok', type: 'button', onclick: () => openResultPoster(t, cats, cat.id, { kind: 'ranking' }) }, '最終結果（順位の一覧）'),
       h('button', { class: 'btn btn-block sc-ok', type: 'button', onclick: () => openResultPoster(t, cats, cat.id, { kind: 'teams' }) }, '参加チーム一覧'),
+      h('button', { class: 'btn btn-block sc-ok', type: 'button', onclick: () => openLogoPoster(t, cats, cat.id, { canPhoto: false }) }, '参加チームのロゴ（全チーム・組ごと）'),
       h('p', { class: 'muted small', style: { margin: 0 } }, '最終順位や参加チームの一覧を、画像やPDFにします。'));
   }
 
