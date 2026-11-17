@@ -268,9 +268,17 @@ const canEditOwned = (user, owner) => isSuper(user) || owner === user.id;
 // ---------- スコア管理者（結果の承認だけを行うアカウント） ----------
 
 // 発行した管理者として、担当大会の指定が正しいか（自分が見られる大会だけ）
+// 削除された大会が担当に残っていても保存できるように、もう無い大会は外す（すべて外れて空になるときは「すべての大会」に広がらないよう止める）
 async function checkScope(db, user, ids) {
-  const list = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
-  for (const id of list) await getTournament(db, id, user);
+  const asked = [...new Set((Array.isArray(ids) ? ids : []).map(String))];
+  const list = [];
+  for (const id of asked) {
+    const t = await db.prepare('SELECT id FROM tournaments WHERE id = ?').bind(id).first();
+    if (!t) continue;
+    await getTournament(db, id, user);
+    list.push(id);
+  }
+  if (asked.length && !list.length) fail(400, '担当する大会を選んでください（削除された大会は選べません）');
   return list;
 }
 const isStaffRole = (role) => role === 'scorer' || role === 'operator'; // スコア管理者・大会運営者

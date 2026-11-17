@@ -669,7 +669,7 @@ async function scorersView(root, navigate) {
       actions: [{ label: '閉じる', kind: 'btn-ghost' }, { label: '案内文をコピー', kind: 'btn-primary', onClick: async () => { await copyText(text); toast('コピーしました'); return true; } }] });
   };
   const edit = (sc) => {
-    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? [...(sc.scope || [])] : [], role: sc ? sc.role || 'scorer' : 'scorer' };
+    const f = { login_id: '', name: sc ? sc.name : '', password: sc ? '' : genPassword(), tournament_ids: sc ? (sc.scope || []).filter((x) => tName[x]) : [], role: sc ? sc.role || 'scorer' : 'scorer' };
     const pw = h('input', { type: 'text', value: f.password, oninput: (e) => { f.password = e.target.value; } });
     const desc = h('p', { class: 'muted small', style: { margin: 0 } }, ROLE_DESC[f.role]);
     modal({
@@ -685,6 +685,8 @@ async function scorersView(root, navigate) {
         scopePicker(f),
         desc),
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: sc ? '保存' : '発行する', kind: 'btn-primary', onClick: async () => {
+        if (sc && sc.scope && sc.scope.length && !f.tournament_ids.length
+          && !(await confirmDialog('すべての大会の担当にします', '担当する大会が選ばれていないため、このアカウントはすべての大会を操作できるようになります。よろしいですか。', 'すべての大会にする'))) return true;
         const res = sc ? await run(() => api('PATCH', `/api/admin/scorers/${sc.id}`, { name: f.name, tournament_ids: f.tournament_ids }), '保存しました')
           : await run(() => api('POST', '/api/admin/scorers', f));
         if (!res) return true;
