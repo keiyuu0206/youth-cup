@@ -1706,3 +1706,31 @@ input[type="search"]:focus { background: var(--surface); border-color: var(--ink
 .tm-preview { margin-top: 6px; }
 .tm-preview:empty { display: none; }
 @media (max-width: 560px) { .tm-rv-new { grid-template-columns: minmax(0, 1fr) 72px; } .tm-rv-new .tm-pref, .tm-rv-new .tm-short, .tm-rv-new .tm-logo-field { grid-column: 1 / -1; } }
+
+/* ===== 順位表の下の対戦表（星取表） ===== */
+.st-cross { border-top: 1px solid var(--line); }
+.st-cross > summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 46px; font-size: 0.85rem; font-weight: 800; color: var(--ink); }
+.st-cross > summary::-webkit-details-marker { display: none; }
+.st-cross > summary::after { content: '▾'; font-size: 0.8em; color: var(--ink-3); }
+.st-cross[open] > summary::after { content: '▴'; }
+.st-cross .x-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 0 12px 4px; }
+table.cross { border-collapse: collapse; margin: 0 auto; font-variant-numeric: tabular-nums; }
+table.cross th, table.cross td { border: 1px solid var(--line); text-align: center; vertical-align: middle; }
+table.cross thead th { padding: 6px 3px; min-width: 54px; max-width: 68px; font-weight: 700; }
+table.cross thead tr { border-bottom: 2px solid var(--ink); }
+table.cross th .crest { display: block; margin: 0 auto 3px; }
+table.cross .x-nm { display: block; font-size: 0.64rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 72px; margin: 0 auto; }
+table.cross tbody th { position: sticky; left: 0; z-index: 1; background: var(--surface); padding: 6px 4px; min-width: 70px; max-width: 84px; }
+table.cross tbody th .x-nm { max-width: 88px; }
+table.cross td { min-width: 52px; height: 54px; padding: 3px; }
+table.cross .x-corner { background: var(--surface); position: sticky; left: 0; z-index: 2; }
+table.cross .x-self { background: var(--surface-2); color: var(--ink-3); }
+table.cross .x-mk { display: block; font-size: 1.05rem; line-height: 1.1; font-weight: 700; }
+table.cross .x-sc { display: block; font-size: 0.88rem; font-weight: 800; margin-top: 2px; }
+table.cross .win .x-mk { color: #2e7d32; }
+table.cross .lose .x-mk { color: #c62828; }
+table.cross .draw .x-mk { color: #6d6a66; }
+table.cross .x-wait small { color: var(--ink-3); font-size: 0.72rem; font-weight: 700; }
+table.cross tr.mine th, table.cross thead th.mine { background: var(--lime-wash, #f4fdd9); }
+.st-cross .x-legend { margin: 6px 14px 12px; font-size: 0.7rem; color: var(--ink-3); }
+.st-cross .x-hint { margin: 0 14px 6px; font-size: 0.7rem; color: var(--ink-3); text-align: right; }

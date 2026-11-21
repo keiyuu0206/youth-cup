@@ -314,12 +314,43 @@ export function standingsView(cat, ctx) {
           h('td', null, r.p), h('td', null, r.w), h('td', null, r.d), h('td', null, r.l),
           h('td', { class: 'opt' }, r.gf), h('td', { class: 'opt' }, r.ga), h('td', null, r.gd > 0 ? `+${r.gd}` : r.gd),
           h('td', { class: 'pts' }, r.pts)))))),
+      crossTable(cat, g, st, ctx, tm),
       note ? h('div', { class: 'st-note' }, h('span', null, advance ? h('i') : null, note)) : null);
   }), ctx.noFoot ? null : h('p', { class: 'muted small', style: { margin: '14px 4px 0' } }, (() => {
     const order = (cat.config.tiebreak || []).filter((k) => k !== 'points').map((k) => TIEBREAK_LABEL[k]);
     const manual = (cat.config.tiebreak || []).some((k) => k === 'janken' || k === 'lottery');
     return `勝点が並んだときは ${order.length ? order.join('、') : '本部の決定'} の順で決めます。${manual ? '' : 'それでも決まらないときは本部で決めます。'}`;
   })()));
+}
+
+// 対戦表（星取表）：行のチームから見た結果。○勝ち・×負け・△引き分け。まだの試合は開始時刻
+function crossTable(cat, g, st, ctx, tm) {
+  const order = st.rows.map((r) => r.teamId);
+  if (order.length < 2) return null;
+  const ms = cat.matches.filter((m) => m.stage === 'league' && m.group_label === g);
+  const find = (a, b) => ms.find((m) => (m.home_team_id === a && m.away_team_id === b) || (m.home_team_id === b && m.away_team_id === a));
+  const nameOf = (id) => (tm[id] ? tm[id].short_name || tm[id].name : '-');
+  const cell = (a, b) => {
+    if (a === b) return h('td', { class: 'x-self' }, h('span', { 'aria-hidden': 'true' }, '-'));
+    const m = find(a, b);
+    if (!m) return h('td', { class: 'x-none' }, '');
+    if (m.status !== 'confirmed' || m.home_score == null) return h('td', { class: 'x-wait' }, h('small', null, toHHMM(m.start_min)));
+    const mine = m.home_team_id === a ? m.home_score : m.away_score;
+    const opp = m.home_team_id === a ? m.away_score : m.home_score;
+    const [mk, cls, word] = mine > opp ? ['○', 'win', '勝ち'] : mine < opp ? ['×', 'lose', '負け'] : ['△', 'draw', '引き分け'];
+    return h('td', { class: `x-res ${cls}`, title: `${nameOf(a)} ${mine}-${opp} ${nameOf(b)}` },
+      h('span', { class: 'x-mk', 'aria-label': word }, mk), h('span', { class: 'x-sc' }, `${mine} - ${opp}`));
+  };
+  return h('details', { class: 'st-cross' },
+    h('summary', null, '対戦表（星取表）を見る'),
+    order.length > 5 ? h('p', { class: 'x-hint' }, '横にスクロールできます →') : null,
+    h('div', { class: 'x-wrap' }, h('table', { class: 'cross' },
+      h('thead', null, h('tr', null, h('th', { class: 'x-corner', scope: 'col' }, h('span', { class: 'sr-only' }, 'チーム')),
+        order.map((id) => h('th', { scope: 'col', class: id === ctx.myTeam ? 'mine' : null }, crest(tm[id], 22), h('span', { class: 'x-nm' }, nameOf(id)))))),
+      h('tbody', null, order.map((a) => h('tr', { class: a === ctx.myTeam ? 'mine' : null },
+        h('th', { scope: 'row' }, crest(tm[a], 22), h('span', { class: 'x-nm' }, nameOf(a))),
+        order.map((b) => cell(a, b))))))),
+    h('p', { class: 'x-legend' }, '○勝ち　×負け　△引き分け（行のチームから見た結果）。時刻は、まだ行っていない試合です。'));
 }
 
 // リーグ戦の段（下位リーグなど）の順位表
