@@ -227,4 +227,4 @@
 ## 2026年11月22日：保護者の画面の順位表に「対戦表（星取表）」
 - web-views.js：standingsView の各組のカードの下に crossTable（折りたたみ。押すと開く）。行のチームから見た ○×△ と得点、まだの試合は開始時刻。6チーム以上は横スクロール（チーム名の列は固定）
 - 管理画面の順位タブにも同じ表が出る（standingsView を共有しているため）
-- app.css：.st-cross / table.cross
+- app.css：.st-cross / table.cross（固定する列は border-collapse: separate＋外枠の余白をスクロールの外に。iPhoneで下のマスが透けないように）
