@@ -423,3 +423,36 @@ export function lineButton(text, label = 'LINEで送る', cls = 'btn btn-line') 
     h('svg', { viewBox: '0 0 24 24', width: 18, height: 18, 'aria-hidden': 'true' }, h('path', { fill: 'currentColor', d: 'M12 3C6.5 3 2 6.6 2 11c0 3.9 3.5 7.2 8.3 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c0 .3-.2 1 .9.5s5.8-3.4 7.9-5.8C21.4 14.4 22 12.8 22 11c0-4.4-4.5-8-10-8z' })),
     h('span', null, label));
 }
+
+// スクリーンショット用：表や図の全体を、画面1枚に収まる大きさで表示する（途中で切れないように）
+export function fitView(src, title = '') {
+  const stage = src.cloneNode(true);
+  stage.removeAttribute('id');
+  stage.querySelectorAll('[id]').forEach((x) => x.removeAttribute('id'));
+  stage.querySelectorAll('details').forEach((x) => { x.open = true; });
+  if (stage.tagName === 'DETAILS') stage.open = true;
+  const box = h('div', { class: 'fit-stage' }, title ? h('div', { class: 'fit-title' }, title) : null, stage);
+  const area = h('div', { class: 'fit-area' }, box);
+  const close = () => { back.remove(); window.removeEventListener('resize', place); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const back = h('div', { class: 'fit-back', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${title || '表'}（全体表示）` },
+    h('div', { class: 'fit-bar' },
+      h('span', null, 'この画面をスクリーンショットしてください。スマホは横向きにすると大きく写ります。'),
+      h('button', { class: 'btn btn-sm', type: 'button', onclick: close }, '閉じる')),
+    area);
+  function place() {
+    box.style.transform = 'none';
+    const w = box.scrollWidth, hh = box.scrollHeight;
+    const aw = area.clientWidth, ah = area.clientHeight;
+    const s = Math.min(aw / w, ah / hh, 1.6);
+    box.style.transform = `scale(${s})`;
+    box.style.left = `${Math.max(0, (aw - w * s) / 2)}px`;
+    box.style.top = `${Math.max(0, (ah - hh * s) / 2)}px`;
+  }
+  document.body.append(back);
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', place);
+  requestAnimationFrame(place);
+  setTimeout(place, 300); // 画像（ロゴ）の読み込み後にもう一度
+  return close;
+}

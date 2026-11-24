@@ -1,4 +1,4 @@
-import { h, toHHMM, todayStr, nowMin, icon, formatDate } from './web-ui.js';
+import { h, toHHMM, todayStr, nowMin, icon, formatDate, fitView } from './web-ui.js';
 
 export const matchLength = (cfg) => {
   const n = cfg.periods || 2;
@@ -341,8 +341,10 @@ function crossTable(cat, g, st, ctx, tm) {
     return h('td', { class: `x-res ${cls}`, title: `${nameOf(a)} ${mine}-${opp} ${nameOf(b)}` },
       h('span', { class: 'x-mk', 'aria-label': word }, mk), h('span', { class: 'x-sc' }, `${mine} - ${opp}`));
   };
-  return h('details', { class: 'st-cross' },
+  const titleOf = () => `${(ctx.tournament && ctx.tournament.name) || ''}　${cat.name} ${st.placement ? g : `${g}組`} 対戦表`;
+  const el = h('details', { class: 'st-cross' },
     h('summary', null, '対戦表（星取表）を見る'),
+    h('button', { class: 'btn btn-sm fit-btn', type: 'button', onclick: () => fitView(el, titleOf()) }, '全体を1画面で表示（スクショ用）'),
     order.length > 5 ? h('p', { class: 'x-hint' }, '横にスクロールできます →') : null,
     h('div', { class: 'x-wrap' }, h('table', { class: 'cross' },
       h('thead', null, h('tr', null, h('th', { class: 'x-corner', scope: 'col' }, h('span', { class: 'sr-only' }, 'チーム')),
@@ -351,6 +353,7 @@ function crossTable(cat, g, st, ctx, tm) {
         h('th', { scope: 'row' }, crest(tm[a], 22), h('span', { class: 'x-nm' }, nameOf(a))),
         order.map((b) => cell(a, b))))))),
     h('p', { class: 'x-legend' }, '○勝ち　×負け　△引き分け（行のチームから見た結果）。時刻は、まだ行っていない試合です。'));
+  return el;
 }
 
 // リーグ戦の段（下位リーグなど）の順位表
@@ -382,13 +385,38 @@ function rankLeagueCard(cat, name, st, ctx, tm) {
     h('div', { class: 'st-note' }, h('span', null, `${slots} による総当たり。この表の順位が全体の${(st.offset || 0) + 1}位〜${(st.offset || 0) + (st.slots || []).length}位になります`)));
 }
 
+// 各トーナメント（上位・中位・下位など）の優勝チーム：それぞれの決勝の勝者
+export function bracketChampions(cat) {
+  const ko = (cat.matches || []).filter((m) => m.stage === 'knockout' && !isRankLeague(m) && m.place_w);
+  const top = {};
+  for (const m of ko) { const n = m.group_label || ''; if (top[n] == null || m.place_w < top[n]) top[n] = m.place_w; }
+  return Object.entries(top).sort((a, b) => a[1] - b[1]).map(([name, rank]) => {
+    const r = (cat.finalRanking || []).find((x) => x.rank === rank);
+    return { name: name || 'トーナメント', rank, teamId: r ? r.teamId : null };
+  });
+}
+
 export function finalRankingView(cat, ctx) {
   if (!cat.finalRanking || !cat.finalRanking.length) return null;
   const tm = teamMap(cat);
+  const champs = bracketChampions(cat);
+  const champOf = Object.fromEntries(champs.filter((c) => c.teamId).map((c) => [c.rank, c]));
+  const multi = champs.length > 1;
   return h('section', null,
     h('div', { class: 'section-title' }, icon('trophy'), h('h2', null, '最終順位')),
-    h('div', { class: 'podium' }, cat.finalRanking.map((r) => h('div', { class: `p r${r.rank}${r.teamId === ctx.myTeam ? ' mine' : ''}` },
-      h('span', { class: 'r' }, `${r.rank}位`), crest(tm[r.teamId], 32), h('strong', null, tm[r.teamId] ? tm[r.teamId].name : '-')))));
+    // トーナメントが複数あるときは、それぞれの優勝チームを先にまとめて出す（表彰の確認用）
+    multi && champs.some((c) => c.teamId) ? h('div', { class: 'bchamps' }, champs.map((c) => h('div', { class: `bchamp${c.teamId ? '' : ' tbd'}${c.teamId && c.teamId === ctx.myTeam ? ' mine' : ''}` },
+      h('span', { class: 'bchamp-ico', 'aria-hidden': 'true' }, icon('trophy')),
+      h('span', { class: 'bchamp-name' }, `${c.name} 優勝`),
+      c.teamId ? h('span', { class: 'bchamp-team' }, crest(tm[c.teamId], 28), h('strong', null, tm[c.teamId] ? tm[c.teamId].name : '-')) : h('span', { class: 'muted' }, '決勝の結果待ち')))) : null,
+    h('div', { class: 'podium' }, cat.finalRanking.map((r) => {
+      // 一般公開のページで、クラブのサイトから写真が届いていれば、1〜3位はチームの写真も出す
+      const ph = r.rank <= 3 && ctx.photoOf ? ctx.photoOf(tm[r.teamId]) : null;
+      return h('div', { class: `p r${r.rank}${r.teamId === ctx.myTeam ? ' mine' : ''}${ph ? ' has-photo' : ''}` },
+        ph ? h('img', { class: 'p-photo', src: ph, alt: `${tm[r.teamId] ? tm[r.teamId].name : ''}の写真`, loading: 'lazy' }) : null,
+        h('span', { class: 'r' }, `${r.rank}位`), crest(tm[r.teamId], 32), h('strong', null, tm[r.teamId] ? tm[r.teamId].name : '-'),
+        multi && champOf[r.rank] ? h('span', { class: 'champ-tag', title: `${champOf[r.rank].name} 優勝` }, icon('trophy'), `${champOf[r.rank].name.replace(/トーナメント$/, '')}優勝`) : null);
+    })));
 }
 
 export function bracketNames(cat) {
@@ -478,9 +506,13 @@ export function bracketView(cat, ctx) {
 
   const ranking = ctx.only !== undefined ? null : finalRankingView(cat, ctx);
   if (ranking) { ranking.id = 'bk-rank'; ranking.classList.add('bk-target'); }
-  const secEls = sections.map((sec, si) => h('section', { class: 'bk-target', id: `bk-${si}` },
-    h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表')),
-    bracketOf(sec, si)));
+  const secEls = sections.map((sec, si) => {
+    const el = h('section', { class: 'bk-target', id: `bk-${si}` },
+      h('div', { class: 'section-title' }, icon(sections.length > 1 ? 'trophy' : 'list'), h('h2', null, sec.name || 'トーナメント表'),
+        h('button', { class: 'btn btn-sm fit-btn', type: 'button', onclick: () => fitView(el, `${(ctx.tournament && ctx.tournament.name) || ''}　${cat.name}`) }, '全体を1画面で表示')),
+      bracketOf(sec, si));
+    return el;
+  });
   const items = [
     ranking ? { id: 'bk-rank', label: '最終順位', subs: [] } : null,
     ...sections.map((sec, si) => ({ id: `bk-${si}`, label: sec.name || 'トーナメント表', subs: sec.subs.length > 1 ? sec.subs : [] })),
@@ -556,10 +588,79 @@ export function teamsView(cat, ctx, query = '') {
   if (!list.length) return h('p', { class: 'empty' }, q ? `「${q}」に一致するチームはありません` : 'チームはまだ登録されていません');
   const groups = {};
   for (const t of list) (groups[t.group_label || ''] ||= []).push(t);
+  const prog = teamProgress(cat);
   return h('div', null, Object.keys(groups).sort().map((g) => h('section', null,
     g ? h('h2', { class: 'group-title' }, `${g}組`) : null,
-    h('div', { class: 'team-grid' }, groups[g].map((t) => h('button', { class: `tm${t.id === ctx.myTeam ? ' mine' : ''}`, type: 'button',
+    h('div', { class: 'team-grid' }, groups[g].map((t) => h('button', { class: `tm${t.id === ctx.myTeam ? ' mine' : ''}${ctx.photoOf && ctx.photoOf(t) ? ' has-photo' : ''}`, type: 'button',
       onclick: () => ctx.onPickTeam && ctx.onPickTeam(t.id), 'aria-label': `${t.name}の試合を見る` },
+      ctx.photoOf && ctx.photoOf(t) ? h('img', { class: 'tm-photo', src: ctx.photoOf(t), alt: `${t.name}の写真`, loading: 'lazy' }) : null,
       crest(t, 40), h('strong', null, t.name), t.group_label ? h('span', { class: 'tm-g' }, `${t.group_label}組`) : null,
+      prog[t.id] && prog[t.id].finished ? h('span', { class: 'tm-fin' }, '全試合終了') : null,
       t.id === ctx.myTeam ? h('span', { class: 'star' }, icon('star')) : null))))));
+}
+
+// チームごとの試合の進み具合：{ teamId: { done, total, finished } }
+// finished＝自分の試合がすべて終わり、これから決まる組み合わせ（○組○位、○○の勝者など）に入る可能性もない
+export function teamProgress(cat) {
+  const teams = cat.teams || [];
+  const matches = cat.matches || [];
+  const byCode = {};
+  for (const m of matches) if (m.code) byCode[m.code] = m;
+  const groupsOfTeams = new Set(teams.map((t) => t.group_label).filter(Boolean));
+  // ref の枠に、このチームが入る可能性があるか
+  const canReach = (tid, grp, ref, seen = new Set()) => {
+    if (!ref) return true; // わからないものは「まだ可能性あり」とする
+    if (ref.t === 'grp') {
+      if (groupsOfTeams.has(ref.g)) return ref.g === grp;
+      // 順位決定のリーグなど：その組の試合に入っているか、入る可能性があるか
+      return matches.filter((x) => x.group_label === ref.g).some((x) => inMatch(tid, grp, x, seen));
+    }
+    if (ref.t === 'win' || ref.t === 'lose') {
+      const x = byCode[ref.m];
+      if (!x) return true;
+      if (x.status === 'confirmed') return false; // 決まっていれば枠にチームが入っている
+      return inMatch(tid, grp, x, seen);
+    }
+    return true;
+  };
+  const inMatch = (tid, grp, x, seen) => {
+    if (seen.has(x.id)) return false;
+    seen.add(x.id);
+    if (x.home_team_id === tid || x.away_team_id === tid) return true;
+    return (!x.home_team_id && canReach(tid, grp, x.home_ref, seen)) || (!x.away_team_id && canReach(tid, grp, x.away_ref, seen));
+  };
+  const open = matches.filter((m) => m.status !== 'confirmed' && (!m.home_team_id || !m.away_team_id));
+  const out = {};
+  for (const t of teams) {
+    const mine = matches.filter((m) => m.home_team_id === t.id || m.away_team_id === t.id);
+    const done = mine.filter((m) => m.status === 'confirmed').length;
+    let finished = mine.length > 0 && done === mine.length;
+    if (finished) {
+      for (const m of open) {
+        if ((!m.home_team_id && canReach(t.id, t.group_label, m.home_ref)) || (!m.away_team_id && canReach(t.id, t.group_label, m.away_ref))) { finished = false; break; }
+      }
+    }
+    out[t.id] = { done, total: mine.length, finished };
+  }
+  return out;
+}
+
+// 全試合終了のチーム一覧（本部の画面用）：終わったチームは緑、まだのチームは残りの試合数。{ title, body } を返す
+export function finishedTeamsView(cat, withdrawnIds = []) {
+  const prog = teamProgress(cat);
+  const wd = new Set(withdrawnIds);
+  const teams = (cat.teams || []).filter((x) => !wd.has(x.id));
+  if (!teams.length || !(cat.matches || []).length) return null;
+  const isFin = (x) => prog[x.id] && prog[x.id].finished;
+  const fin = teams.filter(isFin);
+  const rest = teams.filter((x) => !isFin(x));
+  const chip = (x, done) => h('span', { class: `fin-chip${done ? ' done' : ''}` }, done ? '✓ ' : '', x.name,
+    !done && prog[x.id] ? h('small', null, prog[x.id].total - prog[x.id].done > 0 ? `あと${prog[x.id].total - prog[x.id].done}試合` : '次の試合待ち') : null);
+  return {
+    title: `全試合終了のチーム（${fin.length} / ${teams.length}）`,
+    body: h('div', null,
+      fin.length ? h('div', { class: 'fin-chips' }, fin.map((x) => chip(x, true))) : h('p', { class: 'muted small', style: { margin: 0 } }, 'まだありません'),
+      rest.length ? h('details', { class: 'fin-rest', open: fin.length > rest.length }, h('summary', null, `試合が残っているチーム（${rest.length}）`), h('div', { class: 'fin-chips' }, rest.map((x) => chip(x, false))))
+        : h('p', { class: 'small', style: { margin: '6px 0 0', fontWeight: 700 } }, 'すべてのチームの試合が終わりました')),
+  };
 }

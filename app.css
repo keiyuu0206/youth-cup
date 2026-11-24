@@ -405,13 +405,13 @@ details.panel > :not(summary) { min-width: 0; }
 .result-row .rt { font-variant-numeric: tabular-nums; font-size: 1.2rem; font-weight: 800; line-height: 1.1; }
 .result-row .ri { display: grid; gap: 6px; }
 .result-row .rs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.result-row input[type="number"] { width: 60px; min-height: 42px; text-align: center; font-size: 1.2rem; font-weight: 800; padding: 2px; }
-.result-row input.pk { width: 52px; font-size: 1rem; }
+.result-row input[type="number"], .result-row input[inputmode="numeric"] { width: 60px; flex: none; min-height: 42px; text-align: center; font-size: 1.2rem; font-weight: 800; padding: 2px; }
+.result-row input.pk { width: 52px; min-height: 36px; font-size: 1rem; }
 .result-row .rn { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
 @media (max-width: 560px) {
   .result-row { grid-template-columns: 1fr; gap: 6px; }
   .result-row .rl { display: flex; gap: 10px; align-items: baseline; }
-  .result-row input[type="number"] { width: 52px; }
+  .result-row input[type="number"], .result-row input[inputmode="numeric"] { width: 52px; }
 }
 .admin-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
 .admin-layout > * { min-width: 0; }
@@ -1737,3 +1737,84 @@ table.cross td.x-self { background: var(--surface-2); }
 table.cross tr.mine td { background: #fbfef0; }
 .st-cross .x-legend { margin: 6px 14px 12px; font-size: 0.7rem; color: var(--ink-3); }
 .st-cross .x-hint { margin: 0 14px 6px; font-size: 0.7rem; color: var(--ink-3); text-align: right; }
+
+/* ===== 一般公開（クラブのサイト「大会結果・速報」）===== */
+.open-list { max-width: 760px; margin: 0 auto; padding-bottom: 32px; }
+.ol-title { font-size: 1.35rem; margin: 18px 4px 6px; }
+.ol-sec { margin-top: 18px; }
+.ol-sec h2 { font-size: 1rem; color: var(--ink-2); margin: 0 4px 8px; }
+.ol-list { display: grid; gap: 8px; }
+.ol-card { display: flex; gap: 12px; align-items: center; padding: 12px 14px; background: var(--surface); border-radius: var(--r-md); box-shadow: var(--shadow); color: inherit; text-decoration: none; }
+.ol-card:hover { box-shadow: inset 0 0 0 2px var(--bib), var(--shadow); }
+.ol-card.is-live { box-shadow: inset 4px 0 0 var(--bib), var(--shadow); }
+.ol-logo { width: 48px; height: 48px; border-radius: 50%; object-fit: contain; background: #fff; flex: none; }
+.ol-nologo { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); }
+.ol-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.ol-main strong { overflow-wrap: anywhere; }
+.ol-meta { font-size: 0.85rem; color: var(--ink-2); }
+.ol-cats { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.ol-cats span { font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); }
+.ol-go { font-size: 1.6rem; color: var(--ink-2); flex: none; }
+.ol-foot { font-size: 0.8rem; color: var(--ink-2); text-align: center; margin-top: 24px; }
+/* チームの写真（クラブのサイトの保管場所から届いたときだけ） */
+.team-grid .tm.has-photo { flex-wrap: wrap; }
+.team-grid .tm .tm-photo { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: var(--r-sm, 8px); margin-bottom: 6px; background: var(--surface-2); }
+.podium .p.has-photo { flex-wrap: wrap; }
+.podium .p .p-photo { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; border-radius: var(--r-sm, 8px); background: var(--surface-2); }
+.open-share { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line, #e3e6ea); }
+
+/* PK戦の欄：同点でないときも場所は空けておく（入力中に画面がずれないように） */
+.sc-pk.is-off, .rs.pk-row.is-off { visibility: hidden; }
+.late-pick { max-height: 220px; overflow: auto; border: 1px solid var(--line, #e3e6ea); border-radius: 8px; padding: 4px 10px; }
+
+/* 各トーナメントの優勝チーム */
+.bchamps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.bchamp { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--r-md); background: linear-gradient(135deg, #fff8dc, #fdeaa8); color: #4a3a00; box-shadow: var(--shadow); }
+.bchamp.tbd { background: var(--surface); color: var(--ink-2); }
+.bchamp.mine { box-shadow: inset 4px 0 0 var(--bib), var(--shadow); }
+.bchamp-ico .ico { width: 22px; height: 22px; color: #b8860b; }
+.bchamp-name { font-size: 0.8rem; font-weight: 800; }
+.bchamp-team { display: flex; align-items: center; gap: 8px; }
+.bchamp-team strong { overflow-wrap: anywhere; }
+.podium .p .champ-tag { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; font-weight: 800; padding: 2px 10px; border-radius: 999px; background: #fdeaa8; color: #4a3a00; white-space: nowrap; }
+.podium .p .champ-tag .ico { width: 14px; height: 14px; }
+
+/* 全試合終了のチーム */
+.fin-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.fin-chip { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; background: var(--surface-2); color: var(--ink); }
+.fin-chip.done { background: #dcfce7; color: #14532d; font-weight: 700; }
+.fin-chip small { color: var(--ink-2); font-size: 0.72rem; }
+.fin-rest summary { cursor: pointer; font-size: 0.85rem; margin-top: 8px; color: var(--ink-2); }
+.team-grid .tm .tm-fin { font-size: 0.7rem; font-weight: 800; padding: 1px 8px; border-radius: 999px; background: #dcfce7; color: #14532d; }
+.sc-view { margin: 0 -4px; }
+
+/* スクリーンショット用の全体表示 */
+.fit-back { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--bg, #fafaf9); }
+.fit-bar { display: flex; align-items: center; gap: 10px; justify-content: space-between; padding: 6px 12px; font-size: 0.75rem; color: var(--ink-2); background: var(--surface); border-bottom: 1px solid var(--line, #e3e6ea); }
+.fit-area { position: relative; flex: 1; overflow: hidden; }
+.fit-stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; width: max-content; padding: 12px; }
+.fit-title { font-weight: 800; font-size: 1.1rem; margin: 0 0 8px; }
+.fit-stage .tree-scroll, .fit-stage .x-wrap { overflow: visible !important; }
+.fit-stage .scroll-hint, .fit-stage .x-hint, .fit-stage .fit-btn, .fit-stage .bk-nav { display: none !important; }
+.fit-stage th, .fit-stage td { position: static !important; }
+.fit-stage summary { display: none; }
+.fit-btn { margin-left: auto; }
+@media print { .fit-btn { display: none !important; } }
+.st-cross .fit-btn { display: block; margin: 0 auto 8px; }
+
+/* 試合ごとの結果報告のページ */
+.rep { max-width: 520px; margin: 0 auto; padding: 16px 12px 40px; }
+.rep-card { background: var(--surface); border-radius: var(--r-md); box-shadow: var(--shadow); padding: 16px; }
+.rep-head { border-bottom: 1px solid var(--line, #e3e6ea); padding-bottom: 10px; margin-bottom: 4px; }
+.rep-t { font-size: 0.8rem; color: var(--ink-2); font-weight: 700; }
+.rep-meta { font-size: 0.85rem; color: var(--ink-2); margin-top: 2px; }
+.rep-label { font-size: 1.05rem; font-weight: 800; margin-top: 4px; }
+.rep-closed { font-weight: 800; margin: 14px 0 4px; }
+.rep-link-qr { display: block; width: 180px; height: 180px; margin: 6px auto; background: #fff; padding: 8px; border-radius: 8px; }
+.rep-link-url { font-size: 0.8rem; overflow-wrap: anywhere; }
+/* 全体表示では、チーム名を省略せずに出す */
+.fit-stage .node { width: auto; min-width: 178px; max-width: 280px; }
+.fit-stage .bm .bt .nm { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
+.fit-bar button { white-space: nowrap; flex: none; }
+a.outline-btn { text-decoration: none; color: #fff; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -151,3 +151,7 @@ CREATE TABLE users (id TEXT PRIMARY KEY, login_id TEXT NOT NULL UNIQUE, name TEX
 -- 当日の時間の調整の履歴（「直前の調整を元に戻す」用）
 CREATE TABLE time_history (id TEXT PRIMARY KEY, category_id TEXT NOT NULL, label TEXT NOT NULL, data TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX idx_time_history_category ON time_history(category_id);
+CREATE TABLE report_links (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, match_id TEXT NOT NULL, created_by TEXT,
+  created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, used_at TEXT, used_count INTEGER NOT NULL DEFAULT 0, reporter TEXT);
+CREATE INDEX idx_report_links_match ON report_links(match_id);
+CREATE INDEX idx_report_links_tournament ON report_links(tournament_id);

@@ -4,8 +4,9 @@ import { openSnsChooser } from './web-poster.js';
 import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix } from './web-teammaster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague } from './web-views.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl } from './web-ui.js';
+import { openReportLink } from './web-report.js';
+import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague, finishedTeamsView } from './web-views.js';
 
 const STATUS = {
   draft: { label: '準備中', note: '閲覧ページは非公開です。自由に編集できます。' },
@@ -566,6 +567,7 @@ async function mastersView(root, navigate) {
         masterLogo(m, 36),
         h('div', { class: 'tm-main' }, h('strong', null, m.name), h('small', { class: 'muted' }, [m.short_name ? `略称：${m.short_name}` : '', `登録：${m.owner || '—'}`, m.uses ? `${m.uses}大会で使用` : ''].filter(Boolean).join('　'))),
         m.prefecture ? h('span', { class: 'tag' }, m.prefecture) : h('span', { class: 'tag muted' }, '都道府県なし'),
+        h('button', { class: 'btn btn-sm btn-ghost', type: 'button', title: 'クラブのサイト（Wix）でチームの写真を結び付けるときに使う番号です', onclick: () => copyText(String(m.id)) }, '番号をコピー'),
         m.can_edit ? h('div', { class: 'row', style: { gap: '4px' } },
           h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editMaster(m) }, '編集'),
           h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => mergeMaster(m) }, '統合'),
@@ -1071,8 +1073,8 @@ async function tournamentView(root, id, navigate) {
     // 連戦：同じチームの次の試合が、この試合の終わりから30分以内に始まる
     const backToBack = (m) => [m.home_team_id, m.away_team_id].filter((tid) => all.some((x) => x.id !== m.id && (x.home_team_id === tid || x.away_team_id === tid)
       && dayOf(cfg, x.slot) === dayOf(cfg, m.slot) && x.start_min >= endOf(m) - 1 && x.start_min - endOf(m) <= 15));
-    const lineText = () => [`【${t.name}】結果の報告のお願い`, '次の試合の結果がまだ届いていません。試合をしたチームは、本部のLINEへ結果の報告をお願いします。', '',
-      ...late.map((m) => `・${toHHMM(m.start_min)} ${courtName(cfg, m.court)}　${nm(m, 'home')} − ${nm(m, 'away')}`), '', '※連戦のチームは、次の試合の前に報告してください。'].join('\n');
+    const lineText = (list = late) => [`【${t.name}】結果の報告のお願い`, '次の試合の結果がまだ届いていません。試合をしたチームは、本部のLINEへ結果の報告をお願いします。', '',
+      ...list.map((m) => `・${toHHMM(m.start_min)} ${courtName(cfg, m.court)}　${nm(m, 'home')} − ${nm(m, 'away')}`), '', '※連戦のチームは、次の試合の前に報告してください。'].join('\n');
     const card = (title, ...kids) => h('section', { class: 'dash-card' }, h('h3', null, title), ...kids);
     const scoreText = (m) => (m.status === 'confirmed' ? `${m.home_score} - ${m.away_score}${m.home_pk != null ? `（PK${m.home_pk}-${m.away_pk}）` : ''}` : 'vs');
     return h('div', { class: 'dash' },
@@ -1097,10 +1099,10 @@ async function tournamentView(root, id, navigate) {
                 b2b.length ? h('em', { class: 'b2b' }, `連戦：${b2b.map((x) => (cache.teams[x] || {}).name).join('・')}`) : null);
             })),
             h('div', { class: 'row', style: { gap: '8px' } },
-              lineButton(lineText(), 'LINEで送る', 'btn btn-sm btn-line'),
-              h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(lineText()) }, '文をコピー'),
+              h('button', { class: 'btn btn-sm btn-line', type: 'button', onclick: () => openLateLine(late, lineText, nm, cfg) }, 'LINEで送る文を作る'),
               h('button', { class: 'btn btn-sm', type: 'button', onclick: () => go('results') }, '結果を入力'))]
             : h('p', { class: 'muted small', style: { margin: 0 } }, '時間を過ぎて結果が届いていない試合はありません')) : null,
+        finishCard(cat, card),
         card('試合の進み具合',
           h('div', { class: 'dash-big' }, h('b', null, `${rate}`), h('span', null, '%'), h('small', null, `${done.length} / ${all.length} 試合が確定`)),
           h('div', { class: 'dash-bar' }, h('i', { style: { width: `${rate}%` } })),
@@ -1323,7 +1325,44 @@ async function tournamentView(root, id, navigate) {
           h('div', { class: 'row' }, h('a', { href: viewUrl, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, viewUrl),
             h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(viewUrl) }, 'コピー'))),
         t.status === 'draft' ? null : h('a', { class: 'btn btn-block btn-primary', href: viewUrl, target: '_blank', rel: 'noopener' }, '保護者の画面を見る'),
-        h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー')));
+        h('button', { class: 'btn btn-block', type: 'button', onclick: () => copyText(lineText) }, 'LINE用の案内文をコピー'),
+        openChatField(t),
+        openShare(t)));
+  }
+
+  // LINEのオープンチャット：URLを入れると、保護者の画面に「オープンチャット」のボタンが出る
+  function openChatField(t) {
+    const cur = (t.settings || {}).openChat || '';
+    let v = cur;
+    const canSet = !isOp() && !ro();
+    return h('div', { class: 'open-share' },
+      h('strong', null, 'LINEのオープンチャット'),
+      h('input', { type: 'url', value: cur, placeholder: 'https://line.me/ti/g2/…', disabled: !canSet, 'aria-label': 'オープンチャットのURL', oninput: (e) => { v = e.target.value.trim(); } }),
+      canSet ? h('button', { class: 'btn btn-sm', type: 'button', onclick: async () => {
+        if (v === cur) return toast('変更はありません');
+        if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { openChat: v } }), v ? '保存しました。保護者の画面にボタンが出ます' : 'オープンチャットのボタンを外しました')) await reload();
+      } }, '保存') : null,
+      h('p', { class: 'muted', style: { margin: 0 } }, 'オープンチャットの「共有」→「リンクをコピー」で取れるURLです。オープンチャット側には、上の閲覧ページのURLを貼っておくと行き来できます。'));
+  }
+
+  // クラブのサイト（大会結果・速報）に載せるかどうか。保護者用のURLとは別のURLで、忘れ物・駐車券・要項は出ない
+  function openShare(t) {
+    const s = t.settings || {};
+    const on = s.publicListing === true && !!s.publicSlug;
+    const openUrl = on ? `${location.origin}/open/${s.publicSlug}` : '';
+    const canSet = !isOp() && !ro();
+    return h('div', { class: 'open-share' },
+      h('strong', null, 'クラブのサイトに一般公開'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: on, disabled: !canSet, onchange: async (e) => {
+        const v = e.target.checked;
+        if (v && !(await confirmDialog('クラブのサイトに載せます', '日程・結果・順位表・トーナメント表が、どなたでも見られる「大会結果・速報」のページに載ります。忘れ物・駐車券・要項・保護者用のURLは載りません。', '載せる'))) { e.target.checked = false; return; }
+        if (!(await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { publicListing: v } }), v ? 'クラブのサイトに載せました' : 'クラブのサイトから外しました'))) { e.target.checked = !v; return; }
+        await reload();
+      } }), '「大会結果・速報」に載せる'),
+      t.status === 'draft' && on ? h('p', { class: 'muted', style: { margin: 0 } }, '「公開中」にすると載ります') : null,
+      on ? h('div', { class: 'row' }, h('a', { href: openUrl, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, openUrl),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: () => copyText(openUrl) }, 'コピー')) : null,
+      h('p', { class: 'muted', style: { margin: 0 } }, on ? '保護者用のURL・QRはこれまでどおり使えます。' : '載せても、保護者用のURL・QRは変わりません。'));
   }
 
   function infoPanel(t) {
@@ -2016,6 +2055,7 @@ async function tournamentView(root, id, navigate) {
       h('div', { class: 'sel-bar-t' }, h('small', null, `選択中：${m.label}`), h('strong', null, `${hn}  -  ${an}`)),
       h('span', { class: 'muted small' }, data.tournament.status === 'live' || isOp() ? 'まだ行っていない試合をタップすると、時刻・コートが入れ替わります' : '移動先の枠をタップすると入れ替わります'),
       data.tournament.status === 'live' && m.status === 'none' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { st.moveSel = null; render(); openDelay(cat, m); } }, 'このコートの時間をずらす') : null,
+      data.tournament.status === 'live' && m.status === 'none' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { st.moveSel = null; render(); openToEnd(cat, m); } }, 'コートの最後に回す') : null,
       h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => {
         const id2 = m.id; st.moveSel = null;
         if (await run(() => api('POST', `/api/admin/matches/${id2}/flip`), '左右を入れ替えました（間違えたときは［↶ 1つ前に戻す］）')) await reload(); else render();
@@ -2301,6 +2341,22 @@ async function tournamentView(root, id, navigate) {
     form();
   }
 
+  // 流れた試合を、そのコートの最後に回す（ほかの試合の時刻はそのまま。「元に戻す」は時間の調整から）
+  async function openToEnd(cat, m) {
+    const r = await run(() => api('POST', `/api/admin/categories/${cat.id}/retime`, { op: 'toend', matchId: m.id, dryRun: true }));
+    if (!r) return;
+    const x = r.changes.find((c) => c.id === m.id);
+    const names = { teams: teamMap(cat), codes: codeMap(cat) };
+    const content = h('div', null,
+      h('p', { style: { marginTop: 0 } }, `「${sideInfo(m, 'home', cat, names).text} - ${sideInfo(m, 'away', cat, names).text}」を、${courtName(cat.config, m.court)}の最後に回します。`),
+      x ? h('p', null, h('b', null, `${toHHMM(x.before)} → ${toHHMM(x.after)}`)) : null,
+      h('p', { class: 'muted small' }, 'ほかの試合の時刻は変わりません。このコートのあとの試合を前に詰めたいときは、続けて「このコートの時間をずらす」でマイナスの分数を入れてください。間違えたときは「時間の調整」の「直前の調整を元に戻す」で戻せます。'),
+      warningsList(r.warnings));
+    modal({ title: 'コートの最後に回す', content, actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '最後に回す', kind: 'btn-primary', onClick: async () => {
+      if (await run(() => api('POST', `/api/admin/categories/${cat.id}/retime`, { op: 'toend', matchId: m.id }), '最後に回しました')) await reload();
+    } }] });
+  }
+
   function openDelay(cat, m) {
     const content = h('div');
     let minutes = 10;
@@ -2383,6 +2439,40 @@ async function tournamentView(root, id, navigate) {
         : h('p', { class: 'empty' }, st.resultFilter === 'pending' ? 'すべての試合が確定しています' : '該当する試合はありません')));
   }
 
+  // 全試合が終わったチーム（閉会前の確認用）
+  function finishCard(cat, card) {
+    const wd = ((data.tournament.settings || {}).withdrawn || {})[cat.id] || [];
+    const v = finishedTeamsView(cat, wd);
+    return v ? card(v.title, v.body) : null;
+  }
+
+  // 結果報告のお願い：送る試合（チーム）を選び、文面を直してからLINEで送る・コピーする
+  function openLateLine(late, lineText, nm, cfg) {
+    const picked = new Set(late.map((m) => m.id));
+    let edited = false;
+    const ta = h('textarea', { rows: 10, style: { width: '100%', fontSize: '0.9rem' }, 'aria-label': '送る文', oninput: () => { edited = true; } });
+    const refill = () => { ta.value = lineText(late.filter((m) => picked.has(m.id))); edited = false; };
+    const list = h('div', { class: 'late-pick' }, late.map((m) => h('label', { class: 'check' },
+      h('input', { type: 'checkbox', checked: true, onchange: async (e) => {
+        if (e.target.checked) picked.add(m.id); else picked.delete(m.id);
+        if (edited && !(await confirmDialog('文を作り直します', '選んだ試合に合わせて文を作り直すと、手で直した部分は消えます。', '作り直す'))) return;
+        refill();
+      } }),
+      `${toHHMM(m.start_min)} ${courtName(cfg, m.court)}　${nm(m, 'home')} − ${nm(m, 'away')}`)));
+    refill();
+    modal({
+      title: '結果報告のお願いを送る',
+      content: h('div', { class: 'stack' },
+        h('p', { class: 'muted small', style: { margin: 0 } }, '送る試合を選んでください。文はそのまま直せます。'),
+        list, ta),
+      actions: [{ label: '閉じる', kind: 'btn-ghost' },
+        { label: '文をコピー', onClick: async () => { await copyText(ta.value); return true; } },
+        { label: 'LINEで送る', kind: 'btn-line', onClick: async () => {
+          if (!picked.size && !edited) { toast('送る試合を選んでください', true); return true; }
+          window.open(lineShareUrl(ta.value), '_blank', 'noopener'); return true;
+        } }] });
+  }
+
   function resultRow(t, cat, m, cache, isOverdue, picked) {
     const home = sideInfo(m, 'home', cat, cache);
     const away = sideInfo(m, 'away', cat, cache);
@@ -2397,7 +2487,9 @@ async function tournamentView(root, id, navigate) {
       const tie = f.home_score !== '' && String(f.home_score) === String(f.away_score);
       const numIn = (key, cls, label) => h('input', { type: 'text', inputmode: 'numeric', pattern: '[0-9]*', maxlength: 2, autocomplete: 'off', class: cls, value: f[key], disabled: !editing || !ready || !!f.forfeit, 'aria-label': label,
         onfocus: (e) => e.target.select(),
-        oninput: (e) => { const c = cleanScore(e.target.value); if (e.target.value !== c) e.target.value = c; f[key] = c; if (key === 'home_score' || key === 'away_score') { const pkNow = f.home_score !== '' && String(f.home_score) === String(f.away_score); if (pkNow !== tie) draw(); } } });
+        oninput: (e) => { const c = cleanScore(e.target.value); if (e.target.value !== c) e.target.value = c; f[key] = c; if (key === 'home_score' || key === 'away_score') showPk(); } });
+      // PK戦の欄は場所を空けたまま見せる・隠すだけ（入力中に画面がずれないように）
+      const showPk = () => { const pk = row.querySelector('.rs.pk-row'); if (!pk) return; const on = f.home_score !== '' && String(f.home_score) === String(f.away_score); pk.classList.toggle('is-off', !on); pk.querySelectorAll('input').forEach((x) => { x.disabled = !on || !editing; }); };
       let saving = false; // 二度押しを防ぐ
       const save = async (confirm) => {
         if (saving) return; saving = true;
@@ -2424,7 +2516,7 @@ async function tournamentView(root, id, navigate) {
             h('strong', { class: 'rn', style: { textAlign: 'right', color: home.placeholder ? 'var(--ink-2)' : null } }, refBadge(cat, m, 'home'), home.text),
             numIn('home_score', '', `${home.text}の得点`), h('span', null, '-'), numIn('away_score', '', `${away.text}の得点`),
             h('strong', { class: 'rn', style: { color: away.placeholder ? 'var(--ink-2)' : null } }, away.text, refBadge(cat, m, 'away'))),
-          isKo && tie && ready && !f.forfeit ? h('div', { class: 'rs small' }, h('span', null, 'PK'), numIn('home_pk', 'pk', 'PK（左）'), h('span', null, '-'), numIn('away_pk', 'pk', 'PK（右）')) : null,
+          isKo && ready && !f.forfeit ? h('div', { class: `rs small pk-row${tie ? '' : ' is-off'}` }, h('span', null, 'PK'), numIn('home_pk', 'pk', 'PK（左）'), h('span', null, '-'), numIn('away_pk', 'pk', 'PK（右）')) : null,
           ready ? h('div', { class: 'rs' },
             editing ? h('select', { style: { width: 'auto', minHeight: '36px' }, 'aria-label': '不戦勝', onchange: (e) => { f.forfeit = e.target.value; draw(); } },
               h('option', { value: '' }, '通常の試合'),
@@ -2441,8 +2533,12 @@ async function tournamentView(root, id, navigate) {
             m.status === 'provisional' ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: async () => {
               if (await run(() => api('POST', `/api/admin/matches/${m.id}/clear`), '未登録に戻しました')) await reload();
             } }, '入力を消す') : null,
-            t.status === 'live' && m.status === 'none' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openDelay(cat, m) }, '時間をずらす') : null)
+            t.status === 'live' && m.status === 'none' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openDelay(cat, m) }, '時間をずらす') : null,
+            t.status === 'live' && m.status === 'none' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openToEnd(cat, m) }, '最後に回す') : null,
+            !locked && !ro() && (t.status === 'published' || t.status === 'live') ? h('button', { class: 'btn btn-sm btn-line', type: 'button', title: 'この試合だけの入力ページのリンクを、LINEで審判やチームに送ります',
+              onclick: () => openReportLink({ t, m, home: home.text, away: away.text, when: `${dayTotal(cat.config) > 1 ? `${dayLabel(cat, dayOf(cat.config, m.slot), t, true)} ` : ''}${toHHMM(m.start_min)} ${courtName(cat.config, m.court)}`, onChange: reload }) }, '報告リンク') : null)
             : h('p', { class: 'muted small', style: { margin: 0 } }, '対戦チームが決まると入力できます')));
+      showPk();
     };
     draw();
     return row;

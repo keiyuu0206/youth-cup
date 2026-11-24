@@ -2,9 +2,10 @@
 //  スコア管理者：スコア（試合結果）の登録に特化
 //  大会運営者　：スコアの登録・修正（確定済みの修正・取り消しを含む）、SNS画像の出力、忘れ物の登録
 import { api } from './web-api.js';
+import { openReportLink } from './web-report.js';
 import { openMatchPoster, openResultPoster, openStandingsPoster, openLogoPoster } from './web-poster.js';
 import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto, lineButton } from './web-ui.js';
-import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor } from './web-views.js';
+import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor, standingsView, bracketView, finishedTeamsView } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
 
@@ -101,10 +102,12 @@ export async function scoreApp(root, me) {
       })) : null,
       h('div', { class: 'sc-tabs', role: 'tablist' },
         [pendN ? ['pending', `承認待ち（${pendN}）`] : null, ['all', '試合一覧'],
+          ['standings', '順位'],
           isOp ? ['lost', `忘れ物（${(t.lost || []).length}）`] : null, isOp ? ['sns', 'SNS画像'] : null].filter(Boolean).map(([k, l]) =>
           h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), onclick: () => { st.tab = k; draw(); } }, l))),
       !cat ? h('p', { class: 'empty' }, 'カテゴリがありません')
-        : st.tab === 'pending' && pendN ? pendingView(t, cat) : st.tab === 'lost' && isOp ? lostView(t) : st.tab === 'sns' && isOp ? snsView(t, cat) : allView(t, cat),
+        : st.tab === 'pending' && pendN ? pendingView(t, cat)
+          : st.tab === 'standings' ? rankTab(t, cat) : st.tab === 'lost' && isOp ? lostView(t) : st.tab === 'sns' && isOp ? snsView(t, cat) : allView(t, cat),
       h('p', { class: 'sc-foot muted small' }, pendAll ? `この大会の承認待ち：全${pendAll}件` : '最新の情報は、右下の「更新」を押すと表示されます'),
       refreshButton(async () => { const r = await refresh(); return r === 'quiet' ? true : r; })));
   }
@@ -219,6 +222,19 @@ export async function scoreApp(root, me) {
           })])));
   }
 
+  // 順位：全試合が終わったチーム（閉会前の確認用）・順位表・トーナメント表（保護者の画面と同じ表示）
+  function rankTab(t, cat) {
+    const v = finishedTeamsView(cat, ((t.settings || {}).withdrawn || {})[cat.id] || []);
+    const ctx = { tournament: t, myTeam: null };
+    const seg = st.rankView || (cat.config.format === 'knockout' ? 'bracket' : 'standings');
+    const both = cat.config.format === 'league_knockout';
+    return h('div', { class: 'stack' },
+      v ? h('section', { class: 'panel' }, h('h2', { style: { marginBottom: '6px', fontSize: '1rem' } }, v.title), v.body) : null,
+      both ? h('div', { class: 'chips' }, [['standings', '順位表'], ['bracket', 'トーナメント']].map(([k, l]) =>
+        h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(seg === k), onclick: () => { st.rankView = k; draw(); } }, l))) : null,
+      h('div', { class: 'sc-view' }, seg === 'bracket' && cat.config.format !== 'league' ? bracketView(cat, ctx) : standingsView(cat, ctx)));
+  }
+
   // SNS画像（大会運営者）：試合結果・結果一覧の画像を出力する
   function snsView(t, cat) {
     const cats = st.data.categories;
@@ -285,8 +301,9 @@ export async function scoreApp(root, me) {
         const before = tieNow();
         v[key] = Math.max(0, Math.min(99, v[key] + d));
         out.textContent = v[key];
-        if (before !== tieNow()) draw2(); // PK戦の欄の出し入れだけ描き直す
-        else { const btn = body.querySelector('.sc-ok'); if (btn) btn.textContent = okLabel(); }
+        // PK戦の欄は場所を空けたまま見せる・隠すだけ（ボタンの位置が動いて押し間違えないように）
+        if (before !== tieNow()) showPk();
+        const btn = body.querySelector('.sc-ok'); if (btn) btn.textContent = okLabel();
       };
       return h('div', { class: `sc-step${small ? ' small' : ''}` },
         h('span', { class: 'sc-step-name' }, info && info.team && !small ? crest(info.team, 30) : null, h('b', null, label)),
@@ -315,11 +332,12 @@ export async function scoreApp(root, me) {
           : h('p', { class: 'muted small' }, '未登録の試合はありません。おつかれさまでした。'),
         h('button', { class: 'btn btn-block', type: 'button', onclick: close }, '一覧に戻る')));
     };
-    const draw2 = () => mount(body, h('div', { class: 'stack' },
+    const showPk = () => { const pk = body.querySelector('.sc-pk'); if (pk) { const on = tieNow(); pk.classList.toggle('is-off', !on); pk.setAttribute('aria-hidden', on ? 'false' : 'true'); pk.querySelectorAll('button').forEach((b) => { b.disabled = !on; }); } };
+    const draw2 = () => { mount(body, h('div', { class: 'stack' },
       h('div', { class: 'sc-meta' }, h('span', null, when(t, cat, m)), h('span', null, m.label)),
       step('h', hi, hi.text),
       step('a', ai, ai.text),
-      tieNow() ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のため、PK戦の結果を入力'),
+      ko ? h('div', { class: 'sc-pk' }, h('div', { class: 'small', style: { fontWeight: 700 } }, '同点のため、PK戦の結果を入力'),
         step('hp', hi, `${hi.text}（PK）`, true), step('ap', ai, `${ai.text}（PK）`, true)) : null,
       fixing ? h('p', { class: 'notice', style: { margin: 0 } }, `確定済みの結果（${m.home_score} - ${m.away_score}）を修正します。順位やトーナメントの組み合わせも自動で計算し直されます。`) : null,
       h('button', { class: 'btn btn-primary btn-block sc-ok', type: 'button', onclick: async (e) => {
@@ -334,10 +352,12 @@ export async function scoreApp(root, me) {
         if (r.unchanged) { toast('同じ結果のため、変更はありません'); close(); return; }
         await done();
       } }, okLabel()),
+      isOp && !fixing && hi.team && ai.team && (t.status === 'published' || t.status === 'live') ? h('button', { class: 'btn btn-line btn-block', type: 'button',
+        onclick: () => openReportLink({ t, m, home: hi.text, away: ai.text, when: when(t, cat, m), onChange: reload }) }, 'この試合の報告リンクをLINEで送る') : null,
       isOp && m.status !== 'none' ? h('button', { class: 'btn btn-ghost btn-block', type: 'button', onclick: async () => {
         if (!(await confirmDialog('結果を取り消します', 'この試合の結果を取り消して「未登録」に戻します。', '未登録に戻す', true))) return;
         if (await run(() => api('POST', `/api/admin/matches/${m.id}/clear`), '未登録に戻しました')) { close(); reload(); }
-      } }, '結果を取り消して未登録に戻す') : null));
+      } }, '結果を取り消して未登録に戻す') : null)); showPk(); };
     draw2();
     sheet({ title: fixing ? '確定済みの結果を修正' : m.status === 'provisional' ? '修正して承認' : '結果を入力', content: body });
   }

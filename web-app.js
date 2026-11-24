@@ -15,7 +15,23 @@ async function route() {
       const { admin } = await import('./web-admin.js');
       return await admin(root, path, navigate);
     }
-    let m = path.match(/^\/t\/([^/]+)$/);
+    // 一般公開（クラブのサイトに埋め込む）：大会の一覧と、大会ごとの結果
+    if (path === '/open') {
+      const { openList } = await import('./web-viewer.js');
+      return await openList(root);
+    }
+    let m = path.match(/^\/open\/([a-z0-9]+)$/);
+    if (m) {
+      const { viewer } = await import('./web-viewer.js');
+      return await viewer(root, m[1], { open: true });
+    }
+    // 試合ごとの結果報告（本部がLINEで送ったリンク）
+    m = path.match(/^\/rep\/([a-z0-9]{24})$/);
+    if (m) {
+      const { report } = await import('./web-report.js');
+      return await report(root, m[1]);
+    }
+    m = path.match(/^\/t\/([^/]+)$/);
     if (m) {
       const { viewer } = await import('./web-viewer.js');
       return await viewer(root, m[1]);

@@ -19,8 +19,9 @@ import WEB_PAMPHLET from './web-pamphlet.js';
 import WEB_POSTER from './web-poster.js';
 import WEB_SCORE from './web-score.js';
 import WEB_TEAMMASTER from './web-teammaster.js';
+import WEB_REPORT from './web-report.js';
 import { normKey, normPref, splitPref, stripSuffix } from './teamnorm.js';
-import { normalizeConfig, matchLength, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
+import { normalizeConfig, matchLength, matchLengthFor, courtName, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
 import { generateCategory, applyTimes, planDelay, scheduleWarnings, lenOfSlots, gapOfSlots } from './schedule.js';
 import { evaluateCategory } from './standings.js';
@@ -178,6 +179,15 @@ async function ensureSchema(db) {
       db.prepare('CREATE INDEX IF NOT EXISTS idx_team_master_norm ON team_master(norm)'),
     ]);
   }
+  // 試合ごとの結果報告のリンク（本部がLINEで送る。届いた結果は「仮登録」になり、本部が承認する）
+  if (!tables.includes('report_links')) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS report_links (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, match_id TEXT NOT NULL, created_by TEXT,
+        created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, used_at TEXT, used_count INTEGER NOT NULL DEFAULT 0, reporter TEXT)`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_report_links_match ON report_links(match_id)'),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_report_links_tournament ON report_links(tournament_id)'),
+    ]);
+  }
   await addCol('teams', 'prefecture', 'TEXT');
   await addCol('teams', 'master_id', 'TEXT');
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_teams_master ON teams(master_id)').run();
@@ -248,7 +258,9 @@ const isSuper = (user) => user && user.role === 'super';
 const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['PATCH', /^\/api\/admin\/lost\/[^/]+$/], ['DELETE', /^\/api\/admin\/lost\/[^/]+$/],
   // 当日の運営：大会の画面の表示、時間の調整・元に戻す、時間をずらす、組み合わせ・左右の入れ替え、節の番号、チームの棄権
   ['GET', /^\/api\/admin\/tournaments\/[^/]+$/], ['GET', /^\/api\/admin\/categories\/[^/]+\/retime\/history$/],
-  ['POST', /^\/api\/admin\/categories\/[^/]+\/(retime|retime\/undo|delay|move|renumber|withdraw)$/], ['POST', /^\/api\/admin\/matches\/[^/]+\/flip$/]];
+  ['POST', /^\/api\/admin\/categories\/[^/]+\/(retime|retime\/undo|delay|move|renumber|withdraw)$/], ['POST', /^\/api\/admin\/matches\/[^/]+\/flip$/],
+  // 試合ごとの結果報告のリンク（発行・一覧・取り消し）
+  ['POST', /^\/api\/admin\/matches\/[^/]+\/report-link$/], ['GET', /^\/api\/admin\/tournaments\/[^/]+\/report-links$/], ['POST', /^\/api\/admin\/report-links\/[^/]+\/revoke$/]];
 // 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
 const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
@@ -382,6 +394,7 @@ async function loadFull(db, t) {
 
 // 大会の版を上げる。pub = false のとき（関係者の仮登録など保護者に見えない変更）は、閲覧ページ向けの版は上げない
 async function bump(db, tid, pub = true) {
+  OPEN_LIST.at = 0; // 一般公開の大会一覧も作り直す
   await db.prepare('UPDATE tournaments SET rev = rev + 1, pub_rev = pub_rev + ?, updated_at = ? WHERE id = ?').bind(pub ? 1 : 0, now(), tid).run();
 }
 
@@ -552,12 +565,29 @@ function publicOutline(o) {
   };
 }
 
+const okOpenChat = (u) => typeof u === 'string' && u.length <= 300 && /^https:\/\/(line\.me|lin\.ee)\/[\w\-./?=&%~#]+$/.test(u);
+
 async function publicPayload(db, t, level) {
   const cats = await loadFull(db, t);
   const sponsors = publicSponsors(await listSponsors(db, t.id));
   const settings = readSettings(t);
+  // 一般公開（クラブのサイトなど）：結果だけ。忘れ物・駐車券・要項・保護者用のURLは出さない。チームマスタの番号を付ける（写真の結び付け用）
+  if (level === 'open') {
+    const { slug, ...tour } = publicTournament(t);
+    return {
+      tournament: { ...tour, id: settings.publicSlug, sponsors, open: true,
+        referee: ['one', 'halves', 'left'].includes((settings.referee || {}).mode) ? settings.referee.mode : 'none' },
+      categories: cats.map((c) => ({
+        ...c,
+        config: stripConfig(c.config),
+        teams: c.teams.map(({ id, name, base_name, short_name, logo, group_label, master_id }) => ({ id, name, base_name, short_name, logo: t.show_logo ? logoUrl('team', id, logo) : null, group_label, master_id: master_id || null })),
+        matches: c.matches.map((m) => maskMatch(m, 'public')),
+      })),
+    };
+  }
   return {
     tournament: { ...publicTournament(t), sponsors, lost: await listLost(db, t.id), parking: publicParking(settings), outline: publicOutline(settings.outline),
+      openChat: okOpenChat(settings.openChat) ? settings.openChat : null,
       // 大会運営者・スコア管理者の画面（SNS画像）用：登録済みの写真
       ...(level === 'relative' ? { settings: { snsPhotos: settings.snsPhotos || {}, snsBg: settings.snsBg || {} } } : {}),
       referee: ['one', 'halves', 'left'].includes((settings.referee || {}).mode) ? settings.referee.mode : 'none' },
@@ -607,6 +637,7 @@ const STATIC = {
   '/web-poster.js': [WEB_POSTER, JS],
   '/web-score.js': [WEB_SCORE, JS],
   '/web-teammaster.js': [WEB_TEAMMASTER, JS],
+  '/web-report.js': [WEB_REPORT, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -657,6 +688,11 @@ async function serveStatic(req, url) {
   const versioned = file && url.searchParams.get('v') === build;
   const etag = await etagOf(key, body);
   const headers = { 'Content-Type': type, 'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'no-cache', ETag: etag, ...SECURITY_HEADERS };
+  // 一般公開のページ（/open）だけは、クラブのサイト（Wixなど）の中に埋め込めるようにし、Wixに保管した写真を表示できるようにする
+  if (!file && /^\/open(\/|$)/.test(url.pathname)) {
+    delete headers['X-Frame-Options'];
+    headers['Content-Security-Policy'] = CSP.replace("frame-ancestors 'none'", 'frame-ancestors *').replace("img-src 'self' data: blob:", "img-src 'self' data: blob: https://static.wixstatic.com");
+  }
   if (req.headers.get('If-None-Match') === etag) return new Response(null, { status: 304, headers });
   // それ以外の画面のURL（/admin, /t/..., /r/...）はすべて index.html を返し、画面側で振り分ける
   return new Response(body, { headers });
@@ -1020,7 +1056,20 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params, user }) =
   next.end_date = checkRange(next.date, b.end_date !== undefined ? b.end_date || null : t.end_date);
   let settings = readSettings(t);
   if (b.settings && typeof b.settings === 'object') {
+    const keepSlug = settings.publicSlug;
     settings = { ...settings, ...b.settings };
+    // 一般公開用のID：サーバーで決める（画面からは変えられない）。一度決めたら変えない
+    settings.publicSlug = keepSlug;
+    if (b.settings.publicListing !== undefined) settings.publicListing = b.settings.publicListing === true;
+    if (settings.publicListing && !settings.publicSlug) settings.publicSlug = randomSlug(16);
+    if (!settings.publicSlug) delete settings.publicSlug;
+    // LINEのオープンチャットのURL（保護者の画面にボタンを出す）
+    if (b.settings.openChat !== undefined) {
+      const u = String(b.settings.openChat || '').trim();
+      if (!u) delete settings.openChat;
+      else if (!okOpenChat(u)) fail(400, 'オープンチャットのURLは https://line.me/ で始まるものを入れてください');
+      else settings.openChat = u;
+    }
     if (JSON.stringify(settings).length > 300_000) fail(400, '要項の文章が長すぎます');
   }
   await db.prepare('UPDATE tournaments SET name = ?, date = ?, end_date = ?, venue = ?, logo = ?, show_logo = ?, status = ?, settings = ? WHERE id = ?')
@@ -1065,6 +1114,7 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params, user }) => {
   stmts.push(db.prepare('DELETE FROM sponsor_clicks WHERE sponsor_id IN (SELECT id FROM sponsors WHERE tournament_id = ?)').bind(t.id));
   stmts.push(db.prepare('DELETE FROM sponsors WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM lost_items WHERE tournament_id = ?').bind(t.id));
+  stmts.push(db.prepare('DELETE FROM report_links WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM assets WHERE owner = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM categories WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM tournaments WHERE id = ?').bind(t.id));
@@ -1619,6 +1669,7 @@ const intIn = (v, lo, hi) => { const n = Math.trunc(Number(v)); return Number.is
 function planRetime(cfg, matches, b) {
   const breaks = (cfg.dayBreakSlots || []).slice();
   const dayCount = Math.max(1, cfg.dayCount || 1);
+  if (b.op === 'toend') return planToEnd(cfg, matches, b, breaks, dayCount);
   const day = intIn(b.day, 0, dayCount - 1);
   if (day == null) fail(400, '日を選んでください');
   const from = intIn(b.from, 0, 1440);
@@ -1671,6 +1722,40 @@ function planRetime(cfg, matches, b) {
   } else fail(400, '調整の種類を選んでください');
   if (matches.some((m) => m.start_min < 0 || m.start_min > 24 * 60)) fail(400, '時刻が0:00〜24:00の範囲を超えます');
   return { label, newBreaks, cfgPatch, day };
+}
+
+// 流れた試合を、そのコートのその日の最後に回す。ほかの試合の時刻はそのまま。
+// コートの最後の行に空きが無ければ、その日の最後に1行足す（翌日以降の行は1つずつ後ろへ）
+function planToEnd(cfg, matches, b, breaks, dayCount) {
+  const target = matches.find((m) => m.id === b.matchId);
+  if (!target) fail(404, '試合が見つかりません');
+  if (target.status !== 'none') fail(409, '結果が登録された試合は動かせません');
+  const day = dayOf(cfg, target.slot);
+
+  const onDay = matches.filter((m) => dayOf(cfg, m.slot) === day);
+  const lastRow = Math.max(...onDay.map((m) => m.slot));
+  const others = onDay.filter((m) => m.court === target.court && m.id !== target.id);
+  if (!others.length || Math.max(...others.map((m) => m.slot)) < target.slot) fail(409, 'この試合は、すでにこのコートの最後の試合です');
+  const last = others.reduce((a, x) => (x.slot > a.slot || (x.slot === a.slot && x.start_min > a.start_min) ? x : a));
+  const dcfg = dayConfig(cfg, day);
+  const lastEnd = last.start_min + matchLengthFor(cfg, last) + (dcfg.intervalMinutes || 0);
+  const oldStart = target.start_min;
+  let newBreaks = breaks;
+  let row;
+  if (last.slot < lastRow) {
+    row = last.slot + 1; // コートの最後の試合のすぐ下の行が空いている
+  } else {
+    row = lastRow + 1; // 1行足す
+    for (const m of matches) if (m !== target && m.slot >= row) m.slot += 1;
+    newBreaks = breaks.map((x, i) => (i >= day ? x + 1 : x));
+  }
+  const rowMates = matches.filter((m) => m !== target && m.slot === row);
+  const rowStart = rowMates.length ? Math.min(...rowMates.map((m) => m.start_min)) : lastEnd;
+  target.slot = row;
+  target.start_min = Math.max(rowStart, lastEnd);
+  target.session = last.session;
+  const dl = dayCount > 1 ? `${day + 1}日目 ` : '';
+  return { label: `${dl}${courtName(cfg, target.court)}の${hhmm(oldStart)}の試合（${target.label}）をコートの最後（${hhmm(target.start_min)}）に回す`, newBreaks, cfgPatch: null, day };
 }
 
 route('POST', '/api/admin/categories/:cid/retime', async ({ req, db, params, user }) => {
@@ -2078,7 +2163,7 @@ route('POST', '/api/admin/tournaments/:id/copy', async ({ req, db, params, user 
   const amap = await copyAssets(db, outlineImageIds(settings.outline), nid);
   if (settings.outline) settings.outline = remapOutline(settings.outline, amap);
   await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(settings), user.id === 'root' ? null : user.id, now(), now()).run();
+    .bind(nid, randomSlug(), name, b.date || null, end, t.venue, t.logo, t.show_logo, randomPin(), JSON.stringify(noPublic(settings)), user.id === 'root' ? null : user.id, now(), now()).run();
   const dates = tournamentDates({ date: b.date, end_date: end });
   const stmts = [];
   let teamCount = 0, matchCount = 0;
@@ -2205,7 +2290,7 @@ route('POST', '/api/admin/restore', async ({ req, db, user }) => {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(src.date || '') ? src.date : null;
   const end = /^\d{4}-\d{2}-\d{2}$/.test(src.end_date || '') ? src.end_date : null;
   await db.prepare('INSERT INTO tournaments (id, slug, name, date, end_date, venue, logo, show_logo, pin, settings, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(nid, randomSlug(), name, date, end, txt(src.venue, 120), logo, src.show_logo ? 1 : 0, randomPin(), JSON.stringify(settings), user.id === 'root' ? null : user.id, now(), now()).run();
+    .bind(nid, randomSlug(), name, date, end, txt(src.venue, 120), logo, src.show_logo ? 1 : 0, randomPin(), JSON.stringify(noPublic(settings)), user.id === 'root' ? null : user.id, now(), now()).run();
   const stmts = [];
   let teamCount = 0, matchCount = 0;
   const teamsAll = Array.isArray(bundle.teams) ? bundle.teams : [];
@@ -2295,6 +2380,123 @@ route('GET', '/api/public/:slug', async ({ db, params, url }) => {
     const t = await getTournamentBySlug(db, params.slug);
     return publicPayload(db, { ...t, rev: t.pub_rev }, 'public');
   });
+});
+
+// ---------- 一般公開（クラブのサイトに載せる結果）----------
+// 大会の設定で「一般公開する」にした大会だけ。保護者用とは別のID（publicSlug）で公開する
+const OPEN_LIST = { at: 0, body: null };
+// コピー・復元した大会は一般公開しない（公開用のIDも引き継がない）
+const noPublic = ({ publicListing, publicSlug, ...rest }) => rest;
+const isPublicOn = (settings) => settings.publicListing === true && typeof settings.publicSlug === 'string';
+route('GET', '/api/open/tournaments', async ({ db }) => {
+  if (OPEN_LIST.body && Date.now() - OPEN_LIST.at < 60_000) return jsonText(OPEN_LIST.body, 'hit');
+  const rows = (await db.prepare(`SELECT id, name, date, end_date, venue, status, logo, show_logo, settings FROM tournaments
+    WHERE status != 'draft' AND json_extract(settings, '$.publicListing') = 1 ORDER BY date DESC, created_at DESC`).all()).results;
+  const ids = rows.map((r) => r.id);
+  const cats = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const part = ids.slice(i, i + 50);
+    for (const c of (await db.prepare(`SELECT tournament_id, name FROM categories WHERE tournament_id IN (${part.map(() => '?').join(',')}) ORDER BY sort, created_at`).bind(...part).all()).results) (cats[c.tournament_id] ||= []).push(c.name);
+  }
+  const list = rows.map((r) => ({ r, st: readSettings(r) })).filter(({ st }) => isPublicOn(st)).map(({ r, st }) => ({
+    id: st.publicSlug, name: r.name, date: r.date, end_date: r.end_date || null, venue: r.venue, status: r.status,
+    logo: r.show_logo ? logoUrl('t', r.id, r.logo) : null, categories: cats[r.id] || [] }));
+  OPEN_LIST.body = JSON.stringify({ tournaments: list }); OPEN_LIST.at = Date.now();
+  return jsonText(OPEN_LIST.body, 'miss');
+});
+route('GET', '/api/open/t/:pid', async ({ db, params, url }) => {
+  if (!/^[a-z0-9]{8,40}$/.test(params.pid)) fail(404, '大会が見つかりません');
+  const t = await db.prepare("SELECT * FROM tournaments WHERE json_extract(settings, '$.publicSlug') = ?").bind(params.pid).first();
+  if (!t || t.status === 'draft' || !isPublicOn(readSettings(t))) fail(404, 'この大会は公開されていません');
+  if (url.searchParams.get('rev') === String(t.pub_rev)) return json({ unchanged: true, rev: t.pub_rev });
+  return cachedPayload(`open:${params.pid}:${t.pub_rev}`, url.origin, async () => publicPayload(db, { ...t, rev: t.pub_rev }, 'open'));
+});
+
+// ---------- 試合ごとの結果報告のリンク ----------
+// 本部（管理者・大会運営者）が試合を選んで発行し、LINEで送る。リンクを開くとその1試合だけが表示され、点数を入れて送れる。
+// 届いた結果は「仮登録」になり、本部が承認して初めて結果になる。確定・取り消し・大会の終了で使えなくなる
+const REPORT_ID = /^[a-z0-9]{24}$/;
+
+async function reportCtx(db, token) {
+  if (!REPORT_ID.test(token)) fail(404, 'このリンクは使えません');
+  const l = await db.prepare('SELECT * FROM report_links WHERE id = ?').bind(token).first();
+  if (!l) fail(404, 'このリンクは使えません');
+  const t = await db.prepare('SELECT * FROM tournaments WHERE id = ?').bind(l.tournament_id).first();
+  const mRow = await db.prepare('SELECT * FROM matches WHERE id = ?').bind(l.match_id).first();
+  if (!t || !mRow) fail(410, 'この試合は見つかりません。本部に連絡してください');
+  const m = parseMatch(mRow);
+  const c = await db.prepare('SELECT * FROM categories WHERE id = ?').bind(m.category_id).first();
+  if (!c) fail(410, 'この試合は見つかりません。本部に連絡してください');
+  c.config = normalizeConfig(JSON.parse(c.config));
+  let closed = null;
+  if (l.revoked) closed = 'このリンクは本部が取り消しました。';
+  else if (t.status === 'finished') closed = '大会は終了しました。';
+  else if (t.status === 'draft') closed = '大会はまだ公開されていません。';
+  else if (m.status === 'confirmed') closed = 'この試合の結果は、本部で確定しました。';
+  return { l, t, m, c, closed };
+}
+
+route('POST', '/api/admin/matches/:id/report-link', async ({ db, params, user, url }) => {
+  const { m, t } = await getMatchCtx(db, params.id, user);
+  if (t.status !== 'published' && t.status !== 'live') fail(409, '「公開中」か「開催中」の大会で発行できます');
+  if (m.status === 'confirmed') fail(409, 'この試合は確定済みです');
+  if (!m.home_team_id || !m.away_team_id) fail(409, '対戦チームが決まってから発行できます');
+  // 同じ試合で使えるリンクがあれば、それをそのまま使う（何本も出回らないように）
+  let l = await db.prepare('SELECT * FROM report_links WHERE match_id = ? AND revoked = 0 ORDER BY created_at DESC LIMIT 1').bind(m.id).first();
+  if (!l) {
+    const id = randomSlug(24);
+    await db.prepare('INSERT INTO report_links (id, tournament_id, match_id, created_by, created_at) VALUES (?, ?, ?, ?, ?)').bind(id, t.id, m.id, user.name || user.login_id || '本部', now()).run();
+    l = { id, created_at: now(), used_at: null, used_count: 0, reporter: null };
+  }
+  return json({ id: l.id, url: `${url.origin}/rep/${l.id}`, created_at: l.created_at, used_at: l.used_at, used_count: l.used_count, reporter: l.reporter });
+}, 'admin');
+
+route('GET', '/api/admin/tournaments/:id/report-links', async ({ db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
+  const r = await db.prepare('SELECT id, match_id, created_by, created_at, used_at, used_count, reporter FROM report_links WHERE tournament_id = ? AND revoked = 0 ORDER BY created_at DESC LIMIT 500').bind(t.id).all();
+  return json({ links: r.results });
+}, 'admin');
+
+route('POST', '/api/admin/report-links/:rid/revoke', async ({ db, params, user }) => {
+  const l = await db.prepare('SELECT * FROM report_links WHERE id = ?').bind(params.rid).first();
+  if (!l) fail(404, 'リンクが見つかりません');
+  await getTournament(db, l.tournament_id, user); // 操作できる大会か
+  await db.prepare('UPDATE report_links SET revoked = 1 WHERE id = ?').bind(l.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+// リンクを開いた人に見せる内容（その1試合だけ）
+route('GET', '/api/report/:rid', async ({ db, params }) => {
+  const { l, t, m, c, closed } = await reportCtx(db, params.rid);
+  const name = async (id) => { const x = id ? await db.prepare('SELECT name, logo FROM teams WHERE id = ?').bind(id).first() : null; return x ? x.name : '未定'; };
+  return json({
+    tournament: { name: t.name }, category: c.name,
+    match: { label: m.label, court: courtName(c.config, m.court), start: hhmm(m.start_min), day: (c.config.dayCount || 1) > 1 ? dayOf(c.config, m.slot) + 1 : null,
+      home: await name(m.home_team_id), away: await name(m.away_team_id), pk: m.stage === 'knockout' && !isLeagueLike(m),
+      status: m.status, sent: m.status === 'provisional' && l.used_at ? { home: m.home_score, away: m.away_score, home_pk: m.home_pk, away_pk: m.away_pk } : null },
+    closed, reporter: l.reporter || '',
+  });
+});
+
+route('POST', '/api/report/:rid', async ({ req, db, params }) => {
+  const ip = req.headers.get('CF-Connecting-IP') || 'local';
+  const rl = await rateLimit(db, `report:${params.rid}:${ip}`, 10);
+  if (!rl.ok) fail(429, '送信の回数が多すぎます。しばらくしてからもう一度お試しください');
+  const { l, t, m, c, closed } = await reportCtx(db, params.rid);
+  if (closed) fail(409, closed);
+  if (!m.home_team_id || !m.away_team_id) fail(409, '対戦チームが決まっていません。本部に連絡してください');
+  const b = await body(req);
+  const s = validateScore(m, { ...b, forfeit: null }, c.config);
+  if (s.home > 99 || s.away > 99) fail(400, '得点を確認してください');
+  requirePkIfNeeded(m, s);
+  const reporter = clip(b.reporter || '', 20);
+  const r = await db.prepare(`UPDATE matches SET home_score = ?, away_score = ?, home_pk = ?, away_pk = ?, forfeit = NULL, status = 'provisional',
+    updated_by = ?, updated_at = ?, version = version + 1 WHERE id = ? AND status != 'confirmed'`)
+    .bind(s.home, s.away, s.hpk, s.apk, `報告${reporter ? `：${reporter}` : '（リンク）'}`, now(), m.id).run();
+  if (!r.meta.changes) fail(409, 'この試合の結果は、本部で確定しました。');
+  await db.prepare('UPDATE report_links SET used_at = ?, used_count = used_count + 1, reporter = ? WHERE id = ?').bind(now(), reporter || null, l.id).run();
+  await bump(db, t.id, false); // 仮登録は保護者には見えない
+  return json({ ok: true });
 });
 
 // ---------- 関係者 ----------

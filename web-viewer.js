@@ -5,26 +5,50 @@ import { drawPoster, drawStandingsImage } from './web-poster.js';
 import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton, saveImages } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin, setRefereeMode, refereeMode } from './web-views.js';
 
-export async function viewer(root, slug) {
+// 一般公開のページで、クラブのサイト（Wix）から届くチームの写真（チームマスタの番号・チーム名 → 写真のURL）
+const PHOTOS = { byId: {}, byName: {} };
+const photoKey = (s) => String(s || '').normalize('NFKC').replace(/[（(][^）)]*[）)]/g, '').replace(/\s/g, '').toLowerCase();
+export const photoOf = (team) => (team ? PHOTOS.byId[team.master_id] || PHOTOS.byName[photoKey(team.base_name || team.name)] || null : null);
+const okPhoto = (u) => typeof u === 'string' && /^https:\/\/static\.wixstatic\.com\/media\/[\w~.%,\-/]+$/.test(u) && u.length < 400;
+// 画面を切り替えても受け取り口は1つだけ（最後に開いた大会の画面を描き直す）
+let photoHandler = null, photoListening = false;
+function listenPhotos(onChange) {
+  photoHandler = onChange;
+  if (photoListening) { if (window.parent !== window) window.parent.postMessage({ type: 'infinex:ready' }, '*'); return; }
+  photoListening = true;
+  window.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type !== 'infinex:photos' || e.source !== window.parent) return;
+    const pick = (o) => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).slice(0, 2000).filter(([, u]) => okPhoto(u)));
+    PHOTOS.byId = pick(d.photos);
+    PHOTOS.byName = Object.fromEntries(Object.entries(pick(d.byName)).map(([k, u]) => [photoKey(k), u]));
+    if (photoHandler) photoHandler();
+  });
+  // 埋め込まれているときは、親（Wixのページ）に「写真を送ってください」と知らせる
+  if (window.parent !== window) window.parent.postMessage({ type: 'infinex:ready' }, '*');
+}
+
+export async function viewer(root, slug, opts = {}) {
+  const open = !!opts.open; // 一般公開のページ（忘れ物・要項・駐車券は出さない）
   let data = null;
   let lastLoaded = null;
   let scrolledOnce = false;
   const st = {
-    catId: store.get(`v:${slug}:cat`),
+    catId: store.get(`${open ? 'o' : 'v'}:${slug}:cat`),
     tab: 'schedule',
     query: '',
-    filter: store.get(`v:${slug}:filter`, 'all'),
+    filter: store.get(`${open ? 'o' : 'v'}:${slug}:filter`, 'all'),
     searchOpen: false,
     day: null, // 表示する日（null はすべて）
     dayPicked: false,
   };
-  const myKey = () => `v:${slug}:my:${st.catId}`;
+  const myKey = () => `${open ? 'o' : 'v'}:${slug}:my:${st.catId}`;
   const myTeam = () => store.get(myKey());
 
   mount(root, skeleton());
 
   async function load(initial = false) {
-    const res = await api('GET', `/api/public/${encodeURIComponent(slug)}${data ? `?rev=${data.tournament.rev}` : ''}`);
+    const res = await api('GET', `/api/${open ? 'open/t' : 'public'}/${encodeURIComponent(slug)}${data ? `?rev=${data.tournament.rev}` : ''}`);
     lastLoaded = new Date();
     markFetched();
     if (res.unchanged) { updateStamp(); return false; }
@@ -43,6 +67,7 @@ export async function viewer(root, slug) {
   }
   document.title = `${data.tournament.name} | 試合結果`;
   render();
+  if (open) listenPhotos(() => render());
   // 自動更新はしない。最新の情報は「更新」ボタン（取得した時刻つき）で読み込む
 
   // 大会要項（Webで表示）
@@ -77,14 +102,16 @@ export async function viewer(root, slug) {
         t.venue ? h('span', null, icon('pin'), t.venue) : null,
         statePill,
         (t.lost || []).length ? h('button', { class: 'state-pill lost-pill', type: 'button', onclick: () => openLost(t) }, icon('bag'), `忘れ物 ${t.lost.length}件`) : null),
-      h('div', { class: 'hero-actions' }, h('button', { class: 'outline-btn', type: 'button', onclick: () => openOutlineWeb(t) }, icon('list'), '大会要項を見る'))));
+      open ? h('div', { class: 'hero-actions' }, h('a', { class: 'outline-btn', href: '/open' }, '← 大会の一覧へ'))
+        : h('div', { class: 'hero-actions' }, h('button', { class: 'outline-btn', type: 'button', onclick: () => openOutlineWeb(t) }, icon('list'), '大会要項を見る'),
+          t.openChat ? h('a', { class: 'outline-btn openchat-btn', href: t.openChat, target: '_blank', rel: 'noopener' }, 'オープンチャット') : null)));
 
     if (!cat) {
       mount(root, hero, h('div', { class: 'wrap' }, h('p', { class: 'empty' }, '試合日程はまだ公開されていません')));
       return;
     }
 
-    const ctx = { tournament: t, myTeam: myTeam(), cache: { teams: teamMap(cat), codes: codeMap(cat) } };
+    const ctx = { tournament: t, myTeam: myTeam(), cache: { teams: teamMap(cat), codes: codeMap(cat) }, photoOf: open ? photoOf : null };
     const days = dayTotal(cat.config);
     if (days > 1 && !st.dayPicked) {
       const ti = todayIndex(cat, t);
@@ -95,7 +122,7 @@ export async function viewer(root, slug) {
 
     const seg = data.categories.length > 1 ? h('div', { class: 'seg', role: 'tablist', 'aria-label': 'カテゴリ' },
       data.categories.map((c) => h('button', { type: 'button', 'aria-pressed': String(c.id === st.catId),
-        onclick: () => { st.catId = c.id; store.set(`v:${slug}:cat`, c.id); scrolledOnce = false; st.dayPicked = false; render(); } }, c.name))) : null;
+        onclick: () => { st.catId = c.id; store.set(`${open ? 'o' : 'v'}:${slug}:cat`, c.id); scrolledOnce = false; st.dayPicked = false; render(); } }, c.name))) : null;
 
     const body = h('main');
     const sponsors = t.sponsors || [];
@@ -110,11 +137,11 @@ export async function viewer(root, slug) {
         } }, icon('car'), '駐車券を出力') : null),
       h('p', { class: 'updated' }, h('i', { class: 'dot' }), h('span', { id: 'stamp' })),
       refreshButton(() => load(), { withNav: true }),
-      h('p', { class: 'manual-row' }, manualLink('parents', '使い方（保護者マニュアル）')));
+      open ? null : h('p', { class: 'manual-row' }, manualLink('parents', '使い方（保護者マニュアル）')));
 
     const pickTeam = () => openTeamPicker(cat, ctx.myTeam, (id) => {
       store.set(myKey(), id);
-      if (id && st.filter === 'all') { st.filter = 'mine'; store.set(`v:${slug}:filter`, 'mine'); }
+      if (id && st.filter === 'all') { st.filter = 'mine'; store.set(`${open ? 'o' : 'v'}:${slug}:filter`, 'mine'); }
       if (!id && st.filter === 'mine') st.filter = 'all';
       render();
     });
@@ -142,7 +169,7 @@ export async function viewer(root, slug) {
         blocks.push(bracketView(cat, { ...ctx, jumpNav: true }));
       } else {
         blocks.push(h('div', { style: { marginTop: '18px' } }, h('p', { class: 'muted small', style: { margin: '0 4px' } }, 'チームを選ぶと、そのチームの試合だけを表示します。')));
-        blocks.push(teamsView(cat, { ...ctx, onPickTeam: (id) => { store.set(myKey(), id); st.filter = 'mine'; store.set(`v:${slug}:filter`, 'mine'); st.tab = 'schedule'; render(); window.scrollTo(0, 0); } }));
+        blocks.push(teamsView(cat, { ...ctx, onPickTeam: (id) => { store.set(myKey(), id); st.filter = 'mine'; store.set(`${open ? 'o' : 'v'}:${slug}:filter`, 'mine'); st.tab = 'schedule'; render(); window.scrollTo(0, 0); } }));
       }
       mount(body, blocks);
     }
@@ -159,7 +186,7 @@ export async function viewer(root, slug) {
       if (st.filter === 'mine' && !ctx.myTeam) st.filter = 'all';
       return h('div', { class: 'toolbar' },
         h('div', { class: 'chips', style: { flex: 1 } }, opts.map(([k, label]) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(st.filter === k),
-          onclick: () => { st.filter = k; store.set(`v:${slug}:filter`, k); renderBody(); } }, label))),
+          onclick: () => { st.filter = k; store.set(`${open ? 'o' : 'v'}:${slug}:filter`, k); renderBody(); } }, label))),
         h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'チーム名で検索', 'aria-pressed': String(st.searchOpen),
           onclick: () => { st.searchOpen = !st.searchOpen; if (!st.searchOpen) st.query = ''; renderBody(); if (st.searchOpen) body.querySelector('.search input')?.focus(); } }, icon('search')),
         refereeLegend());
@@ -431,4 +458,37 @@ function snsMode(t, cat, ctx) {
   };
   draw();
   document.body.append(back);
+}
+
+// ===== 一般公開：大会の一覧（クラブのサイトに埋め込む）=====
+// 開催中 → これから → 過去（年ごと）の順に並べる。各大会は /open/<公開用のID> へ
+export async function openList(root) {
+  mount(root, skeleton());
+  let list;
+  try { list = (await api('GET', '/api/open/tournaments')).tournaments || []; }
+  catch (e) { mount(root, h('div', { class: 'wrap' }, h('p', { class: 'empty' }, e.message))); return; }
+  document.title = '大会結果・速報';
+  const today = todayStr();
+  const endOf = (t) => t.end_date || t.date || '';
+  const live = list.filter((t) => t.status === 'live');
+  const soon = list.filter((t) => t.status !== 'live' && t.status !== 'finished' && endOf(t) >= today).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const past = list.filter((t) => !live.includes(t) && !soon.includes(t));
+  const years = [...new Set(past.map((t) => (t.date || '').slice(0, 4) || '日付未定'))].sort().reverse();
+  const period = (t) => (t.date ? (t.end_date && t.end_date !== t.date ? `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d{4}年/, '')}` : formatDate(t.date)) : '日付未定');
+  const card = (t) => h('a', { class: `ol-card${t.status === 'live' ? ' is-live' : ''}`, href: `/open/${t.id}` },
+    t.logo ? h('img', { class: 'ol-logo', src: t.logo, alt: '' }) : h('span', { class: 'ol-logo ol-nologo', 'aria-hidden': 'true' }, icon('trophy')),
+    h('span', { class: 'ol-main' },
+      h('strong', null, t.name),
+      h('span', { class: 'ol-meta' }, period(t), t.venue ? `　${t.venue}` : ''),
+      t.categories.length ? h('span', { class: 'ol-cats' }, t.categories.map((c) => h('span', null, c))) : null),
+    t.status === 'live' ? h('span', { class: 'state-pill live' }, h('i', { class: 'dot pulse' }), '開催中') : h('span', { class: 'ol-go', 'aria-hidden': 'true' }, '›'));
+  const section = (title, items) => (items.length ? h('section', { class: 'ol-sec' }, h('h2', null, title), h('div', { class: 'ol-list' }, items.map(card))) : null);
+  mount(root, h('main', { class: 'wrap open-list' },
+    h('h1', { class: 'ol-title' }, '大会結果・速報'),
+    !list.length ? h('p', { class: 'empty' }, '公開中の大会はまだありません') : null,
+    section('開催中', live),
+    section('これからの大会', soon),
+    years.map((y) => section(`${y}年の大会`, past.filter((t) => ((t.date || '').slice(0, 4) || '日付未定') === y))),
+    h('p', { class: 'ol-foot' }, '結果は大会本部が確定したものを掲載しています。')));
+  if (window.parent !== window) window.parent.postMessage({ type: 'infinex:ready' }, '*');
 }
