@@ -1818,3 +1818,50 @@ table.cross tr.mine td { background: #fbfef0; }
 .fit-bar button { white-space: nowrap; flex: none; }
 a.outline-btn { text-decoration: none; color: #fff; }
 .hero-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* 大会の状態のバッジ（開催中は赤、公開中は緑、準備中は灰、終了は濃い灰） */
+.state-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 12px; border-radius: 999px; font-size: 0.78rem; font-weight: 800; white-space: nowrap; line-height: 1.5; }
+.state-badge.big { font-size: 0.9rem; padding: 5px 14px; }
+.state-badge.s-live { background: #dc2626; color: #fff; }
+.state-badge.s-live .dot { width: 8px; height: 8px; border-radius: 50%; background: #fff; animation: pulse 1.6s infinite; }
+.state-badge.s-published { background: #dcfce7; color: #14532d; }
+.state-badge.s-draft { background: #e7e5e4; color: #44403c; }
+.state-badge.s-finished { background: #44403c; color: #fff; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.site-head h1 + .state-badge { margin-left: 10px; }
+.t-card.s-live { box-shadow: inset 5px 0 0 #dc2626; }
+.t-card.s-finished { opacity: 0.85; }
+.sc-state { display: block; margin-top: 4px; }
+
+/* 担当の大会のカード */
+.op-title { margin: 18px 0 12px; }
+.tour-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; align-items: stretch; }
+.tour-card { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+  padding: 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.tour-card:hover { border-color: var(--ink-3, #a8a29e); }
+.tour-card.s-live { border-color: #dc2626; box-shadow: inset 5px 0 0 #dc2626; }
+.tour-card.is-draft { opacity: 0.6; cursor: default; background: var(--surface-2); }
+.tc-logo { width: 56px; height: 56px; border-radius: 14px; object-fit: contain; background: #fff; border: 1px solid var(--line); flex: none; }
+.tc-logo.ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-2); }
+.tc-main { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.tc-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.tc-name { font-size: 1.05rem; line-height: 1.35; overflow-wrap: anywhere; }
+.tc-meta { font-size: 0.82rem; color: var(--ink-2); }
+.tc-go { font-size: 1.6rem; color: var(--ink-2); flex: none; }
+
+/* 忘れ物の一覧（ポップアップ） */
+.lost-grid { max-height: 60vh; overflow: auto; }
+
+/* 幅の狭い画面：大会の設定などをたたむ */
+.aside-fold { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.aside-fold > summary { cursor: pointer; padding: 14px 16px; font-weight: 800; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+.aside-fold > summary::-webkit-details-marker { display: none; }
+.aside-fold > summary::after { content: '開く ▾'; font-size: 0.8rem; color: var(--ink-2); font-weight: 700; }
+.aside-fold[open] > summary::after { content: '閉じる ▴'; }
+.aside-fold > aside { padding: 0 8px 8px; }
+.site-head h1:has(+ .state-badge) { flex: 0 1 auto; }
+@media (max-width: 600px) {
+  .hide-sm { display: none; }
+  .site-head .state-badge.big { font-size: 0.72rem; padding: 3px 9px; }
+  .site-head h1 + .state-badge { margin-left: 4px; }
+}

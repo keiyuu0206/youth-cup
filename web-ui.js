@@ -456,3 +456,37 @@ export function fitView(src, title = '') {
   setTimeout(place, 300); // 画像（ロゴ）の読み込み後にもう一度
   return close;
 }
+
+// 大会の状態のバッジ（開催中・公開中・準備中・終了をひと目で見分けられる色）
+export const STATE_LABEL = { draft: '準備中', published: '公開中', live: '開催中', finished: '終了' };
+export function stateBadge(status, big) {
+  return h('span', { class: `state-badge s-${status || 'draft'}${big ? ' big' : ''}` }, status === 'live' ? h('i', { class: 'dot' }) : null, STATE_LABEL[status] || '準備中');
+}
+// 一覧の並び：開催中 → 公開中（日付の近い順）→ 準備中 → 終了（新しい順）
+export function sortByState(list) {
+  const rank = { live: 0, published: 1, draft: 2, finished: 3 };
+  return [...list].sort((a, b) => (rank[a.status] ?? 2) - (rank[b.status] ?? 2)
+    || (a.status === 'finished' ? String(b.date || '').localeCompare(String(a.date || '')) : String(a.date || '').localeCompare(String(b.date || ''))));
+}
+// 期間の表示（11月21日（土）〜 22日（日））
+export function periodLabel(t) {
+  if (!t.date) return '日付未定';
+  if (t.end_date && t.end_date > t.date) return `${formatDate(t.date)} 〜 ${formatDate(t.end_date).replace(/^\d+年/, '')}`;
+  return formatDate(t.date);
+}
+// 大会運営者・スコア管理者の「担当の大会」のカード（ロゴ・状態・期間・会場）
+export function tourCard(t, { onOpen, extra } = {}) {
+  const draft = t.ready === false;
+  const body = [
+    t.logo ? h('img', { class: 'tc-logo', src: t.logo, alt: '' }) : h('span', { class: 'tc-logo ph', 'aria-hidden': 'true' }, icon('trophy')),
+    h('span', { class: 'tc-main' },
+      h('span', { class: 'tc-top' }, stateBadge(t.status), extra || null),
+      h('strong', { class: 'tc-name' }, t.name),
+      h('span', { class: 'tc-meta' }, periodLabel(t)),
+      t.venue ? h('span', { class: 'tc-meta' }, t.venue) : null,
+      draft ? h('span', { class: 'tc-meta' }, '公開されると開けます') : null),
+    draft ? null : h('span', { class: 'tc-go', 'aria-hidden': 'true' }, '›'),
+  ];
+  return draft ? h('div', { class: `tour-card s-${t.status} is-draft`, 'aria-disabled': 'true' }, body)
+    : h('button', { class: `tour-card s-${t.status}`, type: 'button', onclick: onOpen }, body);
+}

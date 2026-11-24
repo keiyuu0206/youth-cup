@@ -5,6 +5,19 @@ const root = document.getElementById('app');
 // 今表示している画面のURL（ポップアップを開いたまま「戻る」を押されたときに、元のURLに戻すため）
 let shownUrl = location.href;
 
+// Cloudflare Web Analytics（アクセス数の計測）：保護者の画面と一般公開の画面だけで読み込む（本部・管理者の操作は数えない）
+const CF_BEACON_TOKEN = 'cb88c92bde144208abee00ffb4f96acf';
+let beaconLoaded = false;
+function loadBeacon() {
+  if (beaconLoaded || !CF_BEACON_TOKEN) return;
+  beaconLoaded = true;
+  const s = document.createElement('script');
+  s.defer = true;
+  s.src = 'https://static.cloudflareinsights.com/beacon.min.js';
+  s.setAttribute('data-cf-beacon', JSON.stringify({ token: CF_BEACON_TOKEN }));
+  document.head.append(s);
+}
+
 async function route() {
   shownUrl = location.href;
   const path = location.pathname.replace(/\/+$/, '') || '/';
@@ -16,6 +29,7 @@ async function route() {
       return await admin(root, path, navigate);
     }
     // 一般公開（クラブのサイトに埋め込む）：大会の一覧と、大会ごとの結果
+    if (/^\/(t|open)(\/|$)/.test(path)) loadBeacon();
     if (path === '/open') {
       const { openList } = await import('./web-viewer.js');
       return await openList(root);

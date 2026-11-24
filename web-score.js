@@ -4,7 +4,7 @@
 import { api } from './web-api.js';
 import { openReportLink } from './web-report.js';
 import { openMatchPoster, openResultPoster, openStandingsPoster, openLogoPoster } from './web-poster.js';
-import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto, lineButton } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, run, markFetched, refreshButton, toHHMM, formatDate, sheet, store, formatUpdated, MANUALS, resizeImage, resizeBanner, headActions, resizePhoto, lineButton, sortByState, tourCard, stateBadge } from './web-ui.js';
 import { teamMap, codeMap, sideInfo, courtName, dayOf, dayTotal, dayLabel, absMin, crest, refBadge, setRefereeMode, isRankLeague, dayDate, matchLengthFor, standingsView, bracketView, finishedTeamsView } from './web-views.js';
 
 const STATUS = { published: '公開中', live: '開催中', finished: '終了' };
@@ -33,14 +33,11 @@ export async function scoreApp(root, me) {
     if (tournaments.length === 1 && !drafts.length && !st.listShown) return open(tournaments[0].id);
     mount(root, header(), h('main', { class: 'wrap sc-main' },
       h('h2', { class: 'sc-title' }, '担当する大会'),
-      tournaments.length ? tournaments.map((t) => h('button', { class: 'sc-tcard', type: 'button', onclick: () => open(t.id) },
-        h('div', null, h('strong', null, t.name), h('small', null, [t.date ? formatDate(t.date) : '', STATUS[t.status]].filter(Boolean).join('　'))),
-        t.pending ? h('span', { class: 'sc-badge' }, `承認待ち ${t.pending}`) : h('span', { class: 'sc-badge zero' }, '承認待ちなし')))
+      tournaments.length ? h('div', { class: 'tour-list' }, sortByState(tournaments).map((t) => tourCard(t, { onOpen: () => open(t.id),
+        extra: t.pending ? h('span', { class: 'sc-badge' }, `承認待ち ${t.pending}`) : null })))
         : h('p', { class: 'empty' }, '結果を入力できる大会はまだありません。担当する大会が公開されると、ここから開けます。'),
       drafts.length ? [h('h3', { class: 'sc-title', style: { marginTop: '18px', fontSize: '0.95rem' } }, '準備中の大会'),
-        drafts.map((t) => h('div', { class: 'sc-tcard is-draft', 'aria-disabled': 'true' },
-          h('div', null, h('strong', null, t.name), h('small', null, [t.date ? formatDate(t.date) : '', '準備中'].filter(Boolean).join('　'))),
-          h('span', { class: 'sc-badge zero' }, '公開されると入力できます')))] : null));
+        h('div', { class: 'tour-list' }, drafts.map((t) => tourCard(t)))] : null));
   }
 
   // ---------- 大会の画面 ----------
@@ -91,7 +88,7 @@ export async function scoreApp(root, me) {
     const pendN = cat ? cat.matches.filter((m) => m.status === 'provisional').length : 0;
     mount(root, header(), h('main', { class: 'wrap sc-main' },
       h('div', { class: 'sc-thead' },
-        h('div', null, h('strong', null, t.name), h('small', null, STATUS[t.status] || '')),
+        h('div', null, h('strong', null, t.name), h('span', { class: 'sc-state' }, stateBadge(t.status))),
         h('div', { class: 'sc-thead-btns' },
           t.status !== 'draft' ? h('a', { class: 'sc-mini dark', href: `/t/${t.slug}`, target: '_blank', rel: 'noopener', title: '保護者が見ている画面を別のタブで開きます（承認待ちの結果は、承認されると出ます）' }, '保護者の画面') : null,
           h('button', { class: 'sc-mini dark', type: 'button', onclick: () => { st.listShown = true; list(); } }, '大会を選ぶ'))),

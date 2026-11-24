@@ -4,7 +4,7 @@ import { openSnsChooser } from './web-poster.js';
 import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix } from './web-teammaster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl, stateBadge, sortByState, tourCard } from './web-ui.js';
 import { openReportLink } from './web-report.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague, finishedTeamsView } from './web-views.js';
 
@@ -373,11 +373,9 @@ async function operatorDesk(root, path, navigate) {
   const ready = list.filter((t) => t.ready !== false);
   if (ready.length === 1 && ready.length === list.length) return navigate(`/admin/t/${ready[0].id}`);
   mount(root, adminHeader('大会運営', navigate), h('main', { class: 'wrap wide' },
-    h('h2', null, '担当の大会'),
-    list.length ? h('div', { class: 'op-list' }, list.map((t) => t.ready === false
-      ? h('div', { class: 'panel op-card is-draft' }, h('strong', null, t.name), h('span', { class: 'muted small' }, [t.date, '準備中（公開されると開けます）'].filter(Boolean).join('　')))
-      : h('a', { class: 'panel op-card', href: `/admin/t/${t.id}`, onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
-        h('strong', null, t.name), h('span', { class: 'muted small' }, [t.date, t.venue].filter(Boolean).join('　')))))
+    h('h2', { class: 'op-title' }, '担当の大会'),
+    list.length ? h('div', { class: 'tour-list' }, sortByState(list).map((t) => tourCard(t, { onOpen: () => navigate(`/admin/t/${t.id}`),
+      extra: t.pending ? h('span', { class: 'tag alert' }, `承認待ち ${t.pending}`) : null })))
       : h('p', { class: 'empty' }, '担当の大会がありません')));
 }
 
@@ -473,11 +471,12 @@ function openManuals() {
   });
 }
 
-function adminHeader(title, navigate, back) {
+function adminHeader(title, navigate, back, status) {
   const ghost = {}; // 新しいデザイン：白い上部に、ヘアラインのピル型のボタン
   return h('header', { class: 'site-head no-print' }, h('div', { class: 'wrap wide' },
-    back ? h('a', { href: '/admin', onclick: async (e) => { e.preventDefault(); if (window.__leaveGuard && !(await window.__leaveGuard())) return; window.__leaveGuard = null; navigate('/admin'); } }, '← 大会一覧') : null,
+    back ? h('a', { href: '/admin', onclick: async (e) => { e.preventDefault(); if (window.__leaveGuard && !(await window.__leaveGuard())) return; window.__leaveGuard = null; navigate('/admin'); } }, '←', h('span', { class: 'hide-sm' }, ' 大会一覧')) : null,
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
+    status ? stateBadge(status, true) : null,
     h('span', { class: 'spacer' }),
     ME ? h('span', { class: 'me-chip', title: `ログインID：${ME.login_id}` }, ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
     ...headActions([
@@ -898,11 +897,11 @@ async function listView(root, navigate) {
       h('div', { class: `cat-step${!c.team_count || !c.match_count ? ' todo' : ''}` }, step));
   };
 
-  const tCard = (t) => h('article', { class: 't-card' },
+  const tCard = (t) => h('article', { class: `t-card s-${t.status}` },
     h('a', { class: 't-head', href: `/admin/t/${t.id}`, onclick: (e) => { e.preventDefault(); navigate(`/admin/t/${t.id}`); } },
       t.logo ? h('img', { class: 't-logo', src: t.logo, alt: '' }) : h('span', { class: 't-logo ph' }, icon('ball')),
       h('div', { class: 't-title' },
-        h('div', { class: 'row', style: { gap: '6px' } }, h('span', { class: `tag ${t.status === 'live' ? 'live' : t.status === 'published' ? 'done' : ''}` }, STATUS[t.status].label),
+        h('div', { class: 'row', style: { gap: '6px' } }, stateBadge(t.status),
           isSuperUser() || isViewer() ? h('span', { class: 'tag owner' }, ownerLabel(t)) : null,
           t.shared ? h('span', { class: 'tag shared' }, '共有（閲覧・コピーのみ）') : null,
           isSuperUser() && t.shared_with ? h('span', { class: 'tag shared' }, t.shared_with === 'all' ? '地域管理者に共有中（全員）' : `地域管理者に共有中（${t.shared_with.length}人）`) : null),
@@ -1186,10 +1185,10 @@ async function tournamentView(root, id, navigate) {
     const cat = data.categories.find((c) => c.id === st.catId);
     const editable = (t.status === 'draft' || t.status === 'published') && !isLocked();
     mount(root,
-      adminHeader(t.name, navigate, true),
+      adminHeader(t.name, navigate, true, t.status),
       h('main', { class: 'wrap wide', style: { marginTop: '16px' } },
         h('div', { class: 'admin-layout split' },
-          isOp() ? h('aside', { class: 'no-print' }, opPanel(t, cat), sharePanel(t), lostPanel()) : h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), readOnly(refereePanel(t, cat)), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t)),
+          foldAside(isOp() ? h('aside', { class: 'no-print' }, opPanel(t, cat), sharePanel(t), lostPanel()) : h('aside', { class: 'no-print' }, readOnly(infoPanel(t)), statusPanel(t), readOnly(refereePanel(t, cat)), sharePanel(t), isSuperUser() ? regionSharePanel(t) : null, outlinePanel(t), readOnly(lostPanel()), readOnly(parkingPanel(t)), readOnly(sponsorPanel()), backupPanel(t))),
           h('div', null,
             statsStrip(t),
             h('div', { class: 'row no-print' },
@@ -1429,27 +1428,56 @@ async function tournamentView(root, id, navigate) {
 
   // ----- 忘れ物 -----
 
+  // 忘れ物：横の欄には件数とボタンだけ。一覧は別の画面（ポップアップ）で開く（数が多くなっても欄が長くならないように）
+  // スマホなど幅の狭い画面：試合の画面（ダッシュボード・結果など）を先に出し、大会の設定・共有・忘れ物などは下にたたむ
+  function foldAside(aside) {
+    if (!window.matchMedia('(max-width: 959px)').matches) return aside;
+    const key = `a:${id}:aside`;
+    const d = h('details', { class: 'aside-fold no-print', open: !!store.get(key, false), ontoggle: (e) => store.set(key, e.target.open) },
+      h('summary', null, isOp() ? '共有・忘れ物など' : '大会の設定・共有・忘れ物など'), aside);
+    return d;
+  }
+
   function lostPanel() {
     const list = data.lost || [];
     const open = list.filter((x) => x.status === 'open').length;
     return h('section', { class: 'panel' },
       h('div', { class: 'panel-head' }, h('h2', null, '忘れ物'), open ? h('span', { class: 'tag alert' }, `告知中 ${open}`) : null, h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => editLost(null) }, '＋ 登録')),
-      list.length ? h('div', { class: 'lost-admin' }, list.map((it) => h('div', { class: `lost-a${it.status === 'open' ? '' : ' done'}` },
-        it.img ? h('img', { src: it.img, alt: '' }) : h('div', { class: 'lost-noimg' }, icon('bag')),
-        h('div', { class: 'lost-a-body' },
-          h('div', { class: 'lost-a-note' }, it.note),
-          h('div', { class: 'row', style: { gap: '4px' } },
-            h('span', { class: `tag ${it.status === 'open' ? 'alert' : 'done'}` }, it.status === 'open' ? '告知中' : '返却済み'),
-            h('span', { class: 'spacer' }),
-            h('button', { class: 'link-btn', type: 'button', onclick: async () => {
-              if (await run(() => api('PATCH', `/api/admin/lost/${it.id}`, { status: it.status === 'open' ? 'returned' : 'open' }), it.status === 'open' ? '返却済みにしました' : '告知に戻しました')) await reload();
-            } }, it.status === 'open' ? '返却済みにする' : '告知に戻す'),
-            h('button', { class: 'link-btn', type: 'button', onclick: () => editLost(it) }, '編集')))))) :
-        h('p', { class: 'muted small', style: { margin: 0 } }, '登録すると、閲覧ページに忘れ物のお知らせが表示されます。'));
+      list.length ? h('button', { class: 'btn btn-block', type: 'button', onclick: openLostList }, `忘れ物の一覧を開く（${list.length}件）`)
+        : h('p', { class: 'muted small', style: { margin: 0 } }, '登録すると、閲覧ページに忘れ物のお知らせが表示されます。'));
   }
 
-  function editLost(it) {
+  function openLostList() {
+    const box = h('div');
+    let filter = 'open';
+    const draw = () => {
+      const all = data.lost || [];
+      const nOpen = all.filter((x) => x.status === 'open').length;
+      const list = all.filter((x) => filter === 'all' || (filter === 'open' ? x.status === 'open' : x.status !== 'open'));
+      mount(box,
+        h('div', { class: 'chips', style: { marginBottom: '8px' } }, [['open', `告知中（${nOpen}）`], ['done', `返却済み（${all.length - nOpen}）`], ['all', `すべて（${all.length}）`]].map(([k, l]) =>
+          h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(filter === k), onclick: () => { filter = k; draw(); } }, l))),
+        list.length ? h('div', { class: 'lost-admin lost-grid' }, list.map((it) => h('div', { class: `lost-a${it.status === 'open' ? '' : ' done'}` },
+          it.img ? h('img', { src: it.img, alt: '' }) : h('div', { class: 'lost-noimg' }, icon('bag')),
+          h('div', { class: 'lost-a-body' },
+            h('div', { class: 'lost-a-note' }, it.note),
+            h('div', { class: 'row', style: { gap: '4px' } },
+              h('span', { class: `tag ${it.status === 'open' ? 'alert' : 'done'}` }, it.status === 'open' ? '告知中' : '返却済み'),
+              h('span', { class: 'spacer' }),
+              ro() ? null : h('button', { class: 'link-btn', type: 'button', onclick: async () => {
+                if (await run(() => api('PATCH', `/api/admin/lost/${it.id}`, { status: it.status === 'open' ? 'returned' : 'open' }), it.status === 'open' ? '返却済みにしました' : '告知に戻しました')) { await reload(); draw(); }
+              } }, it.status === 'open' ? '返却済みにする' : '告知に戻す'),
+              ro() ? null : h('button', { class: 'link-btn', type: 'button', onclick: () => editLost(it, draw) }, '編集'))))))
+          : h('p', { class: 'empty' }, filter === 'open' ? '告知中の忘れ物はありません' : '該当する忘れ物はありません'));
+    };
+    draw();
+    modal({ title: '忘れ物の一覧', content: box, actions: [
+      ...(ro() ? [] : [{ label: '＋ 登録', onClick: async () => { editLost(null, draw); return true; } }]),
+      { label: '閉じる', kind: 'btn-primary' }] });
+  }
+
+  function editLost(it, after) {
     const f = { note: it ? it.note : '', image: undefined };
     const prev = h('div', { class: 'sp-preview' });
     const drawPrev = () => mount(prev, f.image ? h('img', { src: f.image, alt: '' }) : it && it.img && f.image !== null ? h('img', { src: it.img, alt: '' }) : h('span', { class: 'muted small' }, '写真は任意です'));
@@ -1464,8 +1492,8 @@ async function tournamentView(root, id, navigate) {
         h('label', { class: 'field' }, h('span', null, '申し送り事項'), (() => { const a = h('textarea', { rows: 4, placeholder: '例：Bコート横のベンチに黒いすね当て（片方）。本部でお預かりしています。', oninput: (e) => { f.note = e.target.value; } }); a.value = f.note; return a; })()),
         it ? h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
           if (!(await confirmDialog('この忘れ物を削除します', '閲覧ページからも消えます。', '削除する', true))) return;
-          document.querySelector('.modal-back')?.remove();
-          if (await run(() => api('DELETE', `/api/admin/lost/${it.id}`), '削除しました')) await reload();
+          [...document.querySelectorAll('.modal-back')].pop()?.remove();
+          if (await run(() => api('DELETE', `/api/admin/lost/${it.id}`), '削除しました')) { await reload(); if (after) after(); }
         } }, 'この忘れ物を削除') : null),
       actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: it ? '保存' : '登録して告知', kind: 'btn-primary', onClick: async () => {
         const body = { note: f.note };
@@ -1474,6 +1502,7 @@ async function tournamentView(root, id, navigate) {
           : await run(() => api('POST', `/api/admin/tournaments/${id}/lost`, body), '登録しました。閲覧ページに表示されます');
         if (!r) return true;
         await reload();
+        if (after) after();
       } }],
     });
   }

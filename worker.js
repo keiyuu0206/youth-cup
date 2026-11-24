@@ -641,8 +641,8 @@ const STATIC = {
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
-  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
-  "connect-src 'self'", "font-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+  "default-src 'self'", "script-src 'self' https://static.cloudflareinsights.com", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob:",
+  "connect-src 'self' https://cloudflareinsights.com", "font-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
 ].join('; ');
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY',
@@ -874,8 +874,9 @@ route('DELETE', '/api/admin/scorers/:sid', async ({ db, params, user }) => {
 // スコア管理者の画面用：担当する大会の一覧（承認待ちの件数つき）
 route('GET', '/api/score/tournaments', async ({ db, user }) => {
   // 準備中の大会も「準備中」として一覧に出す（開けるのは公開中・開催中・終了の大会だけ）
-  const all = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, owner_id FROM tournaments ORDER BY date DESC').all()).results;
-  const list = all.filter((t) => canAccess(user, t)).map((t) => ({ ...t, ready: t.status !== 'draft' }));
+  const all = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, owner_id, logo FROM tournaments ORDER BY date DESC').all()).results;
+  // 大会ロゴ：一覧で見分けやすいように、表示の設定にかかわらず出す（画像は別に配信）
+  const list = all.filter((t) => canAccess(user, t)).map(({ logo, ...t }) => ({ ...t, logo: logoUrl('t', t.id, logo), ready: t.status !== 'draft' }));
   const pend = list.length ? (await db.prepare(`SELECT c.tournament_id AS tid, COUNT(*) AS n FROM matches m JOIN categories c ON c.id = m.category_id
     WHERE m.status = 'provisional' GROUP BY c.tournament_id`).all()).results : [];
   const by = Object.fromEntries(pend.map((x) => [x.tid, x.n]));
