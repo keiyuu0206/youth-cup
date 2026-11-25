@@ -1693,7 +1693,7 @@ async function tournamentView(root, id, navigate) {
   }
 
   // ----- 参加費・領収書（大会全体。カテゴリをまたいで1つの画面） -----
-  let feeEl = null;
+  var feeEl; // var：参加費のタブを開いたまま読み込んだとき、この行より先に表示が呼ばれても使えるように
   function feeTab(t) {
     if (!feeEl) {
       const holder = h('div', { class: 'fee-holder' }, h('p', { class: 'muted' }, '読み込んでいます…'));
