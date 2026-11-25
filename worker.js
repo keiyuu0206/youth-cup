@@ -876,7 +876,9 @@ route('GET', '/api/score/tournaments', async ({ db, user }) => {
   // 準備中の大会も「準備中」として一覧に出す（開けるのは公開中・開催中・終了の大会だけ）
   const all = (await db.prepare('SELECT id, slug, name, date, end_date, venue, status, owner_id, logo FROM tournaments ORDER BY date DESC').all()).results;
   // 大会ロゴ：一覧で見分けやすいように、表示の設定にかかわらず出す（画像は別に配信）
-  const list = all.filter((t) => canAccess(user, t)).map(({ logo, ...t }) => ({ ...t, logo: logoUrl('t', t.id, logo), ready: t.status !== 'draft' }));
+  // 大会運営者・スコア管理者は公開されてから開ける。管理者（運営者モード）は準備中の大会も開ける
+  const adminRole = user.role === 'super' || user.role === 'region';
+  const list = all.filter((t) => canAccess(user, t)).map(({ logo, ...t }) => ({ ...t, logo: logoUrl('t', t.id, logo), ready: adminRole || t.status !== 'draft' }));
   const pend = list.length ? (await db.prepare(`SELECT c.tournament_id AS tid, COUNT(*) AS n FROM matches m JOIN categories c ON c.id = m.category_id
     WHERE m.status = 'provisional' GROUP BY c.tournament_id`).all()).results : [];
   const by = Object.fromEntries(pend.map((x) => [x.tid, x.n]));
