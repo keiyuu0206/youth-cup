@@ -296,7 +296,16 @@ export function feeView(opts) {
       h('p', { class: 'muted small', style: { margin: 0 } }, `${DELIVERY[r.delivery] || ''}・${r.created_by || ''}（${String(r.created_at || '').slice(0, 16).replace('T', ' ')}）`),
       prev),
     actions: r.status !== 'valid' ? [{ label: '閉じる', kind: 'btn-primary' }] : [
-      { label: '取消', kind: 'btn-ghost', onClick: async () => { askReason('領収書を取り消します', '取り消す理由', '取り消す', true, async (reason) => { if (await run(() => api('POST', `/api/admin/receipts/${r.id}/void`, { reason }), '取り消しました')) await reload(); }); } },
+      { label: '取消', kind: 'btn-ghost', onClick: async () => {
+        let reason = '';
+        let unpaid = !!(tm && tm.status === 'paid');
+        modal({ title: '領収書を取り消します', content: h('div', { class: 'stack' },
+          h('label', { class: 'field' }, h('span', null, '取り消す理由'), h('input', { type: 'text', maxlength: 60, placeholder: '例：宛名の誤り／不参加／試しに出した', oninput: (e) => { reason = e.target.value; } })),
+          tm && tm.status === 'paid' ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: unpaid, onchange: (e) => { unpaid = e.target.checked; } }), '受け取りの記録も取り消して「未収」に戻す') : null),
+        actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '取り消す', kind: 'btn-danger', onClick: async () => {
+          if (await run(() => api('POST', `/api/admin/receipts/${r.id}/void`, { reason, unpaid }), unpaid ? '取り消して未収に戻しました' : '取り消しました')) await reload();
+        } }] });
+      } },
       { label: '再発行', onClick: async () => {
         let reason = '', addressee = r.addressee;
         modal({ title: '再発行', content: h('div', { class: 'stack' },
@@ -371,9 +380,17 @@ export function feeView(opts) {
         h('label', { class: 'field' }, h('span', null, '発行元'), sel)),
       !st.data.issuer ? h('p', { class: 'notice error' }, '領収書の発行元が未登録です。上部の「発行元（領収書）」から登録してください。') : null,
       h('p', { class: 'muted small' }, '主催・共催チームの免除や、複数チームの割引は、チームの行の「金額」から変えられます。'),
-      h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: async () => {
-        if (await run(() => api('PUT', `/api/admin/tournaments/${opts.tid}/fees/settings`, { amount: f.amount, purpose: f.purpose, issuer_id: f.issuer_id || null }), '保存しました')) await reload();
-      } }, '保存'));
+      h('div', { class: 'row' },
+        h('button', { class: 'btn btn-primary btn-sm', type: 'button', onclick: async () => {
+          if (await run(() => api('PUT', `/api/admin/tournaments/${opts.tid}/fees/settings`, { amount: f.amount, purpose: f.purpose, issuer_id: f.issuer_id || null }), '保存しました')) await reload();
+        } }, '保存'),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'btn btn-sm btn-ghost fee-reset', type: 'button', onclick: async () => {
+          const n = st.data.receipts.length;
+          if (!(await confirmDialog('参加費・領収書を初期化します', `この大会の領収書（${n}枚）と、受け取りの記録をすべて消して、全チームを「未収」に戻します。チームごとの金額・メモ・免除と、参加費の設定はそのまま残ります。試しに使ったあとなど、本番の前に使ってください。すでに渡した領収書がある場合は、初期化せずに1枚ずつ「取消」してください（記録が残ります）。消した領収書は元に戻せません。`, '初期化する', true))) return;
+          const r = await run(() => api('POST', `/api/admin/tournaments/${opts.tid}/fees/reset`));
+          if (r) { toast(`初期化しました（領収書 ${r.deleted}枚を削除）`); await reload(); }
+        } }, '初期化')));
   };
 
   function draw() {

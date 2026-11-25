@@ -2634,8 +2634,27 @@ route('POST', '/api/admin/receipts/:rid/void', async ({ req, db, params, user })
   await getTournament(db, r.tournament_id, user);
   if (r.status !== 'valid') fail(409, 'この領収書はすでに取り消されています');
   const b = await body(req);
-  await db.prepare("UPDATE receipts SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?").bind(clip(b.reason, 80) || null, now(), user.name || '本部', r.id).run();
+  const stmts = [db.prepare("UPDATE receipts SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?").bind(clip(b.reason, 80) || null, now(), user.name || '本部', r.id)];
+  // 受け取りの記録も取り消す（未収に戻す）。ほかに有効な領収書があるときは戻さない
+  if (b.unpaid) {
+    const other = await db.prepare("SELECT 1 FROM receipts WHERE tournament_id = ? AND team_id = ? AND status = 'valid' AND id != ?").bind(r.tournament_id, r.team_id, r.id).first();
+    if (!other) stmts.push(db.prepare("UPDATE fees SET status = 'unpaid', method = NULL, paid_at = NULL, paid_by = NULL, updated_at = ? WHERE tournament_id = ? AND team_id = ? AND status = 'paid'").bind(now(), r.tournament_id, r.team_id));
+  }
+  await db.batch(stmts);
   return json({ ok: true });
+}, 'admin');
+
+// 初期化（管理者だけ）：この大会の領収書と受け取りの記録を消す。チームごとの金額・メモ・免除と、参加費の設定は残す。
+// 番号は使い回さない（次に発行する領収書は続きの番号になる）
+route('POST', '/api/admin/tournaments/:id/fees/reset', async ({ db, params, user }) => {
+  mustAdminRole(user);
+  const t = await getTournament(db, params.id, user);
+  const n = await db.prepare('SELECT COUNT(*) AS n FROM receipts WHERE tournament_id = ?').bind(t.id).first();
+  await db.batch([
+    db.prepare('DELETE FROM receipts WHERE tournament_id = ?').bind(t.id),
+    db.prepare("UPDATE fees SET status = 'unpaid', method = NULL, paid_at = NULL, paid_by = NULL, updated_at = ? WHERE tournament_id = ? AND status = 'paid'").bind(now(), t.id),
+  ]);
+  return json({ ok: true, deleted: n ? n.n : 0 });
 }, 'admin');
 
 route('POST', '/api/admin/receipts/:rid/reissue', async ({ req, db, params, user }) => {
