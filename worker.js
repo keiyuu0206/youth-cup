@@ -20,6 +20,7 @@ import WEB_POSTER from './web-poster.js';
 import WEB_SCORE from './web-score.js';
 import WEB_TEAMMASTER from './web-teammaster.js';
 import WEB_REPORT from './web-report.js';
+import WEB_FEE from './web-fee.js';
 import { normKey, normPref, splitPref, stripSuffix } from './teamnorm.js';
 import { normalizeConfig, matchLength, matchLengthFor, courtName, dayOf, dayConfig, slotTimes, toHHMM as hhmm } from './time.js';
 import { assignGroups, shuffle } from './grouping.js';
@@ -188,6 +189,23 @@ async function ensureSchema(db) {
       db.prepare('CREATE INDEX IF NOT EXISTS idx_report_links_tournament ON report_links(tournament_id)'),
     ]);
   }
+  // 参加費・領収書（追加のみ。既存の表は変更しない）
+  if (!tables.includes('receipts')) {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS issuers (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, title TEXT, rep TEXT,
+        address TEXT, tel TEXT, reg_no TEXT, seal TEXT, updated_at TEXT NOT NULL)`),
+      db.prepare('CREATE TABLE IF NOT EXISTS seals (hash TEXT PRIMARY KEY, data TEXT NOT NULL)'),
+      db.prepare(`CREATE TABLE IF NOT EXISTS fee_settings (tournament_id TEXT PRIMARY KEY, amount INTEGER, purpose TEXT, issuer_id TEXT, updated_at TEXT NOT NULL)`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS fees (tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, amount INTEGER, note TEXT, status TEXT NOT NULL DEFAULT 'unpaid',
+        method TEXT, paid_at TEXT, paid_by TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (tournament_id, team_id))`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, tournament_id TEXT NOT NULL, team_id TEXT NOT NULL,
+        no TEXT NOT NULL, addressee TEXT NOT NULL, amount INTEGER NOT NULL, tax_amount INTEGER, purpose TEXT, issued_on TEXT NOT NULL, issuer TEXT NOT NULL,
+        delivery TEXT, method TEXT, status TEXT NOT NULL DEFAULT 'valid', void_reason TEXT, reissue_of TEXT, created_by TEXT, created_at TEXT NOT NULL,
+        voided_at TEXT, voided_by TEXT)`),
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_receipts_tournament ON receipts(tournament_id)'),
+      db.prepare('CREATE TABLE IF NOT EXISTS receipt_counters (k TEXT PRIMARY KEY, last INTEGER NOT NULL)'),
+    ]);
+  }
   await addCol('teams', 'prefecture', 'TEXT');
   await addCol('teams', 'master_id', 'TEXT');
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_teams_master ON teams(master_id)').run();
@@ -260,7 +278,10 @@ const OPERATOR_ADMIN = [['POST', /^\/api\/admin\/tournaments\/[^/]+\/lost$/], ['
   ['GET', /^\/api\/admin\/tournaments\/[^/]+$/], ['GET', /^\/api\/admin\/categories\/[^/]+\/retime\/history$/],
   ['POST', /^\/api\/admin\/categories\/[^/]+\/(retime|retime\/undo|delay|move|renumber|withdraw)$/], ['POST', /^\/api\/admin\/matches\/[^/]+\/flip$/],
   // 試合ごとの結果報告のリンク（発行・一覧・取り消し）
-  ['POST', /^\/api\/admin\/matches\/[^/]+\/report-link$/], ['GET', /^\/api\/admin\/tournaments\/[^/]+\/report-links$/], ['POST', /^\/api\/admin\/report-links\/[^/]+\/revoke$/]];
+  ['POST', /^\/api\/admin\/matches\/[^/]+\/report-link$/],
+  // 参加費・領収書（受領の登録・領収書の発行・取消・再発行）。金額の既定・発行元の設定は管理者だけ
+  ['GET', /^\/api\/admin\/tournaments\/[^/]+\/fees$/], ['PATCH', /^\/api\/admin\/tournaments\/[^/]+\/fees\/[^/]+$/],
+  ['POST', /^\/api\/admin\/tournaments\/[^/]+\/receipts$/], ['POST', /^\/api\/admin\/receipts\/[^/]+\/(void|reissue)$/], ['GET', /^\/api\/admin\/tournaments\/[^/]+\/report-links$/], ['POST', /^\/api\/admin\/report-links\/[^/]+\/revoke$/]];
 // 大会を操作できるか：全体管理者はすべて、地域管理者は自分が作った大会だけ（所有者の無い既存の大会は全体管理者のもの）
 const canAccess = (user, t) => {
   if (!user || isSuper(user)) return true;
@@ -469,6 +490,10 @@ async function sponsorRedirect(req, db, id) {
 
 // /img/s/:id … バナー画像、/img/t/:id … 大会ロゴ、/img/team/:id … チームロゴ（ページのデータとは別に配信し、長くキャッシュする）
 async function sponsorImage(db, id, kind = 's') {
+  if (kind === 'seal') {
+    const r = await db.prepare('SELECT data FROM seals WHERE hash = ?').bind(id).first();
+    return r ? sponsorImageFromData(r.data) : new Response('見つかりません', { status: 404 });
+  }
   const q = kind === 's' ? 'SELECT image FROM sponsors WHERE id = ?'
     : kind === 'l' ? 'SELECT image FROM lost_items WHERE id = ?'
     : kind === 'a' ? 'SELECT image FROM assets WHERE id = ?'
@@ -638,6 +663,7 @@ const STATIC = {
   '/web-score.js': [WEB_SCORE, JS],
   '/web-teammaster.js': [WEB_TEAMMASTER, JS],
   '/web-report.js': [WEB_REPORT, JS],
+  '/web-fee.js': [WEB_FEE, JS],
 };
 // 外部のスクリプトや埋め込みを許さない（画面はすべて自前のファイルで動く）
 const CSP = [
@@ -711,7 +737,7 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const go = url.pathname.match(/^\/go\/([\w-]+)$/);
-    const img = url.pathname.match(/^\/img\/(s|t|team|l|a)\/([\w-]+)$/);
+    const img = url.pathname.match(/^\/img\/(s|t|team|l|a|seal)\/([\w-]+)$/);
     if (go || img) {
       try {
         await ensureSchema(env.DB);
@@ -1118,6 +1144,9 @@ route('DELETE', '/api/admin/tournaments/:id', async ({ db, params, user }) => {
   stmts.push(db.prepare('DELETE FROM sponsors WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM lost_items WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM report_links WHERE tournament_id = ?').bind(t.id));
+  // 参加費の記録は消すが、発行した領収書の控え（receipts）は会計の記録として残す
+  stmts.push(db.prepare('DELETE FROM fees WHERE tournament_id = ?').bind(t.id));
+  stmts.push(db.prepare('DELETE FROM fee_settings WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM assets WHERE owner = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM categories WHERE tournament_id = ?').bind(t.id));
   stmts.push(db.prepare('DELETE FROM tournaments WHERE id = ?').bind(t.id));
@@ -2413,6 +2442,229 @@ route('GET', '/api/open/t/:pid', async ({ db, params, url }) => {
   if (!t || t.status === 'draft' || !isPublicOn(readSettings(t))) fail(404, 'この大会は公開されていません');
   if (url.searchParams.get('rev') === String(t.pub_rev)) return json({ unchanged: true, rev: t.pub_rev });
   return cachedPayload(`open:${params.pid}:${t.pub_rev}`, url.origin, async () => publicPayload(db, { ...t, rev: t.pub_rev }, 'open'));
+});
+
+// ---------- 参加費・領収書 ----------
+// 発行元は管理者ごと（全体管理者＝root、地域管理者＝そのユーザー）。大会ごとに発行元を選べる（全体管理者はすべて、地域管理者は自分の発行元）。
+// 発行した領収書は、発行元・金額・宛名などをその時点の内容で保存し（あとから設定を変えても変わらない）、取消は記録を残したまま「取消」にする
+const REG_NO = /^T\d{13}$/;
+const FEE_STATUS = ['unpaid', 'paid', 'waived'];
+const PAY_METHODS = ['cash', 'transfer', 'other'];
+const DELIVERY = ['preprint', 'print', 'qr', 'line', 'none'];
+const jstToday = () => new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+const yen = (v) => { const n = Math.trunc(Number(v)); return Number.isFinite(n) && n >= 0 && n <= 10_000_000 ? n : null; };
+const mustAdminRole = (user) => { if (user.role === 'operator' || user.role === 'scorer') fail(403, '参加費の金額の既定・発行元の設定は、大会の管理者が行います'); };
+const issuerOwner = (user) => (isSuper(user) ? 'root' : user.id);
+
+async function sha256hex(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const publicIssuer = (r) => (r ? { id: r.id, owner_id: r.owner_id, name: r.name, title: r.title || '', rep: r.rep || '', address: r.address || '', tel: r.tel || '', reg_no: r.reg_no || '',
+  seal: r.seal ? `/img/seal/${r.seal}` : null } : null);
+
+// 大会の発行元：参加費の設定で選んだもの → 大会を作った管理者のもの
+async function issuerFor(db, t) {
+  const fs = await db.prepare('SELECT issuer_id FROM fee_settings WHERE tournament_id = ?').bind(t.id).first();
+  if (fs && fs.issuer_id) { const r = await db.prepare('SELECT * FROM issuers WHERE id = ?').bind(fs.issuer_id).first(); if (r) return r; }
+  return db.prepare('SELECT * FROM issuers WHERE owner_id = ?').bind(t.owner_id || 'root').first();
+}
+
+route('GET', '/api/admin/issuer', async ({ db, user }) => {
+  mustAdminRole(user);
+  const r = await db.prepare('SELECT * FROM issuers WHERE owner_id = ?').bind(issuerOwner(user)).first();
+  return json({ issuer: publicIssuer(r) });
+}, 'admin');
+
+route('PUT', '/api/admin/issuer', async ({ req, db, user }) => {
+  mustAdminRole(user);
+  const b = await body(req);
+  const name = clip(b.name, 80);
+  if (!name) fail(400, '発行元の名前（団体名）を入力してください');
+  const reg = clip(b.reg_no, 20).normalize('NFKC').replace(/[\s-]/g, '').toUpperCase();
+  if (reg && !REG_NO.test(reg)) fail(400, '登録番号は「T」と13桁の数字で入力してください（例：T1234567890123）');
+  const cur = await db.prepare('SELECT * FROM issuers WHERE owner_id = ?').bind(issuerOwner(user)).first();
+  let seal = cur ? cur.seal : null;
+  const stmts = [];
+  if (b.seal === null) seal = null;
+  else if (typeof b.seal === 'string' && b.seal.startsWith('data:')) {
+    const v = checkLogo(b.seal);
+    seal = (await sha256hex(v)).slice(0, 32);
+    stmts.push(db.prepare('INSERT OR IGNORE INTO seals (hash, data) VALUES (?, ?)').bind(seal, v));
+  }
+  const vals = [name, clip(b.title, 30) || null, clip(b.rep, 40) || null, clip(b.address, 120) || null, clip(b.tel, 30) || null, reg || null, seal, now()];
+  if (cur) stmts.push(db.prepare('UPDATE issuers SET name = ?, title = ?, rep = ?, address = ?, tel = ?, reg_no = ?, seal = ?, updated_at = ? WHERE id = ?').bind(...vals, cur.id));
+  else stmts.push(db.prepare('INSERT INTO issuers (name, title, rep, address, tel, reg_no, seal, updated_at, id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(...vals, uid(), issuerOwner(user)));
+  await db.batch(stmts);
+  return json({ ok: true });
+}, 'admin');
+
+// 選べる発行元（全体管理者はすべて、地域管理者は自分のもの）
+route('GET', '/api/admin/issuers', async ({ db, user }) => {
+  mustAdminRole(user);
+  const r = isSuper(user) ? (await db.prepare('SELECT * FROM issuers ORDER BY name').all()).results
+    : (await db.prepare('SELECT * FROM issuers WHERE owner_id = ?').bind(user.id).all()).results;
+  return json({ issuers: r.map(publicIssuer) });
+}, 'admin');
+
+async function feeData(db, t) {
+  const fs = await db.prepare('SELECT * FROM fee_settings WHERE tournament_id = ?').bind(t.id).first();
+  const teams = (await db.prepare(`SELECT tm.id, tm.name, tm.group_label, c.id AS category_id, c.name AS category, c.sort FROM teams tm JOIN categories c ON c.id = tm.category_id
+    WHERE c.tournament_id = ? ORDER BY c.sort, c.name, tm.group_label, tm.name`).bind(t.id).all()).results;
+  const fees = Object.fromEntries((await db.prepare('SELECT * FROM fees WHERE tournament_id = ?').bind(t.id).all()).results.map((f) => [f.team_id, f]));
+  const receipts = (await db.prepare('SELECT * FROM receipts WHERE tournament_id = ? ORDER BY created_at').bind(t.id).all()).results
+    .map(({ issuer, ...r }) => ({ ...r, issuer: JSON.parse(issuer) }));
+  const def = fs && fs.amount != null ? fs.amount : null;
+  return {
+    settings: { amount: def, purpose: (fs && fs.purpose) || '', issuer_id: (fs && fs.issuer_id) || null },
+    issuer: publicIssuer(await issuerFor(db, t)),
+    teams: teams.map((tm) => {
+      const f = fees[tm.id] || {};
+      const amount = f.status === 'waived' ? 0 : f.amount != null ? f.amount : def;
+      return { team_id: tm.id, name: tm.name, group_label: tm.group_label, category_id: tm.category_id, category: tm.category,
+        amount, custom: f.amount != null, note: f.note || '', status: f.status || 'unpaid', method: f.method || null, paid_at: f.paid_at || null, paid_by: f.paid_by || null };
+    }),
+    receipts,
+  };
+}
+
+route('GET', '/api/admin/tournaments/:id/fees', async ({ db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
+  return json(await feeData(db, t));
+}, 'admin');
+
+route('PUT', '/api/admin/tournaments/:id/fees/settings', async ({ req, db, params, user }) => {
+  mustAdminRole(user);
+  const t = await getTournament(db, params.id, user);
+  const b = await body(req);
+  const amount = b.amount === '' || b.amount == null ? null : yen(b.amount);
+  if (b.amount !== '' && b.amount != null && amount == null) fail(400, '参加費は0〜10,000,000円の整数で入力してください');
+  let issuerId = b.issuer_id || null;
+  if (issuerId) {
+    const r = await db.prepare('SELECT owner_id FROM issuers WHERE id = ?').bind(issuerId).first();
+    if (!r || (!isSuper(user) && r.owner_id !== user.id)) fail(400, 'この発行元は選べません');
+  }
+  await db.prepare(`INSERT INTO fee_settings (tournament_id, amount, purpose, issuer_id, updated_at) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(tournament_id) DO UPDATE SET amount = excluded.amount, purpose = excluded.purpose, issuer_id = excluded.issuer_id, updated_at = excluded.updated_at`)
+    .bind(t.id, amount, clip(b.purpose, 60) || null, issuerId, now()).run();
+  return json({ ok: true });
+}, 'admin');
+
+// チームごとの参加費：金額（空欄＝大会の既定）・メモ・状態（未収／受領済み／免除）・支払方法
+route('PATCH', '/api/admin/tournaments/:id/fees/:teamId', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
+  const tm = await db.prepare('SELECT tm.id FROM teams tm JOIN categories c ON c.id = tm.category_id WHERE tm.id = ? AND c.tournament_id = ?').bind(params.teamId, t.id).first();
+  if (!tm) fail(404, 'チームが見つかりません');
+  const b = await body(req);
+  const cur = (await db.prepare('SELECT * FROM fees WHERE tournament_id = ? AND team_id = ?').bind(t.id, tm.id).first()) || {};
+  let amount = cur.amount ?? null;
+  if (b.amount !== undefined) {
+    amount = b.amount === '' || b.amount === null ? null : yen(b.amount);
+    if (b.amount !== '' && b.amount !== null && amount == null) fail(400, '金額は0〜10,000,000円の整数で入力してください');
+  }
+  const status = b.status !== undefined ? b.status : cur.status || 'unpaid';
+  if (!FEE_STATUS.includes(status)) fail(400, '状態が正しくありません');
+  const method = b.method !== undefined ? (b.method || null) : cur.method || null;
+  if (method && !PAY_METHODS.includes(method)) fail(400, '支払方法が正しくありません');
+  const note = b.note !== undefined ? clip(b.note, 60) || null : cur.note || null;
+  const paidAt = status === 'paid' ? (cur.status === 'paid' && cur.paid_at ? cur.paid_at : now()) : null;
+  const paidBy = status === 'paid' ? (cur.status === 'paid' && cur.paid_by ? cur.paid_by : user.name || '本部') : null;
+  await db.prepare(`INSERT INTO fees (tournament_id, team_id, amount, note, status, method, paid_at, paid_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(tournament_id, team_id) DO UPDATE SET amount = excluded.amount, note = excluded.note, status = excluded.status, method = excluded.method,
+    paid_at = excluded.paid_at, paid_by = excluded.paid_by, updated_at = excluded.updated_at`)
+    .bind(t.id, tm.id, amount, note, status, method, paidAt, paidBy, now()).run();
+  return json({ ok: true });
+}, 'admin');
+
+// 領収書の番号：発行元ごと・年ごとの通し番号（例：2026-0001）。取消しても番号は使い回さない
+async function nextReceiptNo(db, issuerId, date) {
+  const y = String(date).slice(0, 4);
+  const r = await db.prepare('INSERT INTO receipt_counters (k, last) VALUES (?, 1) ON CONFLICT(k) DO UPDATE SET last = last + 1 RETURNING last').bind(`${issuerId}:${y}`).first();
+  return `${y}-${String(r.last).padStart(4, '0')}`;
+}
+
+async function issueReceipt(db, t, issuer, team, fee, opts, user) {
+  const amount = fee.amount;
+  const purpose = opts.purpose;
+  const snap = { name: issuer.name, title: issuer.title || '', rep: issuer.rep || '', address: issuer.address || '', tel: issuer.tel || '', reg_no: issuer.reg_no || '', seal: issuer.seal || null,
+    tournament: t.name, category: team.category };
+  const tax = snap.reg_no ? Math.floor((amount * 10) / 110) : null; // 内税10%（1枚ごとに1回、切り捨て）
+  const id = uid();
+  const no = await nextReceiptNo(db, issuer.id, opts.issued_on);
+  const r = { id, token: randomSlug(24), tournament_id: t.id, team_id: team.team_id, no, addressee: clip(opts.addressee || team.name, 60), amount, tax_amount: tax, purpose,
+    issued_on: opts.issued_on, issuer: snap, delivery: opts.delivery, method: fee.status === 'paid' ? fee.method : null, status: 'valid', reissue_of: opts.reissue_of || null,
+    created_by: user.name || '本部', created_at: now() };
+  await db.prepare(`INSERT INTO receipts (id, token, tournament_id, team_id, no, addressee, amount, tax_amount, purpose, issued_on, issuer, delivery, method, status, reissue_of, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'valid', ?, ?, ?)`)
+    .bind(r.id, r.token, r.tournament_id, r.team_id, r.no, r.addressee, r.amount, r.tax_amount, r.purpose, r.issued_on, JSON.stringify(snap), r.delivery, r.method, r.reissue_of, r.created_by, r.created_at).run();
+  return r;
+}
+
+const validDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')) ? String(d) : null;
+
+// 領収書の発行（まとめて／1チーム）。すでに有効な領収書があるチームは飛ばす（二重発行を防ぐ）
+route('POST', '/api/admin/tournaments/:id/receipts', async ({ req, db, params, user }) => {
+  const t = await getTournament(db, params.id, user);
+  const b = await body(req);
+  const ids = Array.isArray(b.team_ids) ? [...new Set(b.team_ids.map(String))].slice(0, 300) : [];
+  if (!ids.length) fail(400, 'チームを選んでください');
+  const delivery = DELIVERY.includes(b.delivery) ? b.delivery : 'print';
+  const issued = validDate(b.issued_on) || jstToday();
+  const data = await feeData(db, t);
+  const issuerRow = await issuerFor(db, t);
+  if (!issuerRow) fail(409, '領収書の発行元が未設定です。管理者が「発行元（領収書）」を登録してください');
+  const issuer = { ...publicIssuer(issuerRow), seal: issuerRow.seal ? `/img/seal/${issuerRow.seal}` : null };
+  const purpose = clip(b.purpose || data.settings.purpose || 'サッカー大会参加費として', 60);
+  const out = [];
+  const skipped = [];
+  for (const tid of ids) {
+    const team = data.teams.find((x) => x.team_id === tid);
+    if (!team) continue;
+    if (data.receipts.some((r) => r.team_id === tid && r.status === 'valid')) { skipped.push({ team_id: tid, reason: 'issued' }); continue; }
+    if (!team.amount || team.status === 'waived') { skipped.push({ team_id: tid, reason: 'zero' }); continue; }
+    out.push(await issueReceipt(db, t, issuer, team, team, { purpose, issued_on: issued, delivery, addressee: ids.length === 1 ? b.addressee : null }, user));
+  }
+  return json({ receipts: out, skipped });
+}, 'admin');
+
+// 取消（記録は残す）。再発行＝取り消して、今の金額・宛名で新しい番号の領収書を出す
+route('POST', '/api/admin/receipts/:rid/void', async ({ req, db, params, user }) => {
+  const r = await db.prepare('SELECT * FROM receipts WHERE id = ?').bind(params.rid).first();
+  if (!r) fail(404, '領収書が見つかりません');
+  await getTournament(db, r.tournament_id, user);
+  if (r.status !== 'valid') fail(409, 'この領収書はすでに取り消されています');
+  const b = await body(req);
+  await db.prepare("UPDATE receipts SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?").bind(clip(b.reason, 80) || null, now(), user.name || '本部', r.id).run();
+  return json({ ok: true });
+}, 'admin');
+
+route('POST', '/api/admin/receipts/:rid/reissue', async ({ req, db, params, user }) => {
+  const r = await db.prepare('SELECT * FROM receipts WHERE id = ?').bind(params.rid).first();
+  if (!r) fail(404, '領収書が見つかりません');
+  const t = await getTournament(db, r.tournament_id, user);
+  const b = await body(req);
+  const data = await feeData(db, t);
+  const team = data.teams.find((x) => x.team_id === r.team_id);
+  if (!team) fail(409, 'チームが見つかりません（削除された可能性があります）');
+  if (!team.amount || team.status === 'waived') fail(409, '参加費が0円（免除）のため、再発行できません');
+  const issuerRow = await issuerFor(db, t);
+  if (!issuerRow) fail(409, '領収書の発行元が未設定です');
+  if (r.status === 'valid') {
+    await db.prepare("UPDATE receipts SET status = 'void', void_reason = ?, voided_at = ?, voided_by = ? WHERE id = ?").bind(`再発行のため（${clip(b.reason, 60) || '理由なし'}）`, now(), user.name || '本部', r.id).run();
+  }
+  const issuer = { ...publicIssuer(issuerRow), seal: issuerRow.seal ? `/img/seal/${issuerRow.seal}` : null };
+  const nr = await issueReceipt(db, t, issuer, team, team, { purpose: clip(b.purpose || r.purpose, 60), issued_on: validDate(b.issued_on) || jstToday(), delivery: DELIVERY.includes(b.delivery) ? b.delivery : r.delivery,
+    addressee: b.addressee || r.addressee, reissue_of: r.no }, user);
+  return json({ receipt: nr });
+}, 'admin');
+
+// 受け取った人が見る領収書（QR・LINEのリンク）。番号を知っている人だけが開ける
+route('GET', '/api/rcpt/:token', async ({ db, params }) => {
+  if (!/^[a-z0-9]{24}$/.test(params.token)) fail(404, 'この領収書は見つかりません');
+  const r = await db.prepare('SELECT * FROM receipts WHERE token = ?').bind(params.token).first();
+  if (!r) fail(404, 'この領収書は見つかりません');
+  const { issuer, token, created_by, voided_by, ...rest } = r;
+  return json({ receipt: { ...rest, issuer: JSON.parse(issuer) } });
 });
 
 // ---------- 試合ごとの結果報告のリンク ----------

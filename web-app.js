@@ -39,6 +39,12 @@ async function route() {
       const { viewer } = await import('./web-viewer.js');
       return await viewer(root, m[1], { open: true });
     }
+    // 領収書（QR・LINEで受け取った人が開く）
+    m = path.match(/^\/rcpt\/([a-z0-9]{24})$/);
+    if (m) {
+      const { receiptPage } = await import('./web-fee.js');
+      return await receiptPage(root, m[1]);
+    }
     // 試合ごとの結果報告（本部がLINEで送ったリンク）
     m = path.match(/^\/rep\/([a-z0-9]{24})$/);
     if (m) {

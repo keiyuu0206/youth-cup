@@ -407,9 +407,18 @@ export async function admin(root, path, navigate) {
   if (path.startsWith('/admin/scorers')) return isViewer() ? navigate('/admin') : scorersView(root, navigate);
   if (path.startsWith('/admin/accounts')) return isSuperUser() ? accountsView(root, navigate) : navigate('/admin');
   if (path.startsWith('/admin/masters')) return mastersView(root, navigate);
+  if (path.startsWith('/admin/issuer')) return isViewer() ? navigate('/admin') : issuerView(root, navigate);
   const m = path.match(/^\/admin\/t\/([^/]+)/);
   if (m) return tournamentView(root, m[1], navigate);
   return listView(root, navigate);
+}
+
+// ---------- 領収書の発行元 ----------
+async function issuerView(root, navigate) {
+  const box = h('div');
+  mount(root, adminHeader('領収書の発行元', navigate, true), h('main', { class: 'wrap wide', style: { marginTop: '16px' } }, box));
+  const { issuerForm } = await import('./web-fee.js');
+  issuerForm(box);
 }
 
 // ---------- バックアップ ----------
@@ -470,8 +479,8 @@ function openRestore(navigate) {
 
 // マニュアルの一覧（権限に合わせて並べる）
 function openManuals() {
-  const keys = isSuperUser() ? ['organizer', 'superadmin', 'scorer', 'parents']
-    : isViewer() ? ['organizer', 'parents'] : ['organizer', 'scorer', 'parents'];
+  const keys = isSuperUser() ? ['organizer', 'fees', 'superadmin', 'scorer', 'parents']
+    : isViewer() ? ['organizer', 'parents'] : ['organizer', 'fees', 'scorer', 'parents'];
   modal({
     title: '利用マニュアル（PDF）',
     content: h('div', { class: 'manual-list' }, keys.map((k) => h('a', { href: MANUALS[k].href, target: '_blank', rel: 'noopener' },
@@ -482,8 +491,9 @@ function openManuals() {
 }
 
 function adminHeader(title, navigate, back, status) {
-  const ghost = {}; // 新しいデザイン：白い上部に、ヘアラインのピル型のボタン
-  return h('header', { class: 'site-head no-print' }, h('div', { class: 'wrap wide' },
+  // ボタンが多いとき（大会の画面など）は、幅が足りなければ［メニュー］にまとめる（大会名を隠さないように）
+  const many = !OP_MODE && !isOp() && (!!back || (ME && ME.role === 'super'));
+  return h('header', { class: `site-head no-print${many ? ' many' : ''}` }, h('div', { class: 'wrap wide' },
     back ? h('a', { href: '/admin', onclick: async (e) => { e.preventDefault(); if (window.__leaveGuard && !(await window.__leaveGuard())) return; window.__leaveGuard = null; navigate('/admin'); } }, '←', h('span', { class: 'hide-sm' }, ' 大会一覧')) : null,
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
     status ? stateBadge(status, true) : null,
@@ -495,6 +505,7 @@ function adminHeader(title, navigate, back, status) {
       isSuperUser() ? { label: 'アカウント管理', onClick: () => navigate('/admin/accounts') } : null,
       ME && !isViewer() && !isOp() ? { label: 'アカウント追加', onClick: () => navigate('/admin/scorers') } : null,
       ME && !isOp() ? { label: 'チームマスタ', onClick: () => navigate('/admin/masters') } : null,
+      ME && !isOp() && !isViewer() ? { label: '発行元（領収書）', onClick: () => navigate('/admin/issuer') } : null,
       isOp() ? { label: '使い方', href: MANUALS.scorer.href } : ME ? { label: 'マニュアル', onClick: openManuals } : null,
       isOp() ? { label: 'スマホ表示', onClick: () => { store.set('op:mobile', true); location.href = '/admin'; } } : null,
       ME && ME.id !== 'root' ? { label: 'パスワード変更', onClick: changePassword } : null,
@@ -960,7 +971,7 @@ async function tournamentView(root, id, navigate) {
   let templates = null;
   const st = {
     catId: store.get(`a:${id}:cat`),
-    sub: (() => { const v = store.get(`a:${id}:sub`, isOp() ? 'dash' : 'settings'); return isOp() && !['dash', 'schedule', 'results', 'standings'].includes(v) ? 'dash' : v; })(),
+    sub: (() => { const v = store.get(`a:${id}:sub`, isOp() ? 'dash' : 'settings'); return isOp() && !['dash', 'schedule', 'results', 'standings', 'fees'].includes(v) ? 'dash' : v; })(),
     moveSel: null,
     drafts: {}, // カテゴリID → {assignment, order, warnings}
     preview: {}, // カテゴリID → {matches, warnings}
@@ -1647,8 +1658,8 @@ async function tournamentView(root, id, navigate) {
   }
 
   function categoryView(t, cat, editable) {
-    const subs = isOp() ? [['dash', 'ダッシュボード'], ['schedule', '日程'], ['results', '結果'], ['standings', '順位']]
-      : [['dash', 'ダッシュボード'], ['settings', '設定'], ['teams', `チーム（${cat.teams.length}）`], ['schedule', '組み分け・日程'], ['results', '結果'], ['standings', '順位']];
+    const subs = isOp() ? [['dash', 'ダッシュボード'], ['schedule', '日程'], ['results', '結果'], ['standings', '順位'], ['fees', '参加費']]
+      : [['dash', 'ダッシュボード'], ['settings', '設定'], ['teams', `チーム（${cat.teams.length}）`], ['schedule', '組み分け・日程'], ['results', '結果'], ['standings', '順位'], isViewer() ? null : ['fees', '参加費']].filter(Boolean);
     const pending = cat.matches.filter((m) => m.status === 'provisional').length;
     const idx = data.categories.findIndex((c) => c.id === cat.id);
     const FORMAT = { league: 'リーグ戦', knockout: 'トーナメント', league_knockout: 'リーグ戦＋トーナメント' };
@@ -1677,7 +1688,19 @@ async function tournamentView(root, id, navigate) {
           : readOnly(st.sub === 'teams' ? teamsView(t, cat, editable)
             : st.sub === 'schedule' ? scheduleTab(t, cat, editable)
               : st.sub === 'results' ? resultsTab(t, cat)
-                : standingsTab(t, cat))));
+                : st.sub === 'fees' ? feeTab(t)
+                  : standingsTab(t, cat))));
+  }
+
+  // ----- 参加費・領収書（大会全体。カテゴリをまたいで1つの画面） -----
+  let feeEl = null;
+  function feeTab(t) {
+    if (!feeEl) {
+      const holder = h('div', { class: 'fee-holder' }, h('p', { class: 'muted' }, '読み込んでいます…'));
+      import('./web-fee.js').then(({ feeView }) => mount(holder, feeView({ tid: id, tournament: t, canSettings: !isOp() && !ro() })));
+      feeEl = holder;
+    }
+    return feeEl;
   }
 
   // ----- 設定 -----

@@ -155,3 +155,10 @@ CREATE TABLE report_links (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, mat
   created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, used_at TEXT, used_count INTEGER NOT NULL DEFAULT 0, reporter TEXT);
 CREATE INDEX idx_report_links_match ON report_links(match_id);
 CREATE INDEX idx_report_links_tournament ON report_links(tournament_id);
+CREATE TABLE issuers (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, title TEXT, rep TEXT, address TEXT, tel TEXT, reg_no TEXT, seal TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE seals (hash TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE fee_settings (tournament_id TEXT PRIMARY KEY, amount INTEGER, purpose TEXT, issuer_id TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE fees (tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, amount INTEGER, note TEXT, status TEXT NOT NULL DEFAULT 'unpaid', method TEXT, paid_at TEXT, paid_by TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (tournament_id, team_id));
+CREATE TABLE receipts (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, no TEXT NOT NULL, addressee TEXT NOT NULL, amount INTEGER NOT NULL, tax_amount INTEGER, purpose TEXT, issued_on TEXT NOT NULL, issuer TEXT NOT NULL, delivery TEXT, method TEXT, status TEXT NOT NULL DEFAULT 'valid', void_reason TEXT, reissue_of TEXT, created_by TEXT, created_at TEXT NOT NULL, voided_at TEXT, voided_by TEXT);
+CREATE INDEX idx_receipts_tournament ON receipts(tournament_id);
+CREATE TABLE receipt_counters (k TEXT PRIMARY KEY, last INTEGER NOT NULL);

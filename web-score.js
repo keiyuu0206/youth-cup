@@ -101,13 +101,15 @@ export async function scoreApp(root, me) {
           c.name, n ? h('span', { class: 'tag alert', style: { marginLeft: '6px' } }, n) : null);
       })) : null,
       h('div', { class: 'sc-tabs', role: 'tablist' },
-        [pendN ? ['pending', `承認待ち（${pendN}）`] : null, ['all', '試合一覧'],
+        [pendN ? ['pending', `承認待ち（${pendN}）`] : null, ['all', '試合'],
           ['standings', '順位'],
-          isOp ? ['lost', `忘れ物（${(t.lost || []).length}）`] : null, isOp ? ['sns', 'SNS画像'] : null].filter(Boolean).map(([k, l]) =>
+          isOp ? ['fees', '参加費'] : null,
+          isOp ? ['lost', `忘れ物（${(t.lost || []).length}）`] : null, isOp ? ['sns', 'SNS'] : null].filter(Boolean).map(([k, l]) =>
           h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), onclick: () => { st.tab = k; draw(); } }, l))),
       !cat ? h('p', { class: 'empty' }, 'カテゴリがありません')
         : st.tab === 'pending' && pendN ? pendingView(t, cat)
-          : st.tab === 'standings' ? rankTab(t, cat) : st.tab === 'lost' && isOp ? lostView(t) : st.tab === 'sns' && isOp ? snsView(t, cat) : allView(t, cat),
+          : st.tab === 'standings' ? rankTab(t, cat)
+          : st.tab === 'fees' && isOp ? feeTab(t) : st.tab === 'lost' && isOp ? lostView(t) : st.tab === 'sns' && isOp ? snsView(t, cat) : allView(t, cat),
       h('p', { class: 'sc-foot muted small' }, pendAll ? `この大会の承認待ち：全${pendAll}件` : '最新の情報は、右下の「更新」を押すと表示されます'),
       refreshButton(async () => { const r = await refresh(); return r === 'quiet' ? true : r; })));
   }
@@ -220,6 +222,17 @@ export async function scoreApp(root, me) {
                 : m.status === 'none' ? h('span', { class: `sc-rcta${isLate ? ' late' : ''}` }, isLate ? '入力待ち' : '入力')
                   : h('span', { class: `sc-rstat ${m.status}` }, LBL[m.status]));
           })])));
+  }
+
+  // 参加費・領収書（大会運営者）：受け取りの記録と領収書の発行。大会ごとに1つの画面を使い回す
+  const feeEls = {};
+  function feeTab(t) {
+    if (!feeEls[t.id]) {
+      const holder = h('div', { class: 'fee-holder' }, h('p', { class: 'muted' }, '読み込んでいます…'));
+      import('./web-fee.js').then(({ feeView }) => mount(holder, feeView({ tid: t.id, tournament: t, canSettings: false, compact: true })));
+      feeEls[t.id] = holder;
+    }
+    return feeEls[t.id];
   }
 
   // 順位：全試合が終わったチーム（閉会前の確認用）・順位表・トーナメント表（保護者の画面と同じ表示）

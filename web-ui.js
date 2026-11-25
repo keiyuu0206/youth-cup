@@ -277,6 +277,7 @@ export const MANUALS = {
   parents: { href: '/INFINEX_manual_parents.pdf', title: '保護者マニュアル', desc: '日程・結果・順位表・トーナメント表の見かた' },
   team: { href: '/INFINEX_manual_team.pdf', title: 'チーム関係者マニュアル', desc: '試合結果の入力（仮登録）のしかた' },
   scorer: { href: '/INFINEX_manual_scorer.pdf', title: '大会運営者・スコア管理者マニュアル', desc: 'スコアの登録・修正、SNS画像の出力、忘れ物の登録' },
+  fees: { href: '/INFINEX_manual_fees.pdf', title: '参加費・領収書マニュアル', desc: '参加費の受け取りの記録と、領収書の発行（印刷・QR・LINE）' },
   organizer: { href: '/INFINEX_manual_organizer.pdf', title: '大会管理者マニュアル', desc: '大会の作成から当日の運営、資料の出力まで' },
   superadmin: { href: '/INFINEX_manual_superadmin.pdf', title: '全体管理者マニュアル', desc: 'アカウントの管理、テンプレートの公開' },
 };
