@@ -1993,3 +1993,21 @@ a.outline-btn { text-decoration: none; color: #fff; }
   .fee-stats { grid-template-columns: 1fr 1fr; }
   .fee-stats .stat-card b { font-size: 1.15rem; }
 }
+
+/* チームマスタから探して追加 */
+.ms-bar { display: flex; gap: 8px; margin-bottom: 8px; }
+.ms-bar input { flex: 1; min-width: 0; }
+.ms-bar select { width: auto; flex: none; }
+.ms-list { display: grid; gap: 6px; max-height: 360px; overflow: auto; }
+.ms-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); }
+.ms-main { flex: 1; min-width: 0; display: grid; }
+.ms-main strong, .ms-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-new { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px; border: 1px dashed var(--line); border-radius: 10px; }
+.ms-new span { flex: 1; min-width: 180px; }
+.rc-fit { width: 100%; overflow: hidden; }
+.rc-fit .rc { max-width: none; }
+.iss-prev-wrap { overflow: hidden; }
+.iss-grid { grid-template-columns: minmax(0, 1fr); }
+.iss-grid > * { min-width: 0; }
+@media (min-width: 1000px) { .iss-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); } }
+.rc-fit, .iss-preview { min-width: 0; max-width: 100%; }

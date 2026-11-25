@@ -45,9 +45,23 @@ export function receiptEl(r, { paper = false } = {}) {
     voided ? h('div', { class: 'rc-void-mark' }, '取消') : null);
 }
 
+// 領収書（HTML）を、置いた場所の幅に合わせて縮小する（スマホで見切れないように）。幅が変わったら合わせ直す
+export function fitReceipt(rcEl) {
+  const wrap = h('div', { class: 'rc-fit' }, rcEl);
+  const fit = () => {
+    rcEl.style.zoom = '';
+    const natural = rcEl.offsetWidth;
+    const avail = wrap.clientWidth;
+    if (natural && avail) rcEl.style.zoom = String(Math.min(1, avail / natural));
+  };
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fit).observe(wrap);
+  requestAnimationFrame(fit);
+  return wrap;
+}
+
 // 画面での見本：画像にして幅に収める（スマホでも崩れない）
 export function receiptPreview(r) {
-  const view = h('div', { class: 'rcpt-view' }, receiptEl(r));
+  const view = h('div', { class: 'rcpt-view' }, fitReceipt(receiptEl(r)));
   receiptCanvas(r).then((c) => mount(view, h('img', { class: 'rcpt-img', src: c.toDataURL('image/png'), alt: `領収書 No.${r.no}` }))).catch(() => {});
   return view;
 }
@@ -160,8 +174,8 @@ export async function issuerForm(container, { onSaved } = {}) {
   const f = { name: iss ? iss.name : '', title: iss ? iss.title : '代表', rep: iss ? iss.rep : '', address: iss ? iss.address : '', tel: iss ? iss.tel : '', reg_no: iss ? iss.reg_no : '', seal: undefined };
   let sealShown = iss && iss.seal;
   const prev = h('div', { class: 'iss-preview' });
-  const draw = () => mount(prev, receiptEl({ no: '2026-0001', issued_on: todayStr(), addressee: '（チーム名）', amount: 15000, tax_amount: f.reg_no ? Math.floor(150000 / 110) : null,
-    purpose: 'サッカー大会参加費として', status: 'valid', issuer: { ...f, reg_no: /^T\d{13}$/.test(f.reg_no) ? f.reg_no : '', seal: f.seal === undefined ? sealShown : f.seal, tournament: '（大会名）' } }, { paper: true }));
+  const draw = () => mount(prev, fitReceipt(receiptEl({ no: '2026-0001', issued_on: todayStr(), addressee: '（チーム名）', amount: 15000, tax_amount: f.reg_no ? Math.floor(150000 / 110) : null,
+    purpose: 'サッカー大会参加費として', status: 'valid', issuer: { ...f, reg_no: /^T\d{13}$/.test(f.reg_no) ? f.reg_no : '', seal: f.seal === undefined ? sealShown : f.seal, tournament: '（大会名）' } }, { paper: true })));
   const field = (k, label, ph, max) => h('label', { class: 'field' }, h('span', null, label), h('input', { type: 'text', value: f[k] || '', placeholder: ph || '', maxlength: max || 80, oninput: (e) => { f[k] = e.target.value; draw(); } }));
   draw();
   mount(container, h('div', { class: 'iss-grid' },

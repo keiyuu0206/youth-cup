@@ -1,7 +1,7 @@
 import { api, ApiError } from './web-api.js';
 const apiBase = api;
 import { openSnsChooser } from './web-poster.js';
-import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix } from './web-teammaster.js';
+import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix, normKey, looseKey } from './web-teammaster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
 import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl, stateBadge, sortByState, tourCard } from './web-ui.js';
@@ -1904,8 +1904,9 @@ async function tournamentView(root, id, navigate) {
     const bulk = h('textarea', { rows: 6, placeholder: '参加チーム一覧を貼り付け（1行に1チーム）\n例:\nさくらFC（静岡）\nK-WEST.FC2001A（埼玉）\nK-WEST.FC2001B（埼玉）\n青空SC, 東京' });
     const showPref = (data.tournament.settings || {}).teamPref !== 'hide';
     return h('div', null,
+      h('fieldset', { class: 'lockable', disabled: isLocked() }, masterSearchPanel(cat)),
       h('fieldset', { class: 'lockable', disabled: isLocked() }, h('section', { class: 'panel' },
-        h('h2', { style: { marginBottom: '8px' } }, 'チームを追加'),
+        h('h2', { style: { marginBottom: '8px' } }, 'まとめて貼り付けて追加'),
         h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Excelや資料の参加チーム一覧をそのまま貼り付けてください。チームマスタと照らし合わせて、名前・都道府県・ロゴを自動で入れます。「チーム名（静岡）」「チーム名, 静岡」のどちらの書き方でも読み取れます。同じクラブのA・Bチームは、組み分けで別の組になります。'),
         bulk,
         h('button', { class: 'btn btn-primary', type: 'button', style: { marginTop: '8px' }, onclick: async () => {
@@ -1938,6 +1939,55 @@ async function tournamentView(root, id, navigate) {
             if (await run(() => api('DELETE', `/api/admin/teams/${tm.id}`), '削除しました')) await reload();
           } }, '削除')))
           : h('p', { class: 'empty' }, 'まだチームがありません')));
+  }
+
+  // ===== チームマスタから探して1チームずつ追加する =====
+  var masterCache; // 大会の画面を開いている間は、マスタの一覧を使い回す（var：この行より先に表示が呼ばれても使えるように）
+  function masterSearchPanel(cat) {
+    const st2 = { q: '', suf: '' };
+    const list = h('div', { class: 'ms-list' });
+    const input = h('input', { type: 'search', placeholder: 'チーム名の一部で探す（例：さくら、FC春江）', 'aria-label': 'チームマスタを探す', autocomplete: 'off',
+      oninput: (e) => { st2.q = e.target.value; draw(); } });
+    const sufSel = h('select', { 'aria-label': '同じクラブの何チーム目か', onchange: (e) => { st2.suf = e.target.value; draw(); } },
+      ['', 'A', 'B', 'C', 'D', '①', '②', '③'].map((v) => h('option', { value: v }, v ? `${v}を付ける` : '印なし')));
+    const used = new Set(cat.teams.map((x) => (x.base_name ?? x.name).normalize('NFKC').replace(/\s/g, '')));
+    const add = async (body, label) => {
+      if (await run(() => api('POST', `/api/admin/categories/${cat.id}/teams`, { teams: [body] }), `${label}を追加しました`)) {
+        if (body.newMaster) masterCache = null; // 新しくマスタに入ったチームも探せるように読み直す
+        st2.q = ''; input.value = ''; await reload();
+        setTimeout(() => { const el = document.querySelector('.ms-panel input[type=search]'); if (el) el.focus(); }, 50);
+      }
+    };
+    function draw() {
+      const q = st2.q.trim();
+      if (!masterCache) { mount(list, h('p', { class: 'muted small' }, '読み込んでいます…')); return; }
+      if (!q) { mount(list, h('p', { class: 'muted small', style: { margin: 0 } }, `チームマスタ（${masterCache.length}チーム）から探せます。都道府県名でも探せます。`)); return; }
+      const k = normKey(q), lk = looseKey(q);
+      const hits = masterCache.filter((m) => {
+        const n = normKey(m.name);
+        return n.includes(k) || (lk.length >= 2 && looseKey(m.name).includes(lk)) || (m.short_name && normKey(m.short_name).includes(k)) || (m.prefecture && m.prefecture.startsWith(q));
+      }).slice(0, 30);
+      mount(list,
+        hits.map((m) => {
+          const nm = teamName(m, st2.suf);
+          const dup = used.has(nm.normalize('NFKC').replace(/\s/g, ''));
+          return h('div', { class: 'ms-row' },
+            masterLogo(m, 28),
+            h('div', { class: 'ms-main' }, h('strong', null, nm), h('small', { class: 'muted' }, [m.prefecture || '都道府県なし', m.short_name ? `略称：${m.short_name}` : ''].filter(Boolean).join('　'))),
+            dup ? h('span', { class: 'tag' }, '登録済み')
+              : h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => add({ name: nm, master_id: m.id, prefecture: m.prefecture || null, short_name: m.short_name || null }, nm) }, '追加'));
+        }),
+        !hits.length ? h('p', { class: 'muted small', style: { margin: '0 0 6px' } }, '見つかりませんでした。') : null,
+        !ro() && !isOp() ? h('div', { class: 'ms-new' },
+          h('span', { class: 'small' }, `マスタに無いときは「${teamName({ name: q }, st2.suf)}」を新しく登録できます（マスタにも追加します）。`),
+          h('button', { class: 'btn btn-sm', type: 'button', onclick: () => add({ name: teamName({ name: q }, st2.suf), newMaster: true, master_name: q }, teamName({ name: q }, st2.suf)) }, '新しく登録')) : null);
+    }
+    if (!masterCache) run(() => api('GET', '/api/admin/team-master')).then((r) => { masterCache = r ? r.masters : []; draw(); });
+    draw();
+    return h('section', { class: 'panel ms-panel' },
+      h('h2', { style: { marginBottom: '8px' } }, 'チームマスタから探して追加'),
+      h('div', { class: 'ms-bar' }, input, sufSel),
+      list);
   }
 
   function editTeam(tm) {
