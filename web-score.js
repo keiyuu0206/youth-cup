@@ -14,13 +14,16 @@ export async function scoreApp(root, me) {
   const isOp = me.role === 'operator'; // 大会運営者
 
   const header = () => h('header', { class: 'site-head sc-head' }, h('div', { class: 'wrap' },
-    h('div', { class: 'sc-who' }, h('strong', null, isOp ? '大会運営' : 'スコア登録'), h('small', null, `${me.name}（${isOp ? '大会運営者' : 'スコア管理者'}・${me.region || me.parentName || ''}）`)),
+    h('div', { class: 'sc-who' }, h('strong', null, isOp ? '大会運営' : 'スコア登録'), h('small', null, me.realRole
+      ? `${me.name}（運営者モード・${me.realRole === 'super' ? '全体管理者' : '地域管理者'}）`
+      : `${me.name}（${isOp ? '大会運営者' : 'スコア管理者'}・${me.region || me.parentName || ''}）`)),
     h('span', { class: 'spacer' }),
     ...headActions([
       st.data && st.data.tournament.status !== 'draft' ? { label: '保護者の画面を見る', cls: 'sc-mini', href: `/t/${st.data.tournament.slug}` } : null,
+      me.realRole ? { label: '管理者モードに戻る', cls: 'sc-mini', onClick: () => { store.set('admin:opMode', false); location.href = '/admin'; } } : null,
       isOp ? { label: 'パソコン表示', cls: 'sc-mini', onClick: () => { store.set('op:mobile', false); location.href = '/admin'; } } : null,
       { label: '使い方', cls: 'sc-mini', href: MANUALS.scorer.href },
-      { label: 'パスワード変更', cls: 'sc-mini', onClick: changePassword },
+      me.id === 'root' ? null : { label: 'パスワード変更', cls: 'sc-mini', onClick: changePassword },
       { label: 'ログアウト', cls: 'sc-mini', onClick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } },
     ], `ログイン中：${me.name}（${isOp ? '大会運営者' : 'スコア管理者'}）`)));
 

@@ -381,9 +381,17 @@ async function operatorDesk(root, path, navigate) {
 
 // ログイン中の管理者（全体管理者 / 地域管理者）
 let ME = null;
-const isSuperUser = () => ME && ME.role === 'super';
+// 運営者モード：全体管理者・地域管理者が、大会運営者と同じ画面（当日の運営画面）で使う。権限は管理者のまま（画面だけ切り替える）
+let OP_MODE = false;
+const canOpMode = () => ME && (ME.role === 'super' || ME.role === 'region');
+const setOpMode = (on) => {
+  store.set('admin:opMode', !!on);
+  const m = location.pathname.match(/^\/admin\/t\/[^/?#]+/);
+  location.href = m ? m[0] : '/admin';
+};
+const isSuperUser = () => ME && ME.role === 'super' && !OP_MODE;
 const isViewer = () => ME && ME.role === 'viewer'; // 閲覧専用（設定の確認だけ。変更はできない）
-const isOp = () => ME && ME.role === 'operator'; // 大会運営者（パソコン・タブレットの運営画面）
+const isOp = () => ME && (ME.role === 'operator' || OP_MODE); // 大会運営者（パソコン・タブレットの運営画面）。運営者モードの管理者も含む
 
 export async function admin(root, path, navigate) {
   let me;
@@ -392,8 +400,10 @@ export async function admin(root, path, navigate) {
   ME = me.user;
   window.__ycRole = ME.role;
   // スコア管理者は、結果の承認だけを行う専用画面へ
-  if (ME.role === 'operator' && !store.get('op:mobile', false) && window.matchMedia('(min-width: 900px)').matches) return operatorDesk(root, path, navigate);
-  if (ME.role === 'scorer' || ME.role === 'operator') return (await import('./web-score.js')).scoreApp(root, ME);
+  OP_MODE = canOpMode() && store.get('admin:opMode', false) === true;
+  const opLike = ME.role === 'operator' || OP_MODE;
+  if (opLike && !store.get('op:mobile', false) && window.matchMedia('(min-width: 900px)').matches) return operatorDesk(root, path, navigate);
+  if (ME.role === 'scorer' || opLike) return (await import('./web-score.js')).scoreApp(root, OP_MODE ? { ...ME, role: 'operator', realRole: ME.role } : ME);
   if (path.startsWith('/admin/scorers')) return isViewer() ? navigate('/admin') : scorersView(root, navigate);
   if (path.startsWith('/admin/accounts')) return isSuperUser() ? accountsView(root, navigate) : navigate('/admin');
   if (path.startsWith('/admin/masters')) return mastersView(root, navigate);
@@ -478,8 +488,10 @@ function adminHeader(title, navigate, back, status) {
     h('h1', { style: { marginLeft: back ? '8px' : 0 } }, title),
     status ? stateBadge(status, true) : null,
     h('span', { class: 'spacer' }),
-    ME ? h('span', { class: 'me-chip', title: `ログインID：${ME.login_id}` }, ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
+    ME ? h('span', { class: `me-chip${OP_MODE ? ' op-mode' : ''}`, title: `ログインID：${ME.login_id}` }, OP_MODE ? '運営者モード' : ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者', h('small', null, ME.id === 'root' ? `ID：${ME.login_id}` : ME.name)) : null,
     ...headActions([
+      canOpMode() ? (OP_MODE ? { label: '管理者モードに戻る', cls: 'btn btn-sm btn-primary', onClick: () => setOpMode(false) }
+        : { label: '運営者モードへ', onClick: () => setOpMode(true) }) : null,
       isSuperUser() ? { label: 'アカウント管理', onClick: () => navigate('/admin/accounts') } : null,
       ME && !isViewer() && !isOp() ? { label: 'アカウント追加', onClick: () => navigate('/admin/scorers') } : null,
       ME && !isOp() ? { label: 'チームマスタ', onClick: () => navigate('/admin/masters') } : null,
@@ -487,7 +499,7 @@ function adminHeader(title, navigate, back, status) {
       isOp() ? { label: 'スマホ表示', onClick: () => { store.set('op:mobile', true); location.href = '/admin'; } } : null,
       ME && ME.id !== 'root' ? { label: 'パスワード変更', onClick: changePassword } : null,
       { label: 'ログアウト', onClick: async () => { await api('POST', '/api/admin/logout'); location.href = '/admin'; } },
-    ], ME ? `ログイン中：${ME.role === 'super' ? '全体管理者' : isOp() ? '大会運営者' : ME.region || '地域管理者'}（${ME.id === 'root' ? ME.login_id : ME.name}）` : '')));
+    ], ME ? `ログイン中：${OP_MODE ? '運営者モード・' : ''}${ME.role === 'super' ? '全体管理者' : ME.role === 'operator' ? '大会運営者' : ME.region || '地域管理者'}（${ME.id === 'root' ? ME.login_id : ME.name}）` : '')));
 }
 
 function changePassword() {
