@@ -1964,9 +1964,12 @@ a.outline-btn { text-decoration: none; color: #fff; }
 .rcpt-scroll { overflow-x: auto; background: #fff; border-radius: 12px; padding: 8px; }
 .rcpt-scroll .rc { min-width: 640px; }
 .rcpt-actions { display: grid; gap: 8px; margin-top: 14px; }
-@media (max-width: 1440px) {
-  .site-head.many .head-actions, .site-head.many .me-chip { display: none; }
-  .site-head.many .head-menu-btn { display: inline-flex; }
-}
+/* ボタンが多い画面（大会の画面・全体管理者）：ボタンは［メニュー］にまとめ、大会名を隠さない（画面の幅・拡大率に左右されないように常に） */
+.site-head.many .head-actions { display: none; }
+.site-head.many .head-menu-btn { display: inline-flex; }
+/* ログイン中の人の表示が縦に潰れないように */
+.me-chip { flex: none; white-space: nowrap; }
+.site-head h1 { min-width: 6em; }
 .rcpt-view { background: #fff; border-radius: 12px; padding: 6px; overflow-x: auto; }
 .rcpt-img { display: block; width: 100%; height: auto; }
+.site-head h1 + .state-badge { margin-right: auto; }
