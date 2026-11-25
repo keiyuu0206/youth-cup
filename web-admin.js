@@ -1446,7 +1446,7 @@ async function tournamentView(root, id, navigate) {
           onSave: async (o) => { const r = await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { settings: { outline: o } })); if (r) await reload(); return !!r; } }) }, '要項を作成・編集'),
         h('button', { class: 'btn btn-block', type: 'button', onclick: () => openOutlineDialog(data.tournament, data.categories, outline) }, '要項をPDFで出力'),
         h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openPresetList({ t, categories: data.categories, onApply: () => reload() }) }, '要項のプリセットを管理'),
-        isViewer() ? null : h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openCopyDialog(t, navigate) }, 'この大会をコピーして新しい大会を作る')));
+        isViewer() ? null : h('button', { class: 'btn btn-block btn-ghost', type: 'button', onclick: () => openCopyDialog(t, navigate) }, 'この大会をコピーして新規作成')));
   }
 
   // ----- 忘れ物 -----

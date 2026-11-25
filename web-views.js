@@ -582,6 +582,12 @@ function mountTo(el, ...kids) {
   for (const k of kids) if (k) el.append(k);
 }
 
+// 長い名前は文字を小さくして1行に収める（半角は0.6文字として数える）。max：1行に入る全角の文字数、base：もとの大きさ(rem)
+export function nameFit(txt, max, base, min = 0.72) {
+  const w = [...String(txt || '')].reduce((a, ch) => a + (/[ -~]/.test(ch) ? 0.6 : 1), 0);
+  return w > max ? { fontSize: `${Math.max(min, (base * max) / w).toFixed(2)}rem` } : null;
+}
+
 export function teamsView(cat, ctx, query = '') {
   const q = query.trim();
   const list = cat.teams.filter((t) => !q || t.name.includes(q) || (t.short_name || '').includes(q));
@@ -594,7 +600,7 @@ export function teamsView(cat, ctx, query = '') {
     h('div', { class: 'team-grid' }, groups[g].map((t) => h('button', { class: `tm${t.id === ctx.myTeam ? ' mine' : ''}${ctx.photoOf && ctx.photoOf(t) ? ' has-photo' : ''}`, type: 'button',
       onclick: () => ctx.onPickTeam && ctx.onPickTeam(t.id), 'aria-label': `${t.name}の試合を見る` },
       ctx.photoOf && ctx.photoOf(t) ? h('img', { class: 'tm-photo', src: ctx.photoOf(t), alt: `${t.name}の写真`, loading: 'lazy' }) : null,
-      crest(t, 40), h('strong', null, t.name), t.group_label ? h('span', { class: 'tm-g' }, `${t.group_label}組`) : null,
+      crest(t, 40), h('strong', { style: nameFit(t.name, 9, 0.92) }, t.name), t.group_label ? h('span', { class: 'tm-g' }, `${t.group_label}組`) : null,
       prog[t.id] && prog[t.id].finished ? h('span', { class: 'tm-fin' }, '全試合終了') : null,
       t.id === ctx.myTeam ? h('span', { class: 'star' }, icon('star')) : null))))));
 }

@@ -104,8 +104,8 @@ export async function scoreApp(root, me) {
         [pendN ? ['pending', `承認待ち（${pendN}）`] : null, ['all', '試合'],
           ['standings', '順位'],
           isOp ? ['fees', '参加費'] : null,
-          isOp ? ['lost', `忘れ物（${(t.lost || []).length}）`] : null, isOp ? ['sns', 'SNS'] : null].filter(Boolean).map(([k, l]) =>
-          h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), onclick: () => { st.tab = k; draw(); } }, l))),
+          isOp ? ['lost', '忘れ物', (t.lost || []).length] : null, isOp ? ['sns', 'SNS'] : null].filter(Boolean).map(([k, l, n]) =>
+          h('button', { type: 'button', role: 'tab', 'aria-selected': String(st.tab === k), 'aria-label': n ? `${l}（${n}件）` : null, onclick: () => { st.tab = k; draw(); } }, l, n ? h('span', { class: 'tab-n' }, n) : null))),
       !cat ? h('p', { class: 'empty' }, 'カテゴリがありません')
         : st.tab === 'pending' && pendN ? pendingView(t, cat)
           : st.tab === 'standings' ? rankTab(t, cat)
@@ -114,6 +114,8 @@ export async function scoreApp(root, me) {
       refreshButton(async () => { const r = await refresh(); return r === 'quiet' ? true : r; })));
   }
 
+  // 長いチーム名は文字を小さくして1行に収める（とても長いときだけ2行）
+  const fitName = (txt) => { const w = [...String(txt)].reduce((a, ch) => a + (/[ -~]/.test(ch) ? 0.6 : 1), 0); return h('span', { style: w > 7 ? { fontSize: `${Math.max(0.72, 1.05 * 7 / w).toFixed(2)}rem` } : null }, txt); };
   const cacheOf = (cat) => ({ teams: teamMap(cat), codes: codeMap(cat) });
   const when = (t, cat, m) => `${dayTotal(cat.config) > 1 ? `${dayLabel(cat, dayOf(cat.config, m.slot), t, true)} ` : ''}${toHHMM(m.start_min)}　${courtName(cat.config, m.court)}`;
   const teamLine = (cat, cache, m, side, score, pk) => {
@@ -199,7 +201,7 @@ export async function scoreApp(root, me) {
       next ? h('button', { class: `sc-next${late(next) ? ' late' : ''}`, type: 'button', onclick: () => editor(t, cat, next) },
         h('span', { class: 'sc-next-k' }, late(next) ? '入力待ちの試合' : '次に入力する試合'),
         h('span', { class: 'sc-next-t' }, h('b', null, toHHMM(next.start_min)), `${courtName(cat.config, next.court)}　${next.label}`),
-        h('span', { class: 'sc-next-teams' }, h('span', null, name(next, 'home')), h('i', null, 'vs'), h('span', null, name(next, 'away'))),
+        h('span', { class: 'sc-next-teams' }, fitName(name(next, 'home')), h('i', null, 'vs'), fitName(name(next, 'away'))),
         h('span', { class: 'sc-next-cta' }, '結果を入力する'))
         : h('p', { class: 'sc-alldone' }, st.court === 'all' ? '未登録の試合はありません' : `${courtName(cat.config, st.court)}の未登録の試合はありません`),
       h('div', { class: 'sc-filterbar' },

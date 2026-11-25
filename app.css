@@ -1973,3 +1973,23 @@ a.outline-btn { text-decoration: none; color: #fff; }
 .rcpt-view { background: #fff; border-radius: 12px; padding: 6px; overflow-x: auto; }
 .rcpt-img { display: block; width: 100%; height: auto; }
 .site-head h1 + .state-badge { margin-right: auto; }
+
+/* ===== スマホで文字がはみ出したり、ボタンの中で改行したりしないように ===== */
+.btn, .chip-btn, .tag, .state-badge, .fee-st, .sc-badge, .sc-tabs button, .bottom-nav button, .fee-note, .fee-rc { white-space: nowrap; }
+.btn { max-width: 100%; min-width: 0; }
+.tab-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--live, #dc2626); color: #fff; font-size: 0.68rem; font-weight: 800; line-height: 1; vertical-align: 1px; }
+.sc-next-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.sc-next-t b { margin-right: 10px; }
+.fee-ledger-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fee-main, .fee-name { min-width: 0; }
+.fee-name strong { overflow-wrap: anywhere; }
+/* 参加費の集計（スマホ）：小さめの2×2 */
+.fee-compact .fee-stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+.fee-compact .fee-stats .stat-card { padding: 10px 12px; }
+.fee-compact .fee-stats .stat-card b { font-size: 1.15rem; }
+.fee-compact .fee-stats .stat-card span { font-size: 0.72rem; }
+@media (max-width: 420px) {
+  .sc-tabs button { padding-left: 4px; padding-right: 4px; font-size: 0.85rem; }
+  .fee-stats { grid-template-columns: 1fr 1fr; }
+  .fee-stats .stat-card b { font-size: 1.15rem; }
+}

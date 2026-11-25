@@ -428,8 +428,8 @@ export function feeView(opts) {
         h('div', { class: 'stat-card' }, h('span', null, '免除'), h('b', null, `${teams.filter((x) => x.status === 'waived').length}`), h('small', null, 'チーム'))),
       opts.canSettings ? settingsPanel() : !d.issuer || d.settings.amount == null ? h('p', { class: 'notice' }, '参加費の金額か発行元が未設定です。大会の管理者に設定してもらってください。') : null,
       h('div', { class: 'row fee-tools' },
-        h('button', { class: 'btn btn-sm', type: 'button', disabled: !d.issuer, onclick: batch }, '事前にまとめて印刷'),
-        h('button', { class: 'btn btn-sm', type: 'button', onclick: exportXlsx }, '一覧をExcelで保存'),
+        h('button', { class: 'btn btn-sm', type: 'button', disabled: !d.issuer, onclick: batch }, opts.compact ? 'まとめて印刷' : '事前にまとめて印刷'),
+        h('button', { class: 'btn btn-sm', type: 'button', onclick: exportXlsx }, opts.compact ? 'Excelで保存' : '一覧をExcelで保存'),
         h('span', { class: 'spacer' }),
         h('input', { type: 'search', class: 'fee-search', placeholder: 'チーム名で探す', value: st.q, oninput: (e) => { st.q = e.target.value; drawList(); } })),
       h('div', { class: 'chips' }, [['all', 'すべて'], ['unpaid', `未収（${teams.filter((x) => x.status === 'unpaid').length}）`], ['paid', `受領済み（${paid.length}）`], ['waived', '免除']].map(([k, l]) =>
