@@ -33,7 +33,7 @@ export function defaultOutline(t) {
   };
 }
 
-const AUTO_INFO = { name: '大会名', sponsors: 'スポンサー名', dates: '開催期間', venue: '会場', teams: 'カテゴリとチーム数' };
+const AUTO_INFO = { name: '大会名', sponsors: 'スポンサー名', dates: '開催期間', venue: '会場', address: '会場の住所', teams: 'カテゴリとチーム数' };
 const AUTO_SECTION = { '': '自分で入力', schedule: '競技日程を自動で作る', ranking: '順位決定方法を自動で作る' };
 
 // ---------- 設定から文章を作る ----------
@@ -58,6 +58,11 @@ function groupSizes(cat) {
 export function autoInfo(key, t, cats) {
   if (key === 'name') return t.name || '';
   if (key === 'venue') return t.venue || '';
+  if (key === 'address') {
+    const st = t.settings || {};
+    const zip = t.venueZip || st.venueZip || '', addr = t.venueAddress || st.venueAddress || '';
+    return addr ? `${zip ? `〒${zip}　` : ''}${addr}` : '';
+  }
   if (key === 'sponsors') return (t.sponsors || []).map((x) => x.name).join(' / ');
   if (key === 'teams') return cats.map((c) => `カテゴリー${c.name} / ${c.teams.length}チーム`).join('\n');
   if (key === 'dates') {
@@ -263,7 +268,7 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
 
   // 大会の内容を反映：コピーした大会などで、要項に前の大会の内容が残っているところを、いまの大会の設定に合わせる。
   // 変える前に一覧を見せ、チェックした項目だけ変える（保存するまでは確定しない）
-  const AUTO_LABEL = { 大会名: 'name', 開催日時: 'dates', 開催日: 'dates', 日時: 'dates', 期日: 'dates', 開催期間: 'dates', 会場: 'venue', 参加チーム: 'teams', 協賛: 'sponsors', スポンサー: 'sponsors' };
+  const AUTO_LABEL = { 大会名: 'name', 開催日時: 'dates', 開催日: 'dates', 日時: 'dates', 期日: 'dates', 開催期間: 'dates', 会場: 'venue', 住所: 'address', 会場の住所: 'address', 所在地: 'address', 参加チーム: 'teams', 協賛: 'sponsors', スポンサー: 'sponsors' };
   const reflectTournament = async () => {
     const changes = [];
     if ((o.title || '') !== (t.name || '')) changes.push({ label: '表紙の大会名', from: o.title || '（空欄）', to: t.name, apply: () => { o.title = t.name; } });

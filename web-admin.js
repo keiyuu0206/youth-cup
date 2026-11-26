@@ -4,7 +4,7 @@ import { openSnsChooser } from './web-poster.js';
 import { PREFS, parseLine, buildIndex, matchRow, teamName, splitSuffix, normKey, looseKey } from './web-teammaster.js';
 import { openPrintDialog, printParking, periodText as printPeriod } from './web-print.js';
 import { openOutlineEditor, openOutlineDialog, openPresetList, defaultOutline } from './web-outline.js';
-import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl, stateBadge, sortByState, tourCard } from './web-ui.js';
+import { h, mount, modal, confirmDialog, toast, store, poller, run, copyText, resizeImage, toHHMM, fromHHMM, formatDate, todayStr, nowMin, formatUpdated, icon, resizeBanner, MANUALS, manualLink, markFetched, refreshButton, cleanScore, headActions, resizePhoto, lineButton, lineShareUrl, stateBadge, sortByState, tourCard, mapUrl, venueAddressOf } from './web-ui.js';
 import { openReportLink } from './web-report.js';
 import { teamMap, codeMap, sideInfo, courtName, matchLength, matchLengthFor, manualLabel, planBrackets, standingsView, bracketView, TIEBREAK_LABEL, dayOf, dayTotal, dayLabel, dayDate, absMin, refBadge, setRefereeMode, refereeCounts, REF_MODES, isRankLeague, finishedTeamsView } from './web-views.js';
 
@@ -1389,6 +1389,8 @@ async function tournamentView(root, id, navigate) {
 
   function infoPanel(t) {
     const f = { name: t.name, date: t.date || '', end_date: t.end_date || t.date || '', venue: t.venue || '', logo: t.logo, show_logo: !!t.show_logo };
+    const va = venueAddressOf(t);
+    const addr = { venueZip: va.zip, venueAddress: va.addr };
     const preview = h('div');
     const drawLogo = () => mount(preview, f.logo ? h('div', { class: 'row' }, h('img', { src: f.logo, alt: '大会ロゴ', width: 56, height: 56, style: { objectFit: 'contain', background: '#fff', borderRadius: '50%' } }),
       h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.logo = null; drawLogo(); } }, 'ロゴを外す')) : h('span', { class: 'muted small' }, 'ロゴは未設定です'));
@@ -1400,6 +1402,10 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, '終了日'), h('input', { type: 'date', value: f.end_date, oninput: (e) => { f.end_date = e.target.value; } }))),
         h('p', { class: 'muted small', style: { margin: 0 } }, '最大4日間です。期間を変えると、各カテゴリの開催日も合わせて調整されます。'),
         h('label', { class: 'field' }, h('span', null, '会場'), h('input', { type: 'text', value: f.venue, oninput: (e) => { f.venue = e.target.value; } })),
+        h('div', { class: 'grid-form addr-form' },
+          h('label', { class: 'field' }, h('span', null, '郵便番号'), h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'postal-code', value: addr.venueZip, placeholder: '123-4567', maxlength: 8, oninput: (e) => { addr.venueZip = e.target.value; } })),
+          h('label', { class: 'field addr-wide' }, h('span', null, '住所'), h('input', { type: 'text', autocomplete: 'street-address', value: addr.venueAddress, placeholder: '例：埼玉県南埼玉郡宮代町 ○○1-2-3', maxlength: 120, oninput: (e) => { addr.venueAddress = e.target.value; } }))),
+        h('p', { class: 'muted small', style: { margin: 0 } }, '住所を入れると、保護者の画面の会場名に「地図」のボタンが付き、Googleマップで開けます（住所が空欄なら会場名で探します）。要項の基本情報に「会場の住所」も入れられます。'),
         h('div', null, h('span', { class: 'small', style: { fontWeight: 700 } }, '大会ロゴ'), preview,
           h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml', 'aria-label': '大会ロゴの画像', onchange: async (e) => {
             const v = await run(() => resizeImage(e.target.files[0], 320));
@@ -1407,7 +1413,7 @@ async function tournamentView(root, id, navigate) {
           } })),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.show_logo, onchange: (e) => { f.show_logo = e.target.checked; } }), 'ロゴを表示する（大会・チームとも）'),
         h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-          if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, f), '保存しました')) await reload();
+          if (await run(() => api('PATCH', `/api/admin/tournaments/${id}`, { ...f, settings: { venueZip: addr.venueZip, venueAddress: addr.venueAddress } }), '保存しました')) await reload();
         } }, '大会情報を保存'),
         h('button', { class: 'btn btn-danger btn-sm', type: 'button', onclick: async () => {
           if (!(await confirmDialog('大会を削除します', `「${t.name}」のチーム・日程・結果がすべて消えます。元に戻せません。`, '削除する', true))) return;
@@ -1419,6 +1425,8 @@ async function tournamentView(root, id, navigate) {
     return h('section', { class: 'panel' },
       h('h2', { style: { marginBottom: '6px' } }, '大会情報'),
       h('p', { class: 'muted small', style: { marginTop: 0 } }, [period || '日付未設定', t.venue].filter(Boolean).join('　')),
+      va.addr ? h('p', { class: 'muted small', style: { marginTop: '-4px' } }, `${va.zip ? `〒${va.zip}　` : ''}${va.addr}`) : null,
+      mapUrl(t) ? h('a', { class: 'btn btn-sm map-btn', href: mapUrl(t), target: '_blank', rel: 'noopener', style: { marginBottom: '8px' } }, icon('pin'), 'Googleマップで開く') : null,
       btn, form);
   }
 
@@ -2141,7 +2149,7 @@ async function tournamentView(root, id, navigate) {
       const names = teamMap(cat);
       box.append(h('section', { class: 'panel' },
         h('div', { class: 'panel-head' }, h('h2', null, '現在の日程'), h('span', { class: 'spacer' }),
-          ro() ? null : h('button', { class: 'btn btn-sm btn-primary no-print', type: 'button', onclick: () => openRetime(cat) }, '時間の調整（雨天・遅れ・試合時間の変更）'),
+          ro() ? null : h('button', { class: 'btn btn-sm btn-primary no-print', type: 'button', onclick: () => openRetime(cat) }, '時間の調整（雨天・遅れ）'),
           h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => openPrintDialog(data.tournament, data.categories, cat.id) }, 'PDFで出力'),
           ro() ? null : h('button', { class: 'btn btn-sm no-print', type: 'button', onclick: () => undoLast(cat) }, '↶ 1つ前に戻す'),
           editable ? h('button', { class: 'btn btn-sm btn-danger no-print', type: 'button', onclick: () => deleteSchedule(cat) }, '日程を削除') : null),

@@ -491,3 +491,16 @@ export function tourCard(t, { onOpen, extra } = {}) {
   return draft ? h('div', { class: `tour-card s-${t.status} is-draft`, 'aria-disabled': 'true' }, body)
     : h('button', { class: `tour-card s-${t.status}`, type: 'button', onclick: onOpen }, body);
 }
+
+// 会場の地図（Googleマップ）：住所があれば住所で、無ければ会場名で探す
+export function venueAddressOf(t) {
+  const st = (t && t.settings) || {};
+  const zip = t.venueZip || st.venueZip || '';
+  const addr = t.venueAddress || st.venueAddress || '';
+  return { zip, addr };
+}
+export function mapUrl(t) {
+  const { addr } = venueAddressOf(t);
+  const q = addr || (t && t.venue) || '';
+  return q ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}` : null;
+}

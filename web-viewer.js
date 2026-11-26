@@ -2,7 +2,7 @@ import { api } from './web-api.js';
 import { printParking } from './web-print.js';
 import { outlineWeb } from './web-outline.js';
 import { drawPoster, drawStandingsImage } from './web-poster.js';
-import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton, saveImages } from './web-ui.js';
+import { h, mount, store, poller, formatDate, toHHMM, icon, sheet, todayStr, nowMin, manualLink, markFetched, refreshButton, saveImages, mapUrl } from './web-ui.js';
 import { scheduleView, standingsView, bracketView, teamsView, teamMap, sideInfo, codeMap, winnerSide, crest, courtName, matchLength, matchLengthFor, statusOf, dayOf, dayTotal, dayLabel, dayDate, todayIndex, absMin, setRefereeMode, refereeMode } from './web-views.js';
 
 // 一般公開のページで、クラブのサイト（Wix）から届くチームの写真（チームマスタの番号・チーム名 → 写真のURL）
@@ -99,7 +99,8 @@ export async function viewer(root, slug, opts = {}) {
         h('div', null, h('h1', null, t.name))),
       h('div', { class: 'hero-meta' },
         t.date ? h('span', null, icon('calendar'), dateRange(t, data.categories)) : null,
-        t.venue ? h('span', null, icon('pin'), t.venue) : null,
+        t.venue ? (mapUrl(t) ? h('a', { class: 'venue-link', href: mapUrl(t), target: '_blank', rel: 'noopener', title: 'Googleマップで開く' }, icon('pin'), t.venue, h('span', { class: 'map-pill' }, '地図'))
+          : h('span', null, icon('pin'), t.venue)) : null,
         statePill,
         (t.lost || []).length ? h('button', { class: 'state-pill lost-pill', type: 'button', onclick: () => openLost(t) }, icon('bag'), `忘れ物 ${t.lost.length}件`) : null),
       open ? h('div', { class: 'hero-actions' }, h('a', { class: 'outline-btn', href: '/open' }, '← 大会の一覧へ'))

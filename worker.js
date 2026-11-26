@@ -554,7 +554,9 @@ function imgVersion(dataUrl) {
 const logoUrl = (kind, id, dataUrl) => (dataUrl ? `/img/${kind}/${id}?v=${imgVersion(dataUrl)}` : null);
 
 function publicTournament(t, withPin = false) {
-  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, end_date: t.end_date || null, venue: t.venue, logo: t.show_logo ? logoUrl('t', t.id, t.logo) : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
+  const st = readSettings(t);
+  const o = { id: t.id, slug: t.slug, name: t.name, date: t.date, end_date: t.end_date || null, venue: t.venue, venueZip: st.venueZip || null, venueAddress: st.venueAddress || null,
+    logo: t.show_logo ? logoUrl('t', t.id, t.logo) : null, show_logo: t.show_logo, status: t.status, rev: t.rev };
   if (withPin) Object.assign(o, { logo: t.logo, pin: t.pin });
   return o;
 }
@@ -1092,6 +1094,16 @@ route('PATCH', '/api/admin/tournaments/:id', async ({ req, db, params, user }) =
     if (b.settings.publicListing !== undefined) settings.publicListing = b.settings.publicListing === true;
     if (settings.publicListing && !settings.publicSlug) settings.publicSlug = randomSlug(16);
     if (!settings.publicSlug) delete settings.publicSlug;
+    // 会場の郵便番号・住所（保護者の画面の地図のリンク・要項に使う）
+    if (b.settings.venueZip !== undefined) {
+      const z = String(b.settings.venueZip || '').normalize('NFKC').replace(/[^0-9]/g, '');
+      if (z && z.length !== 7) fail(400, '郵便番号は7桁の数字で入力してください（例：123-4567）');
+      if (z) settings.venueZip = `${z.slice(0, 3)}-${z.slice(3)}`; else delete settings.venueZip;
+    }
+    if (b.settings.venueAddress !== undefined) {
+      const a = clip(String(b.settings.venueAddress || '').replace(/[\r\n]+/g, ' '), 120);
+      if (a) settings.venueAddress = a; else delete settings.venueAddress;
+    }
     // LINEのオープンチャットのURL（保護者の画面にボタンを出す）
     if (b.settings.openChat !== undefined) {
       const u = String(b.settings.openChat || '').trim();
