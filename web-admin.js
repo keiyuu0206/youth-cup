@@ -1750,6 +1750,22 @@ async function tournamentView(root, id, navigate) {
         koOn() ? h('div', null, `決勝トーナメントの1試合の枠：${describe(f.koTiming)}`) : null,
       ].filter(Boolean));
     };
+    // 予選と決勝トーナメントの間にあける時間（昼休憩とは別。同じ日に予選の後に決勝が続くときだけ）
+    const gapBlock = () => {
+      if (f.format !== 'league_knockout') return null;
+      const gapBox = h('div');
+      const drawGap = () => mount(gapBox,
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: (f.koGapMinutes || 0) > 0, onchange: (e) => { f.koGapMinutes = e.target.checked ? (f.koGapMinutes || 15) : 0; drawGap(); } }),
+          '予選リーグと決勝トーナメントの間を少しあける'),
+        (f.koGapMinutes || 0) > 0 ? h('div', { class: 'stack', style: { gap: '6px' } },
+          h('div', { class: 'chips' }, [5, 10, 15, 20, 30].map((v) => h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(f.koGapMinutes === v), onclick: () => { f.koGapMinutes = v; drawGap(); } }, `${v}分`)),
+            h('label', { class: 'field gap-min' }, h('span', { class: 'sr-only' }, 'あける時間（分）'), h('input', { type: 'number', min: 1, max: 240, inputmode: 'numeric', value: f.koGapMinutes, 'aria-label': 'あける時間（分）',
+              oninput: (e) => { f.koGapMinutes = Math.max(0, Math.min(240, Number(e.target.value) || 0)); } }))),
+          h('p', { class: 'gap-example' }, `例：予選の最後の試合が 11:40 に終わり、試合間隔が${f.intervalMinutes ?? 5}分なら、決勝トーナメントの最初の試合は ${toHHMM(11 * 60 + 40 + (Number(f.intervalMinutes) || 0) + (f.koGapMinutes || 0))} に始まります（試合間隔＋${f.koGapMinutes}分）。`)) : null,
+        h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '組み合わせの確認や、会場・コートの切り替えのための時間です。昼休憩の設定とは別に使えます。決勝トーナメントが翌日の朝から始まるときは、あけません。'));
+      drawGap();
+      return h('div', { class: 'gap-block' }, h('h3', null, '予選と決勝トーナメントの間'), gapBox);
+    };
     // 決勝トーナメントの試合時間（予選と違う場合）
     const koPanel = () => {
       if (f.format !== 'league_knockout') return null;
@@ -1763,12 +1779,7 @@ async function tournamentView(root, id, navigate) {
           h('label', { class: 'field' }, h('span', null, '決勝の試合の形'), h('select', { onchange: (e) => { k.periods = Number(e.target.value); draw(); } },
             [[2, '前後半'], [1, 'ハーフなし'], [3, '3ピリオド']].map(([v, l]) => h('option', { value: v, selected: k.periods === v }, l)))),
           kn('halfMinutes', k.periods === 1 ? '決勝の試合時間（分）' : k.periods === 2 ? '決勝の前後半（各・分）' : '決勝の1ピリオド（分）', 90),
-          k.periods > 1 ? kn('halftimeMinutes', k.periods === 2 ? '決勝のハーフタイム（分）' : '決勝のピリオド間の休憩（分）', 30) : null) : null,
-        // 予選と決勝トーナメントの間にあける時間（同じ日に続くときだけ）
-        h('div', { class: 'grid-form', style: { marginTop: '10px' } },
-          h('label', { class: 'field' }, h('span', null, '予選と決勝トーナメントの間（分）'),
-            h('input', { type: 'number', min: 0, max: 240, inputmode: 'numeric', value: f.koGapMinutes || 0, oninput: (e) => { f.koGapMinutes = Math.max(0, Number(e.target.value) || 0); } }))),
-        h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '同じ日に予選の後に決勝トーナメントが続くとき、最後の予選の試合と最初の決勝の試合の間に、試合間隔に加えてこの時間をあけます（組み合わせの確認や会場の切り替えのため）。決勝トーナメントが翌日の朝から始まる場合はあけません。'));
+          k.periods > 1 ? kn('halftimeMinutes', k.periods === 2 ? '決勝のハーフタイム（分）' : '決勝のピリオド間の休憩（分）', 30) : null) : null);
     };
     drawSummary();
 
@@ -1795,13 +1806,14 @@ async function tournamentView(root, id, navigate) {
         koPanel(),
         h('div', { style: { marginTop: '12px' } }, (drawSummary(), summary))),
       h('section', { class: 'panel' },
-        h('h2', { style: { marginBottom: '8px' } }, '昼休憩'),
+        h('h2', { style: { marginBottom: '8px' } }, f.format === 'league_knockout' ? '休憩（昼休憩・予選と決勝の間）' : '昼休憩'),
         h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f.lunchEnabled, onchange: (e) => { f.lunchEnabled = e.target.checked; draw(); } }), '昼休憩をとる'),
         f.lunchEnabled ? h('div', { class: 'grid-form' },
           time('lunchStart', '昼休憩の開始めやす'),
           num('lunchMinutes', '昼休憩（分）', { max: 180 }),
           num('minLunchMinutes', '短縮時の最低（分）', { max: 180 })) : null,
-        f.lunchEnabled ? h('p', { class: 'muted small', style: { marginBottom: 0 } }, '開始めやすの時刻をまたぐ試合は、昼休憩の後に回します。当日の遅れで昼休憩を短くするときも、最低の時間は残します。') : null),
+        f.lunchEnabled ? h('p', { class: 'muted small', style: { marginBottom: 0 } }, '開始めやすの時刻をまたぐ試合は、昼休憩の後に回します。当日の遅れで昼休憩を短くするときも、最低の時間は残します。') : null,
+        gapBlock()),
       h('section', { class: 'panel' },
         h('h2', { style: { marginBottom: '12px' } }, '形式'),
         h('div', { class: 'grid-form' },
@@ -2232,7 +2244,7 @@ async function tournamentView(root, id, navigate) {
     return h('details', { class: 'panel', open: Object.keys(g.fixed || {}).length || (g.separate || []).length ? true : null },
       h('summary', { style: { cursor: 'pointer', fontWeight: 700 } }, '組み分けの条件（主催チームの固定・同組NG）'),
       h('div', { class: 'stack', style: { marginTop: '12px' } },
-        h('p', { class: 'muted small', style: { margin: 0 } }, '同じクラブ名のチームは自動的に別の組になります。'),
+        h('p', { class: 'muted small', style: { margin: 0 } }, '同じクラブのチーム（A・Bチームなど）は、できるだけ別の組になります。都道府県が分かるときは、同じ都道府県のチームが1つの組に偏らないように分けます。'),
         h('h3', null, '組を固定するチーム'),
         Object.entries(g.fixed || {}).map(([tid, gl]) => h('div', { class: 'row' }, h('span', null, `${tm[tid]?.name || '（削除済み）'} → ${gl}組`), h('span', { class: 'spacer' }),
           h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { const fixed = { ...g.fixed }; delete fixed[tid]; save({ ...g, fixed }); } }, '外す'))),

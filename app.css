@@ -2011,3 +2011,13 @@ a.outline-btn { text-decoration: none; color: #fff; }
 .iss-grid > * { min-width: 0; }
 @media (min-width: 1000px) { .iss-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); } }
 .rc-fit, .iss-preview { min-width: 0; max-width: 100%; }
+.gap-block { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.gap-block h3 { font-size: 0.95rem; margin: 0 0 6px; }
+.gap-min { width: 90px; margin: 0; }
+.gap-example { margin: 0; font-size: 0.85rem; padding: 8px 10px; background: var(--surface-2); border-radius: 8px; }
+.ol-reflect { display: grid; gap: 6px; max-height: 50vh; overflow: auto; }
+.ol-reflect-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); cursor: pointer; }
+.ol-reflect-row input { margin-top: 4px; }
+.ol-reflect-row span { display: grid; gap: 2px; min-width: 0; }
+.ol-reflect-row small { color: var(--ink-2); white-space: pre-line; overflow-wrap: anywhere; }
+.ol-reflect-row small.to { color: var(--ink); font-weight: 700; }

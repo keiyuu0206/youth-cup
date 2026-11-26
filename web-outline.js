@@ -261,11 +261,59 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
   // 入力した行数に合わせて高さを変える（空欄なら1行分）
   const autoGrow = (el) => { el.style.height = 'auto'; if (el.value) el.style.height = `${Math.max(el.scrollHeight + 2, 44)}px`; };
 
+  // 大会の内容を反映：コピーした大会などで、要項に前の大会の内容が残っているところを、いまの大会の設定に合わせる。
+  // 変える前に一覧を見せ、チェックした項目だけ変える（保存するまでは確定しない）
+  const AUTO_LABEL = { 大会名: 'name', 開催日時: 'dates', 開催日: 'dates', 日時: 'dates', 期日: 'dates', 開催期間: 'dates', 会場: 'venue', 参加チーム: 'teams', 協賛: 'sponsors', スポンサー: 'sponsors' };
+  const reflectTournament = async () => {
+    const changes = [];
+    if ((o.title || '') !== (t.name || '')) changes.push({ label: '表紙の大会名', from: o.title || '（空欄）', to: t.name, apply: () => { o.title = t.name; } });
+    o.info.forEach((r) => {
+      const key = r.auto || AUTO_LABEL[String(r.label || '').replace(/\s/g, '')];
+      if (!key) return;
+      const now = autoInfo(key, t, categories);
+      const cur = (r.value || '').trim();
+      if (r.auto && !cur) return; // すでに自動（大会の設定がそのまま入る）
+      if (cur === now && r.auto) return;
+      changes.push({ label: r.label, from: cur || '（空欄）', to: `${now || '（大会の設定が空欄）'}（自動）`, apply: () => { r.auto = key; r.value = ''; } });
+    });
+    // 参加費：参加費の画面で金額を決めていれば、要項の「参加費」の金額の行に入れる
+    try {
+      const fee = await api('GET', `/api/admin/tournaments/${t.id}/fees`);
+      const amount = fee && fee.settings ? fee.settings.amount : null;
+      const sec = o.sections.find((x) => /参加費/.test(x.title || ''));
+      if (amount != null && sec) {
+        const line = `1チーム ${Number(amount).toLocaleString('ja-JP')}円`;
+        const lines = String(sec.body || '').split('\n');
+        const idx = lines.findIndex((x) => /[0-9０-９,，]+\s*円/.test(x));
+        if (idx < 0 || lines[idx].trim() !== line) {
+          changes.push({ label: '参加費', from: idx >= 0 ? lines[idx] : '（金額の記載なし）', to: line, apply: () => {
+            const ls = String(sec.body || '').split('\n');
+            const k = ls.findIndex((x) => /[0-9０-９,，]+\s*円/.test(x));
+            if (k >= 0) ls[k] = line; else ls.unshift(line);
+            sec.body = ls.filter((x, i) => x !== '' || i < ls.length - 1).join('\n');
+          } });
+        }
+      }
+    } catch { /* 参加費を見られない場合は飛ばす */ }
+    if (!changes.length) { toast('大会の内容と同じです。変えるところはありません'); return; }
+    const pick = changes.map(() => true);
+    modal({ title: '大会の内容を反映', content: h('div', { class: 'stack' },
+      h('p', { class: 'muted small', style: { margin: 0 } }, 'いまの大会の設定（大会名・開催日・会場・カテゴリとチーム数・協賛・参加費）と違うところです。反映する項目にチェックを入れてください。「自動」にした項目は、大会の設定を変えると要項も合わせて変わります。'),
+      h('div', { class: 'ol-reflect' }, changes.map((c, i) => h('label', { class: 'ol-reflect-row' },
+        h('input', { type: 'checkbox', checked: true, onchange: (e) => { pick[i] = e.target.checked; } }),
+        h('span', null, h('b', null, c.label), h('small', null, `いま：${c.from}`), h('small', { class: 'to' }, `→ ${c.to}`)))))),
+    actions: [{ label: 'キャンセル', kind: 'btn-ghost' }, { label: '反映する', kind: 'btn-primary', onClick: async () => {
+      changes.forEach((c, i) => { if (pick[i]) c.apply(); });
+      touch(); draw(); toast('反映しました。確認して［保存］を押してください');
+    } }] });
+  };
+
   const draw = () => mount(back,
     h('div', { class: 'ol-bar' },
       h('strong', null, target.kind === 'preset' ? `プリセットの編集：${target.name}` : '大会要項の編集'),
       h('span', { class: 'spacer' }),
       target.kind === 'tournament' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openPresetList({ t, categories, current: o, onApply: (applied) => { Object.assign(o, applied); dirty = false; draw(); } }) }, 'プリセット') : null,
+      target.kind === 'tournament' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => reflectTournament() }, '大会の内容を反映') : null,
       target.kind === 'tournament' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => saveAsPreset(o) }, 'プリセットとして保存') : null,
       target.kind === 'tournament' ? h('button', { class: 'btn btn-sm', type: 'button', onclick: () => openOutlineDialog(t, categories, o) }, 'PDFで確認') : null,
       h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: async () => { if (await onSave(o)) { dirty = false; toast('保存しました'); } } }, '保存'),
