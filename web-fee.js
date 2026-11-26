@@ -348,7 +348,7 @@ export function feeView(opts) {
       h('p', { class: 'muted small', style: { margin: 0 } }, '大会の前に、チームごとの領収書をまとめて発行してA4で印刷します。当日は参加費を受け取ったら、印刷した領収書を渡して「受け取った」を押してください。発行済みのチームは、印刷し直しになります（番号は変わりません）。'),
       h('div', { class: 'grid-form' },
         h('label', { class: 'field' }, h('span', null, '発行日'), h('input', { type: 'date', value: f.date, oninput: (e) => { f.date = e.target.value; } })),
-        h('label', { class: 'field' }, h('span', null, '1ページの枚数'), h('select', { onchange: (e) => { f.perPage = Number(e.target.value); } }, [2, 3].map((n) => h('option', { value: n, selected: f.perPage === n }, `${n}枚`))))),
+        h('label', { class: 'field' }, h('span', null, '1ページの枚数'), h('select', { onchange: (e) => { f.perPage = Number(e.target.value); } }, [2, 3, 6].map((n) => h('option', { value: n, selected: f.perPage === n }, n === 6 ? '6枚（2列×3段）' : `${n}枚`))))),
       h('div', { class: 'row' }, h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { teams.forEach((x) => pick.add(x.team_id)); drawB(); } }, 'すべて選ぶ'),
         h('button', { class: 'btn btn-sm', type: 'button', onclick: () => { pick.clear(); drawB(); } }, 'すべて外す'),
         h('span', { class: 'muted small' }, `${pick.size}チーム`)),

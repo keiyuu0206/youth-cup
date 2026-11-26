@@ -2031,3 +2031,31 @@ a.outline-btn { text-decoration: none; color: #fff; }
 .map-btn { gap: 6px; }
 .map-btn .ico { width: 16px; height: 16px; }
 .addr-form { grid-template-columns: minmax(0, 8em) minmax(0, 1fr); }
+
+/* 1ページに6枚（2列×3段）：横幅が半分になるので、縦に積む形に組み替える */
+.rc-print.per-6 .rc-page { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 92mm; }
+.rc-print.per-6 .rc-slot { height: 92mm; border-bottom: 0.3mm dashed #a8a29e; padding: 0 1.5mm; justify-content: center; }
+.rc-print.per-6 .rc-slot:nth-child(odd) { border-right: 0.3mm dashed #a8a29e; }
+.rc-print.per-6 .rc-slot:nth-last-child(-n+2) { border-bottom: 0; }
+.rc-print.per-6 .rc { width: 93mm; padding: 3mm 4mm; font-size: 2.7mm; line-height: 1.35; border-width: 0.4mm; }
+.rc-print.per-6 .rc-top { font-size: 2.5mm; }
+.rc-print.per-6 .rc-title { font-size: 5mm; margin: 0.5mm 0 1mm; }
+.rc-print.per-6 .rc-title small { font-size: 2.3mm; }
+.rc-print.per-6 .rc-to { width: 100%; font-size: 3mm; }
+.rc-print.per-6 .rc-name { font-size: 3.8mm; }
+.rc-print.per-6 .rc-amount { margin: 1.5mm 0 1mm; gap: 2mm; }
+.rc-print.per-6 .rc-amount span { font-size: 5.6mm; padding: 0.6mm 5mm 0.6mm 3mm; }
+.rc-print.per-6 .rc-amount em { font-size: 2.4mm; }
+.rc-print.per-6 .rc-purpose { font-size: 2.9mm; }
+.rc-print.per-6 .rc-detail { font-size: 2.3mm; }
+.rc-print.per-6 .rc-recv { font-size: 2.5mm; margin-top: 0.5mm; }
+.rc-print.per-6 .rc-bottom { flex-direction: column; align-items: stretch; gap: 1.5mm; margin-top: 1.5mm; }
+.rc-print.per-6 .rc-left { justify-content: space-between; gap: 2mm; }
+.rc-print.per-6 .rc-tax { font-size: 2.4mm; }
+.rc-print.per-6 .rc-tax th, .rc-print.per-6 .rc-tax td { padding: 0.3mm 1.5mm; }
+.rc-print.per-6 .rc-stamp { width: 13mm; height: 15mm; font-size: 2.2mm; }
+.rc-print.per-6 .rc-note { font-size: 2.2mm; }
+.rc-print.per-6 .rc-issuer { justify-content: flex-end; font-size: 2.3mm; gap: 2mm; }
+.rc-print.per-6 .rc-iss-text strong { font-size: 3mm; }
+.rc-print.per-6 .rc-seal { width: 13mm; height: 13mm; }
+.rc-print.per-6 .rc-void-mark { font-size: 9mm; }
