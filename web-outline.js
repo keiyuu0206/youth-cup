@@ -276,6 +276,19 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
       if (cur === now && r.auto) return;
       changes.push({ label: r.label, from: cur || '（空欄）', to: `${now || '（大会の設定が空欄）'}（自動）`, apply: () => { r.auto = key; r.value = ''; } });
     });
+    // 競技日程・順位決定方法：「自分で入力」になっていて前の大会の文章が残っているときは、カテゴリの設定から自動で作る形に変える
+    const SEC_AUTO = [[/競技日程|試合日程|大会日程/, 'schedule', true], [/順位決定|順位の決め方/, 'ranking', false]];
+    for (const sec of o.sections) {
+      const m = SEC_AUTO.find(([re]) => re.test(sec.title || ''));
+      if (!m || sec.auto === m[1]) continue;
+      const [, key, clearBody] = m;
+      const auto = autoSection(key, t, categories);
+      if (!auto) continue;
+      const cur = String(sec.body || '').trim();
+      changes.push({ label: sec.title, from: cur ? cur.split('\n').slice(0, 4).join('\n') + (cur.split('\n').length > 4 ? '\n…' : '') : '（空欄）',
+        to: `${auto.split('\n').slice(0, 6).join('\n')}${auto.split('\n').length > 6 ? '\n…' : ''}\n（自動。カテゴリの設定・日程を変えると合わせて変わります）${!clearBody && cur ? '\n※今の本文は、自動の文章の後に残ります。重なる内容は消してください' : ''}`,
+        apply: () => { sec.auto = key; if (clearBody) sec.body = ''; } });
+    }
     // 参加費：参加費の画面で金額を決めていれば、要項の「参加費」の金額の行に入れる
     try {
       const fee = await api('GET', `/api/admin/tournaments/${t.id}/fees`);
@@ -298,7 +311,7 @@ export function openOutlineEditor({ t, categories, outline, target, onSave }) {
     if (!changes.length) { toast('大会の内容と同じです。変えるところはありません'); return; }
     const pick = changes.map(() => true);
     modal({ title: '大会の内容を反映', content: h('div', { class: 'stack' },
-      h('p', { class: 'muted small', style: { margin: 0 } }, 'いまの大会の設定（大会名・開催日・会場・カテゴリとチーム数・協賛・参加費）と違うところです。反映する項目にチェックを入れてください。「自動」にした項目は、大会の設定を変えると要項も合わせて変わります。'),
+      h('p', { class: 'muted small', style: { margin: 0 } }, 'いまの大会の設定（大会名・開催日・会場・カテゴリとチーム数・協賛・競技日程・順位決定方法・参加費）と違うところです。反映する項目にチェックを入れてください。「自動」にした項目は、大会の設定を変えると要項も合わせて変わります。'),
       h('div', { class: 'ol-reflect' }, changes.map((c, i) => h('label', { class: 'ol-reflect-row' },
         h('input', { type: 'checkbox', checked: true, onchange: (e) => { pick[i] = e.target.checked; } }),
         h('span', null, h('b', null, c.label), h('small', null, `いま：${c.from}`), h('small', { class: 'to' }, `→ ${c.to}`)))))),
