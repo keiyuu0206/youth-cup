@@ -155,7 +155,7 @@ CREATE TABLE report_links (id TEXT PRIMARY KEY, tournament_id TEXT NOT NULL, mat
   created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, used_at TEXT, used_count INTEGER NOT NULL DEFAULT 0, reporter TEXT);
 CREATE INDEX idx_report_links_match ON report_links(match_id);
 CREATE INDEX idx_report_links_tournament ON report_links(tournament_id);
-CREATE TABLE issuers (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, title TEXT, rep TEXT, address TEXT, tel TEXT, reg_no TEXT, seal TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE issuers (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL UNIQUE, name TEXT NOT NULL, title TEXT, rep TEXT, address TEXT, tel TEXT, reg_no TEXT, seal TEXT, updated_at TEXT NOT NULL, stamp TEXT, use_stamp INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE seals (hash TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE fee_settings (tournament_id TEXT PRIMARY KEY, amount INTEGER, purpose TEXT, issuer_id TEXT, updated_at TEXT NOT NULL);
 CREATE TABLE fees (tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, amount INTEGER, note TEXT, status TEXT NOT NULL DEFAULT 'unpaid', method TEXT, paid_at TEXT, paid_by TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (tournament_id, team_id));

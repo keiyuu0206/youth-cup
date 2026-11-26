@@ -2059,3 +2059,7 @@ a.outline-btn { text-decoration: none; color: #fff; }
 .rc-print.per-6 .rc-iss-text strong { font-size: 3mm; }
 .rc-print.per-6 .rc-seal { width: 13mm; height: 13mm; }
 .rc-print.per-6 .rc-void-mark { font-size: 9mm; }
+/* ゴム印の画像 */
+.rc-rubber { display: block; max-width: 70mm; max-height: 24mm; object-fit: contain; margin-left: auto; }
+.rc-issuer.with-stamp { align-items: center; }
+.rc-print.per-6 .rc-rubber { max-width: 55mm; max-height: 17mm; }

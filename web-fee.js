@@ -34,13 +34,16 @@ export function receiptEl(r, { paper = false } = {}) {
         paper && r.amount >= STAMP_LIMIT ? h('div', { class: 'rc-stamp' }, '収入', h('br'), '印紙') : null,
         r.reissue_of ? h('div', { class: 'rc-note' }, `再発行（元のNo. ${r.reissue_of}）`) : null,
         !paper ? h('div', { class: 'rc-note' }, '電子発行の領収書です') : null),
-      h('div', { class: 'rc-issuer' },
-        h('div', { class: 'rc-iss-text' },
-          h('strong', null, iss.name || ''),
-          iss.rep ? h('div', null, `${iss.title || '代表'}　${iss.rep}`) : null,
-          iss.address ? h('div', null, iss.address) : null,
-          iss.tel ? h('div', null, `TEL ${iss.tel}`) : null,
-          invoice ? h('div', null, `登録番号　${iss.reg_no}`) : null),
+      h('div', { class: `rc-issuer${iss.stamp ? ' with-stamp' : ''}` },
+        iss.stamp
+          // ゴム印の画像（団体名・住所などが入ったもの）。登録番号はゴム印に無いことが多いので文字で添える
+          ? h('div', { class: 'rc-iss-text' }, h('img', { class: 'rc-rubber', src: iss.stamp, alt: iss.name || '発行者' }), invoice ? h('div', null, `登録番号　${iss.reg_no}`) : null)
+          : h('div', { class: 'rc-iss-text' },
+            h('strong', null, iss.name || ''),
+            iss.rep ? h('div', null, `${iss.title || '代表'}　${iss.rep}`) : null,
+            iss.address ? h('div', null, iss.address) : null,
+            iss.tel ? h('div', null, `TEL ${iss.tel}`) : null,
+            invoice ? h('div', null, `登録番号　${iss.reg_no}`) : null),
         iss.seal ? h('img', { class: 'rc-seal', src: iss.seal, alt: '印' }) : h('span', { class: 'rc-seal ph' }, '印'))),
     voided ? h('div', { class: 'rc-void-mark' }, '取消') : null);
 }
@@ -115,10 +118,24 @@ export async function receiptCanvas(r) {
   x.fillText('電子発行の領収書です', 80, ly);
   // 発行元
   x.fillStyle = '#1c1917'; x.textAlign = 'right';
-  const lines = [[`700 26px ${F}`, iss.name || ''], iss.rep ? [`500 21px ${F}`, `${iss.title || '代表'}　${iss.rep}`] : null, iss.address ? [`400 19px ${F}`, iss.address] : null,
-    iss.tel ? [`400 19px ${F}`, `TEL ${iss.tel}`] : null, invoice ? [`500 20px ${F}`, `登録番号　${iss.reg_no}`] : null].filter(Boolean);
-  let y = 560;
-  for (const [f, t] of lines) { x.font = f; x.fillText(t, W - 170, y, 560); y += 32; }
+  const loadImg = (src) => new Promise((ok, ng) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ng; i.src = src; });
+  let stampDrawn = false;
+  if (iss.stamp) {
+    try {
+      const im = await loadImg(iss.stamp);
+      const s = Math.min(560 / im.width, (invoice ? 120 : 150) / im.height);
+      const w = im.width * s, hh = im.height * s;
+      x.drawImage(im, W - 170 - w, 530, w, hh);
+      if (invoice) { x.font = `500 20px ${F}`; x.fillText(`登録番号　${iss.reg_no}`, W - 170, 530 + hh + 28, 560); }
+      stampDrawn = true;
+    } catch { /* ゴム印が読めないときは文字で出す */ }
+  }
+  if (!stampDrawn) {
+    const lines = [[`700 26px ${F}`, iss.name || ''], iss.rep ? [`500 21px ${F}`, `${iss.title || '代表'}　${iss.rep}`] : null, iss.address ? [`400 19px ${F}`, iss.address] : null,
+      iss.tel ? [`400 19px ${F}`, `TEL ${iss.tel}`] : null, invoice ? [`500 20px ${F}`, `登録番号　${iss.reg_no}`] : null].filter(Boolean);
+    let y = 560;
+    for (const [f, t] of lines) { x.font = f; x.fillText(t, W - 170, y, 560); y += 32; }
+  }
   x.textAlign = 'left';
   if (iss.seal) {
     try {
@@ -171,11 +188,30 @@ async function clearWhite(dataUrl) {
 export async function issuerForm(container, { onSaved } = {}) {
   let iss;
   try { iss = (await api('GET', '/api/admin/issuer')).issuer; } catch (e) { mount(container, h('p', { class: 'empty' }, e.message)); return; }
-  const f = { name: iss ? iss.name : '', title: iss ? iss.title : '代表', rep: iss ? iss.rep : '', address: iss ? iss.address : '', tel: iss ? iss.tel : '', reg_no: iss ? iss.reg_no : '', seal: undefined };
+  const f = { name: iss ? iss.name : '', title: iss ? iss.title : '代表', rep: iss ? iss.rep : '', address: iss ? iss.address : '', tel: iss ? iss.tel : '', reg_no: iss ? iss.reg_no : '', seal: undefined,
+    stamp: undefined, use_stamp: !!(iss && iss.use_stamp) };
   let sealShown = iss && iss.seal;
+  let stampShown = iss && iss.stamp;
+  const curStamp = () => (f.stamp === undefined ? stampShown : f.stamp);
   const prev = h('div', { class: 'iss-preview' });
   const draw = () => mount(prev, fitReceipt(receiptEl({ no: '2026-0001', issued_on: todayStr(), addressee: '（チーム名）', amount: 15000, tax_amount: f.reg_no ? Math.floor(150000 / 110) : null,
-    purpose: 'サッカー大会参加費として', status: 'valid', issuer: { ...f, reg_no: /^T\d{13}$/.test(f.reg_no) ? f.reg_no : '', seal: f.seal === undefined ? sealShown : f.seal, tournament: '（大会名）' } }, { paper: true })));
+    purpose: 'サッカー大会参加費として', status: 'valid', issuer: { ...f, reg_no: /^T\d{13}$/.test(f.reg_no) ? f.reg_no : '', seal: f.seal === undefined ? sealShown : f.seal, stamp: f.use_stamp ? curStamp() : null, tournament: '（大会名）' } }, { paper: true })));
+  const modeBox = h('div');
+  const drawMode = () => mount(modeBox, h('div', { class: 'stack', style: { gap: '6px' } },
+    h('span', { class: 'small', style: { fontWeight: 700 } }, '発行者の印字のしかた'),
+    h('div', { class: 'chips' },
+      h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(!f.use_stamp), onclick: () => { f.use_stamp = false; drawMode(); draw(); } }, '文字で印字'),
+      h('button', { class: 'chip-btn', type: 'button', 'aria-pressed': String(f.use_stamp), onclick: () => { f.use_stamp = true; drawMode(); draw(); } }, 'ゴム印の画像')),
+    f.use_stamp ? h('div', { class: 'stack', style: { gap: '4px' } },
+      h('div', { class: 'row' },
+        h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'ゴム印の画像', onchange: async (e) => {
+          const v = await run(async () => clearWhite(await resizeImage(e.target.files[0], 900)));
+          if (v) { f.stamp = v; drawMode(); draw(); }
+        } }),
+        curStamp() ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.stamp = null; stampShown = null; drawMode(); draw(); } }, 'ゴム印を外す') : null),
+      !curStamp() ? h('p', { class: 'notice', style: { margin: 0 } }, 'ゴム印の画像を選んでください。画像が無いときは、文字で印字されます。') : null,
+      h('p', { class: 'muted small', style: { margin: 0 } }, '団体名・住所・電話などが入ったゴム印を白い紙に押し、まっすぐ撮った写真（またはスキャン）を選んでください。白い部分は自動で透明になります。印影は、ゴム印の右に重ねて印字されます。インボイスの登録番号は、ゴム印の下に文字で印字されます。上の団体名などは、領収書の控え（Excel）に使います。')) : null));
+  drawMode();
   const field = (k, label, ph, max) => h('label', { class: 'field' }, h('span', null, label), h('input', { type: 'text', value: f[k] || '', placeholder: ph || '', maxlength: max || 80, oninput: (e) => { f[k] = e.target.value; draw(); } }));
   draw();
   mount(container, h('div', { class: 'iss-grid' },
@@ -189,6 +225,7 @@ export async function issuerForm(container, { onSaved } = {}) {
       h('label', { class: 'field' }, h('span', null, 'インボイスの登録番号（お持ちの場合）'),
         h('input', { type: 'text', value: f.reg_no || '', placeholder: 'T1234567890123', maxlength: 20, oninput: (e) => { f.reg_no = e.target.value.normalize('NFKC').replace(/[\s-]/g, '').toUpperCase(); draw(); } })),
       h('p', { class: 'muted small', style: { margin: 0 } }, '登録番号を入れると、領収書が「適格簡易請求書」の形になり、税率10%と消費税額（内税）が印字されます。登録していない場合は空欄のままにしてください（通常の領収書になります）。'),
+      modeBox,
       h('div', null, h('span', { class: 'small', style: { fontWeight: 700 } }, '印影（任意）'),
         h('div', { class: 'row' },
           h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': '印影の画像', onchange: async (e) => {
@@ -198,8 +235,10 @@ export async function issuerForm(container, { onSaved } = {}) {
           (iss && iss.seal) || f.seal ? h('button', { class: 'btn btn-sm btn-ghost', type: 'button', onclick: () => { f.seal = null; sealShown = null; draw(); } }, '印影を外す') : null),
         h('p', { class: 'muted small', style: { margin: '4px 0 0' } }, '白い紙に押した印影の写真でOKです。白い部分は自動で透明になります。')),
       h('button', { class: 'btn btn-primary', type: 'button', onclick: async () => {
-        const body = { name: f.name, title: f.title, rep: f.rep, address: f.address, tel: f.tel, reg_no: f.reg_no };
+        if (f.use_stamp && !curStamp()) { toast('ゴム印の画像を選んでください（または「文字で印字」にしてください）', true); return; }
+        const body = { name: f.name, title: f.title, rep: f.rep, address: f.address, tel: f.tel, reg_no: f.reg_no, use_stamp: f.use_stamp };
         if (f.seal !== undefined) body.seal = f.seal;
+        if (f.stamp !== undefined) body.stamp = f.stamp;
         if (await run(() => api('PUT', '/api/admin/issuer', body), '発行元を保存しました')) { if (onSaved) onSaved(); else issuerForm(container, { onSaved }); }
       } }, '保存')),
     h('section', { class: 'panel' }, h('h2', { style: { marginBottom: '8px' } }, '見本'), h('div', { class: 'iss-prev-wrap' }, prev))));

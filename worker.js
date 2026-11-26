@@ -206,6 +206,9 @@ async function ensureSchema(db) {
       db.prepare('CREATE TABLE IF NOT EXISTS receipt_counters (k TEXT PRIMARY KEY, last INTEGER NOT NULL)'),
     ]);
   }
+  // 発行元のゴム印の画像（追加のみ）。use_stamp＝1 のとき、文字の代わりにゴム印の画像を印字する
+  await addCol('issuers', 'stamp', 'TEXT');
+  await addCol('issuers', 'use_stamp', 'INTEGER NOT NULL DEFAULT 0');
   await addCol('teams', 'prefecture', 'TEXT');
   await addCol('teams', 'master_id', 'TEXT');
   await db.prepare('CREATE INDEX IF NOT EXISTS idx_teams_master ON teams(master_id)').run();
@@ -2473,7 +2476,7 @@ async function sha256hex(text) {
   return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 const publicIssuer = (r) => (r ? { id: r.id, owner_id: r.owner_id, name: r.name, title: r.title || '', rep: r.rep || '', address: r.address || '', tel: r.tel || '', reg_no: r.reg_no || '',
-  seal: r.seal ? `/img/seal/${r.seal}` : null } : null);
+  seal: r.seal ? `/img/seal/${r.seal}` : null, stamp: r.stamp ? `/img/seal/${r.stamp}` : null, use_stamp: !!(r.use_stamp && r.stamp) } : null);
 
 // 大会の発行元：参加費の設定で選んだもの → 大会を作った管理者のもの
 async function issuerFor(db, t) {
@@ -2498,15 +2501,17 @@ route('PUT', '/api/admin/issuer', async ({ req, db, user }) => {
   const cur = await db.prepare('SELECT * FROM issuers WHERE owner_id = ?').bind(issuerOwner(user)).first();
   let seal = cur ? cur.seal : null;
   const stmts = [];
+  const img = async (v) => { const d = checkLogo(v); const k = (await sha256hex(d)).slice(0, 32); stmts.push(db.prepare('INSERT OR IGNORE INTO seals (hash, data) VALUES (?, ?)').bind(k, d)); return k; };
   if (b.seal === null) seal = null;
-  else if (typeof b.seal === 'string' && b.seal.startsWith('data:')) {
-    const v = checkLogo(b.seal);
-    seal = (await sha256hex(v)).slice(0, 32);
-    stmts.push(db.prepare('INSERT OR IGNORE INTO seals (hash, data) VALUES (?, ?)').bind(seal, v));
-  }
-  const vals = [name, clip(b.title, 30) || null, clip(b.rep, 40) || null, clip(b.address, 120) || null, clip(b.tel, 30) || null, reg || null, seal, now()];
-  if (cur) stmts.push(db.prepare('UPDATE issuers SET name = ?, title = ?, rep = ?, address = ?, tel = ?, reg_no = ?, seal = ?, updated_at = ? WHERE id = ?').bind(...vals, cur.id));
-  else stmts.push(db.prepare('INSERT INTO issuers (name, title, rep, address, tel, reg_no, seal, updated_at, id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(...vals, uid(), issuerOwner(user)));
+  else if (typeof b.seal === 'string' && b.seal.startsWith('data:')) seal = await img(b.seal);
+  // ゴム印の画像（団体名・住所などが入ったもの）
+  let stamp = cur ? cur.stamp || null : null;
+  if (b.stamp === null) stamp = null;
+  else if (typeof b.stamp === 'string' && b.stamp.startsWith('data:')) stamp = await img(b.stamp);
+  const useStamp = b.use_stamp !== undefined ? (b.use_stamp && stamp ? 1 : 0) : (cur && cur.use_stamp && stamp ? 1 : 0);
+  const vals = [name, clip(b.title, 30) || null, clip(b.rep, 40) || null, clip(b.address, 120) || null, clip(b.tel, 30) || null, reg || null, seal, stamp, useStamp, now()];
+  if (cur) stmts.push(db.prepare('UPDATE issuers SET name = ?, title = ?, rep = ?, address = ?, tel = ?, reg_no = ?, seal = ?, stamp = ?, use_stamp = ?, updated_at = ? WHERE id = ?').bind(...vals, cur.id));
+  else stmts.push(db.prepare('INSERT INTO issuers (name, title, rep, address, tel, reg_no, seal, stamp, use_stamp, updated_at, id, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(...vals, uid(), issuerOwner(user)));
   await db.batch(stmts);
   return json({ ok: true });
 }, 'admin');
@@ -2599,6 +2604,7 @@ async function issueReceipt(db, t, issuer, team, fee, opts, user) {
   const amount = fee.amount;
   const purpose = opts.purpose;
   const snap = { name: issuer.name, title: issuer.title || '', rep: issuer.rep || '', address: issuer.address || '', tel: issuer.tel || '', reg_no: issuer.reg_no || '', seal: issuer.seal || null,
+    stamp: issuer.use_stamp ? issuer.stamp : null,
     tournament: t.name, category: team.category };
   const tax = snap.reg_no ? Math.floor((amount * 10) / 110) : null; // 内税10%（1枚ごとに1回、切り捨て）
   const id = uid();
