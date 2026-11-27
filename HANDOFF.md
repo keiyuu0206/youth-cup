@@ -103,6 +103,9 @@
 
 ## 6. デプロイ手順（変更を反映するとき）
 
+**基本（自動）**：Claude が検査を通したあと、GitHub（keiyuu0206/youth-cup の main）に直接送る → Cloudflare が自動でデプロイ。zip のアップロードは不要。`wrangler.jsonc` は GitHub 上のものを触らない。
+
+**手作業で反映するとき（予備）**
 1. 変更したファイルを GitHub の youth-cup リポジトリのトップに「Add file → Upload files」→「Commit changes」。
 2. マニュアルや字体は **`manuals` フォルダを開いた画面で**アップロード。
 3. Cloudflare の「デプロイ」が「成功」になったら、画面を `Ctrl + Shift + R` で読み直す。
