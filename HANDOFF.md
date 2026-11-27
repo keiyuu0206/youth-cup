@@ -231,3 +231,9 @@
 - web-views.js：standingsView の各組のカードの下に crossTable（折りたたみ。押すと開く）。行のチームから見た ○×△ と得点、まだの試合は開始時刻。6チーム以上は横スクロール（チーム名の列は固定）
 - 管理画面の順位タブにも同じ表が出る（standingsView を共有しているため）
 - app.css：.st-cross / table.cross（固定する列は border-collapse: separate＋外枠の余白をスクロールの外に。iPhoneで下のマスが透けないように）
+
+## 紹介ページ（LP）
+- `/lp/` で公開（`manuals/lp/` に置いた静的ファイルを Cloudflare の assets がそのまま配信。アプリの画面・データとは別）。
+- 画面の動画・画像は `manuals/lp/m/`。ローカルのデモ大会を Playwright で操作し、CDP の画面配信をコマ撮りして mp4 にしている（作り直す道具：dev tools の `lp-capture/`）。
+- 「使ってみたい」ボタン：`POST /api/lp/interest`（匿名・同じIPは1日1回）、`GET /api/lp/status`（10件以上で件数を表示）。表 `lp_interest` を追加（追加のみ）。全体管理者はメニューの［紹介ページの反応］で件数を見られる。
+- og:image は相対パス（`/lp/m/og.png`）。本番のドメインが決まったら絶対URLにする。

@@ -162,3 +162,4 @@ CREATE TABLE fees (tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, amount IN
 CREATE TABLE receipts (id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, tournament_id TEXT NOT NULL, team_id TEXT NOT NULL, no TEXT NOT NULL, addressee TEXT NOT NULL, amount INTEGER NOT NULL, tax_amount INTEGER, purpose TEXT, issued_on TEXT NOT NULL, issuer TEXT NOT NULL, delivery TEXT, method TEXT, status TEXT NOT NULL DEFAULT 'valid', void_reason TEXT, reissue_of TEXT, created_by TEXT, created_at TEXT NOT NULL, voided_at TEXT, voided_by TEXT);
 CREATE INDEX idx_receipts_tournament ON receipts(tournament_id);
 CREATE TABLE receipt_counters (k TEXT PRIMARY KEY, last INTEGER NOT NULL);
+CREATE TABLE lp_interest (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, scene TEXT);

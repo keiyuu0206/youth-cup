@@ -189,6 +189,10 @@ async function ensureSchema(db) {
       db.prepare('CREATE INDEX IF NOT EXISTS idx_report_links_tournament ON report_links(tournament_id)'),
     ]);
   }
+  // 紹介ページ（/lp/）の「使ってみたい」（匿名。追加のみ）
+  if (!tables.includes('lp_interest')) {
+    await db.prepare('CREATE TABLE IF NOT EXISTS lp_interest (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, scene TEXT)').run();
+  }
   // 参加費・領収書（追加のみ。既存の表は変更しない）
   if (!tables.includes('receipts')) {
     await db.batch([
@@ -2696,6 +2700,29 @@ route('POST', '/api/admin/receipts/:rid/reissue', async ({ req, db, params, user
 }, 'admin');
 
 // 受け取った人が見る領収書（QR・LINEのリンク）。番号を知っている人だけが開ける
+// ---------- 紹介ページ（/lp/）の「使ってみたい」 ----------
+const LP_SCENES = ['地域の大会', 'クラブ主催の大会', '協会・連盟', 'リーグ戦', 'その他'];
+route('GET', '/api/lp/status', async ({ db }) => {
+  const c = await db.prepare('SELECT COUNT(*) AS n FROM lp_interest').first();
+  return json({ interest: c.n >= 10 ? c.n : null });
+});
+route('POST', '/api/lp/interest', async ({ req, db }) => {
+  const b = await body(req);
+  const scene = LP_SCENES.includes(b.scene) ? b.scene : null;
+  // 同じ人からは1日1回だけ数える（名前・連絡先などは受け取らない）
+  const ip = req.headers.get('CF-Connecting-IP') || 'local';
+  const rl = await rateLimit(db, `lp:${ip}`, 1, 86400);
+  if (rl.ok) await db.prepare('INSERT INTO lp_interest (created_at, scene) VALUES (?, ?)').bind(now(), scene).run();
+  return json({ ok: true });
+});
+route('GET', '/api/admin/lp-interest', async ({ db, user }) => {
+  if (!isSuper(user)) fail(403, '全体管理者だけが見られます');
+  const total = (await db.prepare('SELECT COUNT(*) AS n FROM lp_interest').first()).n;
+  const week = (await db.prepare('SELECT COUNT(*) AS n FROM lp_interest WHERE created_at >= ?').bind(new Date(Date.now() - 7 * 86400000).toISOString()).first()).n;
+  const scenes = (await db.prepare('SELECT scene, COUNT(*) AS n FROM lp_interest GROUP BY scene ORDER BY n DESC').all()).results;
+  return json({ total, week, scenes });
+}, 'admin');
+
 route('GET', '/api/rcpt/:token', async ({ db, params }) => {
   if (!/^[a-z0-9]{24}$/.test(params.token)) fail(404, 'この領収書は見つかりません');
   const r = await db.prepare('SELECT * FROM receipts WHERE token = ?').bind(params.token).first();

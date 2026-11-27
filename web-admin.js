@@ -490,6 +490,19 @@ function openManuals() {
   });
 }
 
+// 紹介ページ（/lp/）の「使ってみたい」の数（全体管理者だけ）
+async function openLpInterest() {
+  let r;
+  try { r = await api('GET', '/api/admin/lp-interest'); } catch (e) { toast(e.message, true); return; }
+  modal({ title: '紹介ページの反応', content: h('div', { class: 'stack' },
+    h('p', { style: { margin: 0 } }, '紹介ページ（', h('a', { href: '/lp/', target: '_blank', rel: 'noopener' }, '/lp/'), '）で「使ってみたい」が押された数です。名前や連絡先は集めていません。'),
+    h('div', { class: 'row', style: { gap: '24px' } },
+      h('div', null, h('div', { class: 'muted small' }, 'これまで'), h('b', { style: { fontSize: '28px' } }, `${r.total}件`)),
+      h('div', null, h('div', { class: 'muted small' }, 'この7日間'), h('b', { style: { fontSize: '28px' } }, `${r.week}件`))),
+    r.scenes.length ? h('ul', { style: { margin: 0, paddingLeft: '20px' } }, r.scenes.map((x) => h('li', null, `${x.scene || '（選ばずに押した）'}：${x.n}件`))) : null),
+    actions: [{ label: '閉じる', kind: 'btn-primary', onClick: () => false }] });
+}
+
 function adminHeader(title, navigate, back, status) {
   // ボタンが多いとき（大会の画面など）は、幅が足りなければ［メニュー］にまとめる（大会名を隠さないように）
   const many = !OP_MODE && !isOp() && (!!back || (ME && ME.role === 'super'));
@@ -506,6 +519,7 @@ function adminHeader(title, navigate, back, status) {
       ME && !isViewer() && !isOp() ? { label: 'アカウント追加', onClick: () => navigate('/admin/scorers') } : null,
       ME && !isOp() ? { label: 'チームマスタ', onClick: () => navigate('/admin/masters') } : null,
       ME && !isOp() && !isViewer() ? { label: '発行元（領収書）', onClick: () => navigate('/admin/issuer') } : null,
+      isSuperUser() ? { label: '紹介ページの反応', onClick: openLpInterest } : null,
       isOp() ? { label: '使い方', href: MANUALS.scorer.href } : ME ? { label: 'マニュアル', onClick: openManuals } : null,
       isOp() ? { label: 'スマホ表示', onClick: () => { store.set('op:mobile', true); location.href = '/admin'; } } : null,
       ME && ME.id !== 'root' ? { label: 'パスワード変更', onClick: changePassword } : null,
